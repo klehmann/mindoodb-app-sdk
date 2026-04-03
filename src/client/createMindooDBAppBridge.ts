@@ -31,28 +31,34 @@ import type {
 const PROTOCOL = "mindoodb-app-bridge";
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 
+/** Copies a `Uint8Array` into a transferable `ArrayBuffer` for stream writes. */
 function toTransferableArrayBuffer(chunk: Uint8Array) {
   return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
 }
 
+/** Narrows a port message to a chunk event for one specific stream id. */
 function isStreamChunkFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppAttachmentChunk {
   return message.kind === "stream-chunk" && message.streamId === streamId;
 }
 
+/** Narrows a port message to an acknowledgement for one specific stream id. */
 function isStreamAckFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeStreamAck {
   return message.kind === "stream-ack" && message.streamId === streamId;
 }
 
+/** Narrows a port message to an error event for one specific stream id. */
 function isStreamErrorFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeStreamError {
   return message.kind === "stream-error" && message.streamId === streamId;
 }
 
+/** Converts a stream error payload into a normal `Error`. */
 function toStreamError(message: MindooDBAppBridgeStreamError) {
   const error = new Error(message.error.message);
   error.name = message.error.code || "MindooDBAppBridgeStreamError";
   return error;
 }
 
+/** Resolves the launch id either from explicit options or the current browser URL. */
 function resolveLaunchId(options: MindooDBAppBridgeConnectOptions | undefined) {
   if (options?.launchId) {
     return options.launchId;
@@ -68,6 +74,7 @@ function resolveLaunchId(options: MindooDBAppBridgeConnectOptions | undefined) {
   return launchId;
 }
 
+/** Finds the Administrator window hosting the current app runtime. */
 function resolveTargetWindow() {
   if (typeof window === "undefined") {
     throw new Error("The MindooDB app bridge is only available in the browser.");
@@ -81,6 +88,7 @@ function resolveTargetWindow() {
   throw new Error("Could not find a MindooDB Administrator host window.");
 }
 
+/** Performs the initial postMessage handshake and resolves with the dedicated bridge port. */
 function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefined, launchId: string) {
   const targetWindow = resolveTargetWindow();
   const targetOrigin = options?.targetOrigin ?? "*";
@@ -124,6 +132,7 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
   });
 }
 
+/** Client-side implementation of a virtual view handle backed by bridge RPC calls. */
 class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
   constructor(
     private readonly rpc: PortRpcClient,
@@ -239,6 +248,7 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
   }
 }
 
+/** Pull-based attachment reader that consumes stream chunks from the bridge port. */
 class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAttachmentStream {
   private readonly unsubscribe: () => void;
   private closed = false;
@@ -273,6 +283,7 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
     });
   }
 
+  /** Requests and returns the next attachment chunk, or `null` when the stream ends. */
   async read(): Promise<Uint8Array | null> {
     if (this.closed) {
       return null;
@@ -291,6 +302,7 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
     });
   }
 
+  /** Closes the read stream and releases any pending read waiter. */
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -307,6 +319,7 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
   }
 }
 
+/** Write-side attachment stream that serializes writes until the host acknowledges them. */
 class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAttachmentStream {
   private readonly unsubscribe: () => void;
   private closed = false;
@@ -335,12 +348,14 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
     });
   }
 
+  /** Ensures write/close/abort operations run strictly in order. */
   private enqueue(operation: () => Promise<void>) {
     const next = this.queue.then(operation);
     this.queue = next.catch(() => undefined);
     return next;
   }
 
+  /** Sends one stream operation and waits for its ack/error response. */
   private async waitForAck(send: () => void) {
     return await new Promise<void>((resolve, reject) => {
       this.inflight = { resolve, reject };
@@ -348,6 +363,7 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
     });
   }
 
+  /** Writes one binary chunk to the host-managed attachment stream. */
   async write(chunk: Uint8Array): Promise<void> {
     if (this.closed) {
       throw new Error("The attachment write stream is already closed.");
@@ -365,6 +381,7 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
     });
   }
 
+  /** Gracefully closes the write stream after any queued writes complete. */
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -382,6 +399,7 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
     this.unsubscribe();
   }
 
+  /** Aborts the write stream after any in-flight work has settled. */
   async abort(): Promise<void> {
     if (this.closed) {
       return;
@@ -400,6 +418,7 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
   }
 }
 
+/** Database facade exposing document, view, and attachment APIs over RPC. */
 class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly documents: MindooDBAppDocumentApi;
   public readonly views: MindooDBAppViewApi;
@@ -480,6 +499,7 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
     };
   }
 
+  /** Returns database metadata for the currently opened binding. */
   async info(): Promise<MindooDBAppDatabaseInfo> {
     return await this.rpc.call("databases.info", {
       databaseId: this.databaseId,
@@ -487,9 +507,11 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   }
 }
 
+/** Session facade exposed after a successful bridge connection. */
 class MindooDBAppSessionImpl implements MindooDBAppSession {
   constructor(private readonly rpc: PortRpcClient) {}
 
+  /** Returns the launch context provided by the Administrator host. */
   async getLaunchContext(): Promise<MindooDBAppLaunchContext> {
     return await this.rpc.call("session.getLaunchContext", {});
   }
@@ -498,11 +520,13 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return await this.rpc.call("session.listDatabases", {});
   }
 
+  /** Opens one database binding and returns a client facade for it. */
   async openDatabase(databaseId: string): Promise<MindooDBAppDatabase> {
     await this.rpc.call("session.openDatabase", { databaseId });
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
   }
 
+  /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
     try {
       await this.rpc.call("session.disconnect", {});
@@ -512,6 +536,13 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   }
 }
 
+/**
+ * Creates the browser-side bridge entry point used by MindooDB apps.
+ *
+ * The returned object performs the initial postMessage handshake with the
+ * Administrator host and exposes a session with document, view, and attachment
+ * APIs over a dedicated `MessagePort`.
+ */
 export function createMindooDBAppBridge(): MindooDBAppBridge {
   return {
     async connect(options?: MindooDBAppBridgeConnectOptions): Promise<MindooDBAppSession> {
