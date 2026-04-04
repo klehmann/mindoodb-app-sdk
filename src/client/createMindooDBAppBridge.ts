@@ -8,6 +8,7 @@ import type {
   MindooDBAppBridgeConnectedMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeThemeChangedMessage,
+  MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
   MindooDBAppBridgeStreamOpenResult,
@@ -55,6 +56,11 @@ function isStreamErrorFor(streamId: string, message: MindooDBAppBridgePortMessag
 /** Narrows a port message to a host theme change event. */
 function isThemeChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeThemeChangedMessage {
   return message.kind === "theme-changed";
+}
+
+/** Narrows a port message to a host viewport change event. */
+function isViewportChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeViewportChangedMessage {
+  return message.kind === "viewport-changed";
 }
 
 /** Converts a stream error payload into a normal `Error`. */
@@ -536,6 +542,14 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return this.rpc.addMessageListener((message) => {
       if (isThemeChangedMessage(message)) {
         listener(message.theme);
+      }
+    });
+  }
+
+  onViewportChange(listener: (viewport: NonNullable<MindooDBAppLaunchContext["viewport"]>) => void) {
+    return this.rpc.addMessageListener((message) => {
+      if (isViewportChangedMessage(message)) {
+        listener(message.viewport);
       }
     });
   }

@@ -9,6 +9,89 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
+  it("forwards optional document decryptionKeyId on create", async () => {
+    let createInput: unknown = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.create") {
+            createInput = (message.params as { input: unknown }).input;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: "doc-1",
+                data: {
+                  title: "Secret",
+                },
+                attachments: [],
+              },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-create",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.create({
+      data: {
+        title: "Secret",
+      },
+      decryptionKeyId: "payroll",
+    })).resolves.toEqual({
+      id: "doc-1",
+      data: {
+        title: "Secret",
+      },
+      attachments: [],
+    });
+
+    expect(createInput).toEqual({
+      data: {
+        title: "Secret",
+      },
+      decryptionKeyId: "payroll",
+    });
+  });
+
   it("streams attachment uploads and downloads over the bridge port", async () => {
     let writeChunk: Uint8Array | null = null;
     let readRequests = 0;
@@ -352,7 +435,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     ]));
   });
 
-  it("exposes host theme snapshots and live theme change events", async () => {
+  it("exposes host theme and viewport snapshots with live update events", async () => {
     let bridgePort: MessagePort | null = null;
     const host = {
       postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
@@ -381,6 +464,10 @@ describe("createMindooDBAppBridge attachment streaming", () => {
                 theme: {
                   mode: "dark",
                   preset: "mindoo",
+                },
+                viewport: {
+                  width: 960,
+                  height: 640,
                 },
                 user: {
                   id: "user-1",
@@ -424,8 +511,12 @@ describe("createMindooDBAppBridge attachment streaming", () => {
 
     const session = await createMindooDBAppBridge().connect();
     const themeChanges: Array<{ mode: string; preset: string }> = [];
+    const viewportChanges: Array<{ width: number; height: number }> = [];
     const unsubscribe = session.onThemeChange((theme) => {
       themeChanges.push(theme);
+    });
+    const unsubscribeViewport = session.onViewportChange((viewport) => {
+      viewportChanges.push(viewport);
     });
 
     await expect(session.getLaunchContext()).resolves.toMatchObject({
@@ -433,6 +524,10 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       theme: {
         mode: "dark",
         preset: "mindoo",
+      },
+      viewport: {
+        width: 960,
+        height: 640,
       },
     });
 
@@ -450,14 +545,27 @@ describe("createMindooDBAppBridge attachment streaming", () => {
         preset: "nora",
       },
     });
+    hostPort.postMessage({
+      protocol: "mindoodb-app-bridge",
+      kind: "viewport-changed",
+      viewport: {
+        width: 720,
+        height: 480,
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(themeChanges).toEqual([{
       mode: "light",
       preset: "nora",
     }]);
+    expect(viewportChanges).toEqual([{
+      width: 720,
+      height: 480,
+    }]);
 
     unsubscribe();
+    unsubscribeViewport();
     await session.disconnect();
   });
 });

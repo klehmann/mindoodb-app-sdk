@@ -66,6 +66,12 @@ export interface MindooDBAppHostTheme {
   preset: string;
 }
 
+/** Iframe viewport dimensions reported by the Haven host. */
+export interface MindooDBAppViewport {
+  width: number;
+  height: number;
+}
+
 /** Permission/capability flags exposed for a database binding inside the app session. */
 export type MindooDBAppCapability =
   | "read"
@@ -84,6 +90,7 @@ export interface MindooDBAppLaunchContext {
   launchId: string;
   runtime: MindooDBAppRuntime;
   theme: MindooDBAppHostTheme;
+  viewport: MindooDBAppViewport | null;
   tenantId?: string;
   preferredDatabaseId?: string;
   user: {
@@ -161,6 +168,8 @@ export interface MindooDBAppDocumentListResult {
 /** Payload used when creating a new document. */
 export interface MindooDBAppCreateDocumentInput {
   data: Record<string, unknown>;
+  /** Optional named document key. Defaults to `"default"` when omitted. */
+  decryptionKeyId?: string;
 }
 
 /** Patch payload used when updating an existing document. */
@@ -305,11 +314,19 @@ export interface MindooDBAppBridgeThemeChangedMessage {
   theme: MindooDBAppHostTheme;
 }
 
+/** Host-pushed event emitted when the Haven iframe viewport changes. */
+export interface MindooDBAppBridgeViewportChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "viewport-changed";
+  viewport: MindooDBAppViewport;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
   | MindooDBAppBridgeStreamMessage
-  | MindooDBAppBridgeThemeChangedMessage;
+  | MindooDBAppBridgeThemeChangedMessage
+  | MindooDBAppBridgeViewportChangedMessage;
 
 /** Pull-based read stream for document attachments. */
 export interface MindooDBAppReadableAttachmentStream {
@@ -381,6 +398,7 @@ export interface MindooDBAppSession {
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
+  onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
   disconnect(): Promise<void>;
 }
 
