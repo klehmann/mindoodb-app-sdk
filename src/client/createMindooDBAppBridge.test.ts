@@ -440,7 +440,9 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       throw new Error("Expected the host bridge port to be captured.");
     }
 
-    bridgePort.postMessage({
+    const hostPort = bridgePort as MessagePort;
+
+    hostPort.postMessage({
       protocol: "mindoodb-app-bridge",
       kind: "theme-changed",
       theme: {
