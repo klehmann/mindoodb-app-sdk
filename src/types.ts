@@ -57,6 +57,15 @@ export type {
 /** Launch target used by the Administrator when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
 
+/** Theme mode currently active in the Administrator host UI. */
+export type MindooDBAppThemeMode = "light" | "dark";
+
+/** Host theme snapshot exposed to running apps. */
+export interface MindooDBAppHostTheme {
+  mode: MindooDBAppThemeMode;
+  preset: string;
+}
+
 /** Permission/capability flags exposed for a database binding inside the app session. */
 export type MindooDBAppCapability =
   | "read"
@@ -74,6 +83,7 @@ export interface MindooDBAppLaunchContext {
   appVersion?: string;
   launchId: string;
   runtime: MindooDBAppRuntime;
+  theme: MindooDBAppHostTheme;
   tenantId?: string;
   preferredDatabaseId?: string;
   user: {
@@ -288,8 +298,18 @@ export type MindooDBAppBridgeStreamMessage =
   | MindooDBAppBridgeStreamAck
   | MindooDBAppBridgeStreamError;
 
+/** Host-pushed event emitted when the Administrator theme changes. */
+export interface MindooDBAppBridgeThemeChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "theme-changed";
+  theme: MindooDBAppHostTheme;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
-export type MindooDBAppBridgePortMessage = MindooDBAppBridgeRpcMessage | MindooDBAppBridgeStreamMessage;
+export type MindooDBAppBridgePortMessage =
+  | MindooDBAppBridgeRpcMessage
+  | MindooDBAppBridgeStreamMessage
+  | MindooDBAppBridgeThemeChangedMessage;
 
 /** Pull-based read stream for document attachments. */
 export interface MindooDBAppReadableAttachmentStream {
@@ -360,6 +380,7 @@ export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
+  onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
   disconnect(): Promise<void>;
 }
 

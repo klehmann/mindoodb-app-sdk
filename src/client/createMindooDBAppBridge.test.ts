@@ -351,4 +351,111 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       "views.dispose",
     ]));
   });
+
+  it("exposes host theme snapshots and live theme change events", async () => {
+    let bridgePort: MessagePort | null = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        bridgePort = port;
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+
+          if (message.method === "session.getLaunchContext") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                appId: "timerecords",
+                appInstanceId: "app-1",
+                launchId: "launch-theme",
+                runtime: "iframe",
+                theme: {
+                  mode: "dark",
+                  preset: "mindoo",
+                },
+                user: {
+                  id: "user-1",
+                  username: "Jane Doe",
+                },
+                launchParameters: {},
+              },
+            });
+            return;
+          }
+
+          if (message.method === "session.disconnect") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-theme",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const themeChanges: Array<{ mode: string; preset: string }> = [];
+    const unsubscribe = session.onThemeChange((theme) => {
+      themeChanges.push(theme);
+    });
+
+    await expect(session.getLaunchContext()).resolves.toMatchObject({
+      appId: "timerecords",
+      theme: {
+        mode: "dark",
+        preset: "mindoo",
+      },
+    });
+
+    if (!bridgePort) {
+      throw new Error("Expected the host bridge port to be captured.");
+    }
+
+    bridgePort.postMessage({
+      protocol: "mindoodb-app-bridge",
+      kind: "theme-changed",
+      theme: {
+        mode: "light",
+        preset: "nora",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(themeChanges).toEqual([{
+      mode: "light",
+      preset: "nora",
+    }]);
+
+    unsubscribe();
+    await session.disconnect();
+  });
 });

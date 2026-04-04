@@ -7,6 +7,7 @@ import type {
   MindooDBAppBridgeConnectOptions,
   MindooDBAppBridgeConnectedMessage,
   MindooDBAppBridgePortMessage,
+  MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
   MindooDBAppBridgeStreamOpenResult,
@@ -49,6 +50,11 @@ function isStreamAckFor(streamId: string, message: MindooDBAppBridgePortMessage)
 /** Narrows a port message to an error event for one specific stream id. */
 function isStreamErrorFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeStreamError {
   return message.kind === "stream-error" && message.streamId === streamId;
+}
+
+/** Narrows a port message to a host theme change event. */
+function isThemeChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeThemeChangedMessage {
+  return message.kind === "theme-changed";
 }
 
 /** Converts a stream error payload into a normal `Error`. */
@@ -524,6 +530,14 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   async openDatabase(databaseId: string): Promise<MindooDBAppDatabase> {
     await this.rpc.call("session.openDatabase", { databaseId });
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
+  }
+
+  onThemeChange(listener: (theme: MindooDBAppLaunchContext["theme"]) => void) {
+    return this.rpc.addMessageListener((message) => {
+      if (isThemeChangedMessage(message)) {
+        listener(message.theme);
+      }
+    });
   }
 
   /** Disconnects from the host and always disposes the underlying port client. */
