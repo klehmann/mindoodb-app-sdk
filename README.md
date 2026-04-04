@@ -328,6 +328,19 @@ Helpers currently include:
 
 The dedicated language guide lives in the `mindoodb-view-language` package. The SDK re-exports `createViewLanguage()` for convenience.
 
+## Testing without Haven
+
+You do **not** need a full Haven environment to test apps that use `mindoodb-app-sdk`.
+
+The SDK ships a dedicated `mindoodb-app-sdk/testing` entrypoint with two levels of test helpers:
+
+- Level 1: simple app-test helpers that return a fake `MindooDBAppSession` and bridge object for unit, composable, store, and component tests
+- Level 2: a fake bridge host harness for tests that should exercise the real `createMindooDBAppBridge()` handshake over `postMessage` and `MessageChannel`
+
+Use Level 1 when you only need app behavior. Use Level 2 when you want to validate your bridge integration itself.
+
+See [`TESTING.md`](./TESTING.md) for setup instructions and Vitest examples.
+
 ## Local development workflow
 
 The recommended local setup is:
@@ -345,6 +358,8 @@ This gives you:
 - realistic iframe sizing and theme changes during development
 
 The sample `mindoodb-timerecords` app in this workspace is a good reference for this setup.
+
+This local development workflow is separate from the automated testing workflow above. Running Haven locally is useful for interactive development, but it is not required for Level 1 or Level 2 automated tests.
 
 ## Permissions and mappings
 
