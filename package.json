@@ -1,6 +1,6 @@
 {
   "name": "mindoodb-app-sdk",
-  "version": "1.0.0",
+  "version": "0.0.4",
   "description": "MindooDB app SDK for building apps that connect to the Haven host bridge",
   "license": "ISC",
   "author": "Mindoo GmbH",
@@ -12,22 +12,39 @@
     "bridge"
   ],
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "TESTING.md"
+  ],
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    }
   },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json",
+    "build": "tsup src/index.ts src/testing/index.ts --format esm --dts --clean --tsconfig tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm run test"
   },
   "dependencies": {
-    "mindoodb-view-language": "file:../mindoodb-view-language"
+    "mindoodb-view-language": "^0.0.4"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "tsup": "^8.5.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }

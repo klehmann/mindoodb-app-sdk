@@ -72,6 +72,114 @@ export interface MindooDBAppViewport {
   height: number;
 }
 
+/** Saved categorization mode for Haven-managed view mappings delivered at launch time. */
+export type MindooDBAppConfiguredViewCategorizationStyle = "document_then_category" | "category_then_document";
+
+/** Preferred preview layout for a Haven-managed view mapping. */
+export type MindooDBAppConfiguredViewPreviewMode = "tree" | "table";
+
+/** Column role used by Haven-managed view mappings. */
+export type MindooDBAppConfiguredViewColumnRole = "category" | "sort" | "display" | "total";
+
+/** Filter authoring mode used by Haven-managed view mappings. */
+export type MindooDBAppConfiguredViewFilterMode = "rules" | "formula";
+
+/** Rule match mode used by visual-rule filters. */
+export type MindooDBAppConfiguredViewRuleMatchMode = "all" | "any";
+
+/** Visual-rule operator supported by Haven-managed view mappings. */
+export type MindooDBAppConfiguredViewRuleOperator =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "notContains"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "exists"
+  | "notExists";
+
+/** Field/formula authoring modes for Haven-managed view columns. */
+export type MindooDBAppConfiguredViewExpressionMode = "field" | "formula";
+
+/** One visual filter rule inside a Haven-managed view mapping. */
+export interface MindooDBAppConfiguredViewFilterRule {
+  id: string;
+  field: string;
+  operator: MindooDBAppConfiguredViewRuleOperator;
+  value?: string;
+}
+
+/** Field-based value expression used by Haven-managed view mappings. */
+export interface MindooDBAppConfiguredViewFieldExpression {
+  mode: "field";
+  field: string;
+}
+
+/** Formula-based value expression used by Haven-managed view mappings. */
+export interface MindooDBAppConfiguredViewFormulaExpression {
+  mode: "formula";
+  expression: MindooDBAppExpression;
+}
+
+/** Column expression authoring shape used by Haven-managed view mappings. */
+export type MindooDBAppConfiguredViewValueExpression =
+  | MindooDBAppConfiguredViewFieldExpression
+  | MindooDBAppConfiguredViewFormulaExpression;
+
+/** Rule-based filter stored by Haven for app-owned view mappings. */
+export interface MindooDBAppConfiguredViewRuleFilterDefinition {
+  mode: "rules";
+  match: MindooDBAppConfiguredViewRuleMatchMode;
+  rules: MindooDBAppConfiguredViewFilterRule[];
+}
+
+/** Formula-based filter stored by Haven for app-owned view mappings. */
+export interface MindooDBAppConfiguredViewFormulaFilterDefinition {
+  mode: "formula";
+  expression: MindooDBAppBooleanExpression;
+}
+
+/** Full filter authoring shape stored for Haven-managed app view mappings. */
+export type MindooDBAppConfiguredViewFilterDefinition =
+  | MindooDBAppConfiguredViewRuleFilterDefinition
+  | MindooDBAppConfiguredViewFormulaFilterDefinition;
+
+/** Column definition stored for a Haven-managed app view mapping. */
+export interface MindooDBAppConfiguredViewColumn {
+  id: string;
+  title: string;
+  name: string;
+  role: MindooDBAppConfiguredViewColumnRole;
+  expression: MindooDBAppConfiguredViewValueExpression;
+  sorting: MindooDBAppViewSortDirection;
+  totalMode: MindooDBAppViewTotalMode;
+  hidden: boolean;
+}
+
+/** One resolved source binding for an app-owned Haven view mapping. */
+export interface MindooDBAppResolvedViewSource {
+  origin: string;
+  databaseId: string;
+  title: string;
+  targetMode: "local" | "server";
+  connectionId?: string;
+  tenantId: string;
+  databaseName: string;
+}
+
+/** Full Haven-managed view mapping delivered to the running application at launch time. */
+export interface MindooDBAppResolvedViewDefinition {
+  id: string;
+  description?: string;
+  categorizationStyle: MindooDBAppConfiguredViewCategorizationStyle;
+  previewMode: MindooDBAppConfiguredViewPreviewMode;
+  sources: MindooDBAppResolvedViewSource[];
+  filter: MindooDBAppConfiguredViewFilterDefinition;
+  columns: MindooDBAppConfiguredViewColumn[];
+}
+
 /** Permission/capability flags exposed for a database binding inside the app session. */
 export type MindooDBAppCapability =
   | "read"
@@ -98,6 +206,7 @@ export interface MindooDBAppLaunchContext {
     username: string;
   };
   launchParameters: Record<string, string>;
+  views: MindooDBAppResolvedViewDefinition[];
 }
 
 /** Attachment metadata returned by the attachment APIs. */

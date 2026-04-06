@@ -66,6 +66,26 @@ function mergeLaunchContext(
       viewport: current.viewport ? { ...current.viewport } : null,
       user: { ...current.user },
       launchParameters: { ...current.launchParameters },
+      views: current.views.map((view) => ({
+        ...view,
+        sources: view.sources.map((source) => ({ ...source })),
+        columns: view.columns.map((column) => ({
+          ...column,
+          expression: column.expression.mode === "field"
+            ? { ...column.expression }
+            : { mode: "formula", expression: structuredClone(column.expression.expression) },
+        })),
+        filter: view.filter.mode === "rules"
+          ? {
+              mode: "rules",
+              match: view.filter.match,
+              rules: view.filter.rules.map((rule) => ({ ...rule })),
+            }
+          : {
+              mode: "formula",
+              expression: structuredClone(view.filter.expression),
+            },
+      })),
     };
   }
   return {
@@ -79,6 +99,47 @@ function mergeLaunchContext(
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
       : { ...current.launchParameters },
+    views: patch.views
+      ? patch.views.map((view) => ({
+          ...view,
+          sources: view.sources.map((source) => ({ ...source })),
+          columns: view.columns.map((column) => ({
+            ...column,
+            expression: column.expression.mode === "field"
+              ? { ...column.expression }
+              : { mode: "formula", expression: structuredClone(column.expression.expression) },
+          })),
+          filter: view.filter.mode === "rules"
+            ? {
+                mode: "rules",
+                match: view.filter.match,
+                rules: view.filter.rules.map((rule) => ({ ...rule })),
+              }
+            : {
+                mode: "formula",
+                expression: structuredClone(view.filter.expression),
+              },
+        }))
+      : current.views.map((view) => ({
+          ...view,
+          sources: view.sources.map((source) => ({ ...source })),
+          columns: view.columns.map((column) => ({
+            ...column,
+            expression: column.expression.mode === "field"
+              ? { ...column.expression }
+              : { mode: "formula", expression: structuredClone(column.expression.expression) },
+          })),
+          filter: view.filter.mode === "rules"
+            ? {
+                mode: "rules",
+                match: view.filter.match,
+                rules: view.filter.rules.map((rule) => ({ ...rule })),
+              }
+            : {
+                mode: "formula",
+                expression: structuredClone(view.filter.expression),
+              },
+        })),
   };
 }
 
@@ -102,6 +163,7 @@ function createDefaultLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): 
       username: "Test User",
     },
     launchParameters: {},
+    views: [],
   };
   return mergeLaunchContext(base, patch);
 }

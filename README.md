@@ -31,17 +31,17 @@ Your app does not open arbitrary MindooDB databases directly. Haven decides whic
 npm install mindoodb-app-sdk
 ```
 
-For local workspace development you can link the package directly:
+For local development against an unpublished workspace copy, prefer `npm link`:
 
-```json
-{
-  "dependencies": {
-    "mindoodb-app-sdk": "file:../mindoodb-app-sdk"
-  }
-}
+```bash
+# In the SDK package
+npm link
+
+# In your app project
+npm link mindoodb-app-sdk
 ```
 
-This is how the sample `mindoodb-timerecords` app is wired in the local workspace.
+When you want to switch back to the published npm version, run `npm unlink mindoodb-app-sdk` in the app project and then `npm install`.
 
 ## Getting started
 
