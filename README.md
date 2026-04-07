@@ -98,6 +98,8 @@ console.log(launchContext.theme.mode);   // "light" | "dark"
 console.log(launchContext.viewport);     // { width, height } | null
 console.log(launchContext.user.username);
 console.log(launchContext.launchParameters);
+console.log(launchContext.databases);
+console.log(launchContext.views);
 ```
 
 `launchContext.viewport` is especially useful for responsive layouts inside embedded iframes. It is the initial viewport snapshot; later changes arrive through `onViewportChange()`.
@@ -126,19 +128,19 @@ The intended pattern is:
 ### 6. Discover the databases Haven exposed
 
 ```ts
-const databases = await session.listDatabases();
+const databases = launchContext.databases;
 
 for (const database of databases) {
   console.log(database.id, database.title, database.capabilities);
 }
 ```
 
-Do not hard-code assumptions about available databases or permissions. Always discover them from the session.
+Prefer `launchContext.databases` for the initial snapshot so your app discovers databases and views from the same source. `session.listDatabases()` is still available when you want to refresh database metadata later.
 
 ### 7. Open a database and work with documents
 
 ```ts
-const databases = await session.listDatabases();
+const databases = launchContext.databases;
 const db = await session.openDatabase(databases[0]!.id);
 
 const list = await db.documents.list({ limit: 25 });
@@ -195,14 +197,16 @@ session.onViewportChange((viewport) => {
   console.log("Resize:", viewport.width, viewport.height);
 });
 
-const databases = await session.listDatabases();
+const databases = launchContext.databases;
 const db = await session.openDatabase(databases[0]!.id);
 
 const list = await db.documents.list({ limit: 25 });
 const firstDoc = list.items[0] ? await db.documents.get(list.items[0].id) : null;
 
 const v = createViewLanguage<{ employee: string; hours: number; rate?: number }>();
-const view = await db.views.create({
+const view = await session.createView({
+  databaseId: databases[0]!.id,
+  definition: {
   title: "Hours by employee",
   defaultExpand: "collapsed",
   filter: {
@@ -230,6 +234,7 @@ const view = await db.views.create({
       ),
     },
   ],
+  },
 });
 
 const page = await view.page({ pageSize: 100 });
@@ -239,7 +244,7 @@ await view.dispose();
 
 ## Views and expression language
 
-Views are app-defined and session-scoped. Create a definition, page through rows, inspect categories, manage expansion state, then dispose the handle when done.
+Views are app-defined and session-scoped. Create a definition with `session.createView()`, open Haven-configured mappings with `session.openView()`, page through rows, inspect categories, manage expansion state, then dispose the handle when done.
 
 ```ts
 import { createViewLanguage } from "mindoodb-app-sdk";
@@ -252,7 +257,9 @@ const v = createViewLanguage<{
   note?: string;
 }>();
 
-const view = await db.views.create({
+const view = await session.createView({
+  databaseId: "main",
+  definition: {
   title: "By employee",
   defaultExpand: "collapsed",
   filter: {
@@ -281,6 +288,7 @@ const view = await db.views.create({
       sorting: "descending",
     },
   ],
+  },
 });
 
 const page = await view.page({ pageSize: 100 });

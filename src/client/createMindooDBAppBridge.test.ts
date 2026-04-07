@@ -259,7 +259,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
             });
             return;
           }
-          if (message.method === "views.create") {
+          if (message.method === "session.createView") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
@@ -381,27 +381,29 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
 
     const session = await createMindooDBAppBridge().connect();
-    const database = await session.openDatabase("main");
-    const view = await database.views.create({
-      title: "Hours by employee",
-      columns: [
-        { name: "employee", title: "Employee", role: "category", expression: v.field("employee"), sorting: "ascending" },
-        {
-          name: "amount",
-          title: "Amount",
-          role: "display",
-          expression: v.let(
-            { hours: v.toNumber(v.field("hours")), rate: v.toNumber(v.field("rate")) },
-            ({ hours, rate }) => v.mul(v.coalesce(hours, v.number(0)), v.coalesce(rate, v.number(0))),
-          ),
-          sorting: "descending",
+    const view = await session.createView({
+      databaseId: "main",
+      definition: {
+        title: "Hours by employee",
+        columns: [
+          { name: "employee", title: "Employee", role: "category", expression: v.field("employee"), sorting: "ascending" },
+          {
+            name: "amount",
+            title: "Amount",
+            role: "display",
+            expression: v.let(
+              { hours: v.toNumber(v.field("hours")), rate: v.toNumber(v.field("rate")) },
+              ({ hours, rate }) => v.mul(v.coalesce(hours, v.number(0)), v.coalesce(rate, v.number(0))),
+            ),
+            sorting: "descending",
+          },
+        ],
+        filter: {
+          mode: "expression",
+          expression: v.gt(v.toNumber(v.field("hours")), v.number(0)),
         },
-      ],
-      filter: {
-        mode: "expression",
-        expression: v.gt(v.toNumber(v.field("hours")), v.number(0)),
+        defaultExpand: "expanded",
       },
-      defaultExpand: "expanded",
     });
 
     const page = await view.page({ pageSize: 25 });
@@ -422,7 +424,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     expect(children.rows[0]?.docId).toBe("doc-1");
     expect(documentIds).toEqual(["doc-1"]);
     expect(requests).toEqual(expect.arrayContaining([
-      "views.create",
+      "session.createView",
       "views.page",
       "views.expansion.get",
       "views.expansion.set",

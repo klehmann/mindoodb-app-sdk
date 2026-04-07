@@ -206,6 +206,7 @@ export interface MindooDBAppLaunchContext {
     username: string;
   };
   launchParameters: Record<string, string>;
+  databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
 }
 
@@ -479,10 +480,10 @@ export interface MindooDBAppViewHandle {
   dispose(): Promise<void>;
 }
 
-/** Entry point for creating or opening views in a database. */
-export interface MindooDBAppViewApi {
-  create(definition: MindooDBAppViewDefinition): Promise<MindooDBAppViewHandle>;
-  open(viewId: string): Promise<MindooDBAppViewHandle>;
+/** Payload used when creating one dynamic view inside the current app session. */
+export interface MindooDBAppCreateViewInput {
+  databaseId: string;
+  definition: MindooDBAppViewDefinition;
 }
 
 /** Attachment operations exposed by an opened database handle. */
@@ -497,7 +498,6 @@ export interface MindooDBAppAttachmentApi {
 export interface MindooDBAppDatabase {
   info(): Promise<MindooDBAppDatabaseInfo>;
   documents: MindooDBAppDocumentApi;
-  views: MindooDBAppViewApi;
   attachments: MindooDBAppAttachmentApi;
 }
 
@@ -506,6 +506,8 @@ export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
+  createView(input: MindooDBAppCreateViewInput): Promise<MindooDBAppViewHandle>;
+  openView(viewId: string): Promise<MindooDBAppViewHandle>;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
   onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
   disconnect(): Promise<void>;

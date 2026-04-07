@@ -12,13 +12,13 @@ import type {
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
   MindooDBAppBridgeStreamOpenResult,
+  MindooDBAppCreateViewInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDocumentApi,
   MindooDBAppLaunchContext,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSession,
-  MindooDBAppViewApi,
   MindooDBAppViewCategoryChildrenPageRequest,
   MindooDBAppViewDefinition,
   MindooDBAppViewExpansionState,
@@ -148,27 +148,23 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
 class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
   constructor(
     private readonly rpc: PortRpcClient,
-    private readonly databaseId: string,
     private readonly viewId: string,
   ) {}
 
   async getDefinition(): Promise<MindooDBAppViewDefinition> {
     return await this.rpc.call("views.getDefinition", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
 
   async refresh(): Promise<void> {
     await this.rpc.call("views.refresh", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
 
   async page(input?: MindooDBAppViewPageRequest): Promise<MindooDBAppViewPageResult> {
     return await this.rpc.call("views.page", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       request: input ?? {},
     });
@@ -176,14 +172,12 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async getExpansionState(): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.get", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
 
   async setExpansionState(state: MindooDBAppViewExpansionState): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.set", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       expansion: state,
     });
@@ -191,7 +185,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async expand(rowKey: string): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.expand", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       rowKey,
     });
@@ -199,7 +192,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async collapse(rowKey: string): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.collapse", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       rowKey,
     });
@@ -207,21 +199,18 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async expandAll(): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.expandAll", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
 
   async collapseAll(): Promise<MindooDBAppViewExpansionState> {
     return await this.rpc.call("views.expansion.collapseAll", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
 
   async getRow(rowKey: string): Promise<MindooDBAppViewRow | null> {
     return await this.rpc.call("views.row.get", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       rowKey,
     });
@@ -229,7 +218,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async getCategory(input: MindooDBAppViewLookupByPath): Promise<MindooDBAppViewRow | null> {
     return await this.rpc.call("views.category.get", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       lookup: input,
     });
@@ -237,7 +225,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async pageCategory(categoryKey: string, input?: MindooDBAppViewCategoryChildrenPageRequest): Promise<MindooDBAppViewPageResult> {
     return await this.rpc.call("views.category.page", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       categoryKey,
       request: input ?? {},
@@ -246,7 +233,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async listCategoryDocumentIds(categoryKey: string): Promise<string[]> {
     return await this.rpc.call("views.category.documentIds", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
       categoryKey,
     });
@@ -254,7 +240,6 @@ class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
 
   async dispose(): Promise<void> {
     await this.rpc.call("views.dispose", {
-      databaseId: this.databaseId,
       viewId: this.viewId,
     });
   }
@@ -433,7 +418,6 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
 /** Database facade exposing document, view, and attachment APIs over RPC. */
 class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly documents: MindooDBAppDocumentApi;
-  public readonly views: MindooDBAppViewApi;
   public readonly attachments: MindooDBAppAttachmentApi;
 
   constructor(private readonly rpc: PortRpcClient, private readonly databaseId: string) {
@@ -468,17 +452,6 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         docId,
         timestamp,
       }),
-    };
-
-    this.views = {
-      create: async (definition) => {
-        const result = await this.rpc.call<{ viewId: string }>("views.create", {
-          databaseId: this.databaseId,
-          definition,
-        });
-        return new MindooDBAppViewHandleImpl(this.rpc, this.databaseId, result.viewId);
-      },
-      open: async (viewId) => new MindooDBAppViewHandleImpl(this.rpc, this.databaseId, viewId),
     };
 
     this.attachments = {
@@ -536,6 +509,16 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   async openDatabase(databaseId: string): Promise<MindooDBAppDatabase> {
     await this.rpc.call("session.openDatabase", { databaseId });
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
+  }
+
+  async createView(input: MindooDBAppCreateViewInput): Promise<MindooDBAppViewHandle> {
+    const result = await this.rpc.call<{ viewId: string }>("session.createView", input);
+    return new MindooDBAppViewHandleImpl(this.rpc, result.viewId);
+  }
+
+  async openView(viewId: string): Promise<MindooDBAppViewHandle> {
+    await this.rpc.call("session.openView", { viewId });
+    return new MindooDBAppViewHandleImpl(this.rpc, viewId);
   }
 
   onThemeChange(listener: (theme: MindooDBAppLaunchContext["theme"]) => void) {

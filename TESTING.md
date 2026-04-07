@@ -85,11 +85,13 @@ Both accept the same options:
 - `databases`
 - `onDisconnect`
 
+When you pass `databases`, the mock session also exposes them through `session.getLaunchContext().databases`.
+
 Each database entry can provide:
 
 - `info`
 - `methods.documents`
-- `methods.views`
+- `methods.views` for session-level `createView()` and `openView()` calls
 - `methods.attachments`
 
 ## Level 2 example

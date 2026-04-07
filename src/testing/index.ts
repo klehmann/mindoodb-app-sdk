@@ -8,6 +8,7 @@ import type {
   MindooDBAppBridgeRpcRequest,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
+  MindooDBAppCreateViewInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDocument,
@@ -20,7 +21,6 @@ import type {
   MindooDBAppLaunchContext,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSession,
-  MindooDBAppViewApi,
   MindooDBAppViewCategoryChildrenPageRequest,
   MindooDBAppViewDefinition,
   MindooDBAppViewExpansionState,
@@ -36,6 +36,10 @@ import type {
 const PROTOCOL = "mindoodb-app-bridge";
 
 type MaybePromise<T> = T | Promise<T>;
+type MockViewApi = {
+  create(definition: MindooDBAppViewDefinition): MaybePromise<MindooDBAppViewHandle>;
+  open(viewId: string): MaybePromise<MindooDBAppViewHandle>;
+};
 
 function createBridgeErrorPayload(error: unknown, fallbackCode = "bridge-error"): MindooDBAppBridgeErrorPayload {
   if (error && typeof error === "object" && "message" in error) {
@@ -66,6 +70,10 @@ function mergeLaunchContext(
       viewport: current.viewport ? { ...current.viewport } : null,
       user: { ...current.user },
       launchParameters: { ...current.launchParameters },
+      databases: current.databases.map((database) => ({
+        ...database,
+        capabilities: [...database.capabilities],
+      })),
       views: current.views.map((view) => ({
         ...view,
         sources: view.sources.map((source) => ({ ...source })),
@@ -99,6 +107,15 @@ function mergeLaunchContext(
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
       : { ...current.launchParameters },
+    databases: patch.databases
+      ? patch.databases.map((database) => ({
+          ...database,
+          capabilities: [...database.capabilities],
+        }))
+      : current.databases.map((database) => ({
+          ...database,
+          capabilities: [...database.capabilities],
+        })),
     views: patch.views
       ? patch.views.map((view) => ({
           ...view,
@@ -163,6 +180,7 @@ function createDefaultLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): 
       username: "Test User",
     },
     launchParameters: {},
+    databases: [],
     views: [],
   };
   return mergeLaunchContext(base, patch);
@@ -271,7 +289,7 @@ function createDefaultViewHandle(): MindooDBAppViewHandle {
 
 type MockDatabaseMethods = {
   documents?: Partial<MindooDBAppDocumentApi>;
-  views?: Partial<MindooDBAppViewApi>;
+  views?: Partial<MockViewApi>;
   attachments?: Partial<MindooDBAppAttachmentApi>;
 };
 
@@ -320,7 +338,7 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
     },
   };
 
-  const defaultViews: MindooDBAppViewApi = {
+  const defaultViews: MockViewApi = {
     async create(_definition: MindooDBAppViewDefinition) {
       return await defaultViewFactory();
     },
@@ -354,10 +372,6 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       ...defaultDocuments,
       ...methods.documents,
     },
-    views: {
-      ...defaultViews,
-      ...methods.views,
-    },
     attachments: {
       ...defaultAttachments,
       ...methods.attachments,
@@ -371,6 +385,8 @@ type MockSessionState = {
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
+  createView: (input: MindooDBAppCreateViewInput) => Promise<MindooDBAppViewHandle>;
+  openView: (viewId: string) => Promise<MindooDBAppViewHandle>;
   bridge: MindooDBAppBridge;
   session: MindooDBAppSession;
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
@@ -382,17 +398,30 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
+  const databaseViewApis = new Map<string, MockViewApi>();
+  const sessionViews = new Map<string, MindooDBAppViewHandle>();
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
 
   const setDatabases = (definitions: MockMindooDBAppDatabaseDefinition[]) => {
     databaseHandles.clear();
+    databaseViewApis.clear();
     databaseInfos = definitions.map((definition) => ({
       ...definition.info,
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
       databaseHandles.set(definition.info.id, createDatabaseHandle(definition));
+      databaseViewApis.set(definition.info.id, {
+        async create(_definition: MindooDBAppViewDefinition) {
+          return await createDefaultViewHandle();
+        },
+        async open(_viewId: string) {
+          return await createDefaultViewHandle();
+        },
+        ...(definition.methods?.views ?? {}),
+      });
     }
+    launchContext = mergeLaunchContext(launchContext, { databases: databaseInfos });
   };
 
   setDatabases(options.databases ?? []);
@@ -413,6 +442,33 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
         throw new Error(`Unknown test database: ${databaseId}`);
       }
       return database;
+    },
+    async createView(input) {
+      const api = databaseViewApis.get(input.databaseId);
+      if (!api) {
+        throw new Error(`Unknown test database for view creation: ${input.databaseId}`);
+      }
+      const view = await api.create(input.definition);
+      const viewId = input.definition.id || crypto.randomUUID();
+      sessionViews.set(viewId, view);
+      return view;
+    },
+    async openView(viewId) {
+      const existing = sessionViews.get(viewId);
+      if (existing) {
+        return existing;
+      }
+      const sourceDatabaseId = launchContext.views.find((view) => view.id === viewId)?.sources[0]?.databaseId;
+      if (!sourceDatabaseId) {
+        throw new Error(`Unknown test view: ${viewId}`);
+      }
+      const api = databaseViewApis.get(sourceDatabaseId);
+      if (!api) {
+        throw new Error(`Unknown test database for view ${viewId}: ${sourceDatabaseId}`);
+      }
+      const view = await api.open(viewId);
+      sessionViews.set(viewId, view);
+      return view;
     },
     onThemeChange(listener) {
       themeListeners.add(listener);
@@ -459,6 +515,8 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       }
       return database;
     },
+    createView: session.createView,
+    openView: session.openView,
     bridge,
     session,
     emitThemeChange(theme) {
@@ -663,15 +721,13 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     installed = true;
   }
 
-  async function resolveViewHandle(databaseId: string, viewId: string) {
-    const key = `${databaseId}::${viewId}`;
-    const existing = viewSessions.get(key);
+  async function resolveViewHandle(viewId: string) {
+    const existing = viewSessions.get(viewId);
     if (existing) {
       return existing;
     }
-    const database = state.getDatabase(databaseId);
-    const handle = await database.views.open(viewId);
-    viewSessions.set(key, handle);
+    const handle = await state.openView(viewId);
+    viewSessions.set(viewId, handle);
     return handle;
   }
 
@@ -719,6 +775,18 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return state.listDatabaseInfos();
       case "session.openDatabase":
         state.getDatabase(String(params.databaseId));
+        return { ok: true };
+      case "session.createView": {
+        const viewId = `view-${viewCounter += 1}`;
+        const handle = await state.createView({
+          databaseId: String(params.databaseId),
+          definition: params.definition as MindooDBAppViewDefinition,
+        });
+        viewSessions.set(viewId, handle);
+        return { viewId };
+      }
+      case "session.openView":
+        await state.openView(String(params.viewId));
         return { ok: true };
       case "session.disconnect":
         await state.session.disconnect();
@@ -772,52 +840,46 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         writeStreams.set(streamId, stream);
         return { streamId };
       }
-      case "views.create": {
-        const handle = await state.getDatabase(String(params.databaseId)).views.create(params.definition as MindooDBAppViewDefinition);
-        const viewId = `view-${viewCounter += 1}`;
-        viewSessions.set(`${String(params.databaseId)}::${viewId}`, handle);
-        return { viewId };
-      }
       case "views.getDefinition":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).getDefinition();
+        return await (await resolveViewHandle(String(params.viewId))).getDefinition();
       case "views.refresh":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).refresh();
+        return await (await resolveViewHandle(String(params.viewId))).refresh();
       case "views.page":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).page(
+        return await (await resolveViewHandle(String(params.viewId))).page(
           params.request as MindooDBAppViewPageRequest | undefined,
         );
       case "views.expansion.get":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).getExpansionState();
+        return await (await resolveViewHandle(String(params.viewId))).getExpansionState();
       case "views.expansion.set":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).setExpansionState(
+        return await (await resolveViewHandle(String(params.viewId))).setExpansionState(
           params.expansion as MindooDBAppViewExpansionState,
         );
       case "views.expansion.expand":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).expand(String(params.rowKey));
+        return await (await resolveViewHandle(String(params.viewId))).expand(String(params.rowKey));
       case "views.expansion.collapse":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).collapse(String(params.rowKey));
+        return await (await resolveViewHandle(String(params.viewId))).collapse(String(params.rowKey));
       case "views.expansion.expandAll":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).expandAll();
+        return await (await resolveViewHandle(String(params.viewId))).expandAll();
       case "views.expansion.collapseAll":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).collapseAll();
+        return await (await resolveViewHandle(String(params.viewId))).collapseAll();
       case "views.row.get":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).getRow(String(params.rowKey));
+        return await (await resolveViewHandle(String(params.viewId))).getRow(String(params.rowKey));
       case "views.category.get":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).getCategory(
+        return await (await resolveViewHandle(String(params.viewId))).getCategory(
           params.lookup as MindooDBAppViewLookupByPath,
         );
       case "views.category.page":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).pageCategory(
+        return await (await resolveViewHandle(String(params.viewId))).pageCategory(
           String(params.categoryKey),
           params.request as MindooDBAppViewCategoryChildrenPageRequest | undefined,
         );
       case "views.category.documentIds":
-        return await (await resolveViewHandle(String(params.databaseId), String(params.viewId))).listCategoryDocumentIds(
+        return await (await resolveViewHandle(String(params.viewId))).listCategoryDocumentIds(
           String(params.categoryKey),
         );
       case "views.dispose": {
-        const key = `${String(params.databaseId)}::${String(params.viewId)}`;
-        const handle = await resolveViewHandle(String(params.databaseId), String(params.viewId));
+        const key = String(params.viewId);
+        const handle = await resolveViewHandle(String(params.viewId));
         await handle.dispose();
         viewSessions.delete(key);
         return undefined;
