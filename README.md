@@ -57,7 +57,7 @@ npm install mindoodb-app-sdk
 The fastest way to start building is to clone the **example app**, run it locally, and connect it to Haven:
 
 ```bash
-git clone https://github.com/niclas-niclas/mindoodb-app-example.git
+git clone https://github.com/klehmann/mindoodb-app-example.git
 cd mindoodb-app-example
 npm install
 npm run dev:local
@@ -73,9 +73,9 @@ Then, in Haven:
 
 From here, **fork or duplicate** the example project to start building your own app while exploring the platform in a running Haven client.
 
-The example app is also deployed at **https://mindoodb-app-example.mindoo.de** so you can register it in Haven without running anything locally.
+The example app is also deployed at **https://app-example.mindoodb.com** so you can register it in Haven without running anything locally.
 
-> See the [mindoodb-app-example README](https://github.com/niclas-niclas/mindoodb-app-example) for the full project walkthrough.
+> See the [mindoodb-app-example README](https://github.com/klehmann/mindoodb-app-example) for the full project walkthrough.
 
 ## Quick start (from scratch)
 
@@ -494,7 +494,7 @@ See [`TESTING.md`](./TESTING.md) for setup instructions and Vitest examples.
 
 MindooDB Apps are standard web applications -- deploy them anywhere you can serve static files.
 
-**Cloudflare Pages / Workers** is one of the easiest options. The [example app](https://github.com/niclas-niclas/mindoodb-app-example) is deployed this way at https://mindoodb-app-example.mindoo.de using a simple `wrangler.jsonc` configuration:
+**Cloudflare Pages / Workers** is one of the easiest options. The [example app](https://github.com/klehmann/mindoodb-app-example) is deployed this way at https://app-example.mindoodb.com using a simple `wrangler.jsonc` configuration:
 
 ```bash
 npm run build
