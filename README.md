@@ -162,6 +162,8 @@ if (!db.capabilities.includes("delete")) {
 }
 ```
 
+When the database is readable, `documents.list()` can also expose deleted document IDs by setting `status: "all"` or `status: "deleted"`. This is useful for app-side indexes and sync checkpoints.
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
@@ -195,13 +197,35 @@ Both subscription functions return an unsubscribe callback. Call it during teard
 
 ### Documents
 
-Open a database, then use the `documents` API for full CRUD plus history:
+Open a database, then use the `documents` API for CRUD, history, and changefeed-backed document listing:
 
 ```ts
 const db = await session.openDatabase(databaseId);
 
-// List
+// List the first page of existing documents
 const result = await db.documents.list({ limit: 50, fields: ["title"] });
+console.log(result.items);
+console.log(result.nextCursor); // opaque changefeed checkpoint or null
+
+// Continue from the last checkpoint
+const nextPage = result.nextCursor
+  ? await db.documents.list({ cursor: result.nextCursor, limit: 50, fields: ["title"] })
+  : null;
+
+// Fast metadata-only listing (IDs + deletion state only)
+const ids = await db.documents.list({
+  limit: 200,
+  status: "all",
+  metadataOnly: true,
+});
+
+// Skip N matching entries before returning results
+const window = await db.documents.list({
+  cursor: result.nextCursor,
+  skip: 100,
+  limit: 25,
+  status: "existing",
+});
 
 // Read
 const doc = await db.documents.get(docId);
@@ -221,6 +245,22 @@ const updated = await db.documents.update(docId, {
 await db.documents.delete(docId);
 ```
 
+`documents.list()` is backed by Haven's internal changefeed, not by a positional offset. The query object supports:
+
+| Field | Meaning |
+|---|---|
+| `cursor?: string \| null` | Opaque changefeed checkpoint previously returned by `nextCursor` |
+| `limit?: number` | Maximum number of matching entries to return (default `50`) |
+| `skip?: number` | Skip matching entries after the cursor without loading full document bodies |
+| `status?: "all" \| "existing" \| "deleted"` | Filter by deletion state (default `"existing"`) |
+| `metadataOnly?: boolean` | Return only `{ id, isDeleted }` for speed |
+| `fields?: string[]` | Project specific JSON fields when `metadataOnly` is `false` |
+| `filter?: Record<string, unknown>` | Simple equality filter applied to document data when `metadataOnly` is `false` |
+
+`nextCursor` is the latest checkpoint reached by the page. Persist it after each successful call when you are building your own index or sync loop. If there were no changes after the supplied cursor, `nextCursor` is `null`.
+
+When Haven can resolve the signing identity from the tenant directory, list items may also include `identityLabel` and `publicKeyFingerprint` for the latest visible change. Apps can use this to show who last touched a document without loading the full revision history first.
+
 ### Document history
 
 When the `history` capability is granted, you can walk the full revision timeline of any document:
@@ -234,6 +274,68 @@ const history = await db.documents.listHistory(docId);
 const snapshot = await db.documents.getAtTimestamp(docId, history[0]!.timestamp);
 // { id, timestamp, state: "exists" | "deleted" | "missing", data }
 ```
+
+### Incremental sync
+
+The changefeed-backed `documents.list()` API is also the right primitive for app-side indexes, search, and other derived caches.
+
+**Initial scan from the beginning:**
+
+```ts
+let cursor: string | null = null;
+
+while (true) {
+  const page = await db.documents.list({
+    cursor,
+    limit: 500,
+    status: "all",
+    metadataOnly: true,
+  });
+
+  for (const item of page.items) {
+    if (!item.isDeleted) {
+      const doc = await db.documents.get(item.id);
+      // add or rebuild the derived index entry
+    }
+  }
+
+  if (!page.nextCursor) {
+    break;
+  }
+  cursor = page.nextCursor;
+}
+
+// Save `cursor` after the last non-empty page.
+```
+
+**Resume later from the saved checkpoint:**
+
+```ts
+const page = await db.documents.list({
+  cursor: savedCursor,
+  limit: 500,
+  status: "all",
+  metadataOnly: true,
+});
+
+let updated = 0;
+let deleted = 0;
+
+for (const item of page.items) {
+  if (item.isDeleted) {
+    deleted += 1;
+    // remove from index
+  } else {
+    updated += 1;
+    const doc = await db.documents.get(item.id);
+    // update index
+  }
+}
+
+console.log(`Updated index with ${updated} changes and ${deleted} deletions.`);
+```
+
+Use `status: "all"` for external indexes so deletions are visible and can be removed from your derived state.
 
 ### Attachments
 
@@ -458,6 +560,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `listHistory(docId)` | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>` |
 
+`list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
+
 ### MindooDBAppAttachmentApi
 
 | Method | Returns |
@@ -494,6 +598,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `createMindooDBAppBridge()` | Create the bridge object used to connect to Haven |
 | `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`) |
 | `createViewLanguage<T>()` | Create a typed expression builder for view definitions |
+| `abbreviateCanonicalName(value)` | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo` |
+| `expandAbbreviatedName(value)` | Convert an abbreviated Notes-style name like `Jane/Dev/Mindoo` to `cn=Jane/ou=Dev/o=Mindoo` |
 
 ## Permissions and mappings
 

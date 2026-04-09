@@ -249,6 +249,9 @@ export interface MindooDBAppDocumentSummary {
   data?: Record<string, unknown>;
   attachmentCount?: number;
   updatedAt?: string;
+  identityLabel?: string;
+  publicKeyFingerprint?: string;
+  isDeleted?: boolean;
 }
 
 /** Fully loaded document returned by `get()`, `create()`, or `update()`. */
@@ -278,10 +281,13 @@ export interface MindooDBAppHistoricalDocument {
   data: Record<string, unknown> | null;
 }
 
-/** Query options for paging through documents in a database. */
+/** Query options for paging through changefeed-backed document listings in a database. */
 export interface MindooDBAppDocumentListQuery {
-  limit?: number;
   cursor?: string | null;
+  limit?: number;
+  skip?: number;
+  status?: "all" | "existing" | "deleted";
+  metadataOnly?: boolean;
   fields?: string[];
   filter?: Record<string, unknown>;
 }

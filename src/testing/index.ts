@@ -225,6 +225,35 @@ function createDefaultWritableAttachmentStream(): MindooDBAppWritableAttachmentS
   };
 }
 
+type MockStoredDocument = MindooDBAppDocument & {
+  isDeleted: boolean;
+  updatedAt?: string;
+};
+
+function getFieldValue(source: Record<string, unknown>, field: string) {
+  return field.split(".").reduce<unknown>((current, part) => {
+    if (current && typeof current === "object" && part in current) {
+      return (current as Record<string, unknown>)[part];
+    }
+    return undefined;
+  }, source);
+}
+
+function matchesDocumentFilter(document: MockStoredDocument, filter?: Record<string, unknown>) {
+  if (!filter) {
+    return true;
+  }
+  return Object.entries(filter).every(([field, expected]) => getFieldValue(document.data, field) === expected);
+}
+
+function decodeMockListCursor(cursor?: string | null) {
+  if (!cursor) {
+    return 0;
+  }
+  const offset = Number.parseInt(cursor, 10);
+  return Number.isFinite(offset) && offset >= 0 ? offset : 0;
+}
+
 function createDefaultViewHandle(): MindooDBAppViewHandle {
   const definition: MindooDBAppViewDefinition = {
     title: "Mock View",
@@ -296,33 +325,101 @@ type MockDatabaseMethods = {
 function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): MindooDBAppDatabase {
   let createCounter = 0;
   const defaultViewFactory = async () => createDefaultViewHandle();
+  const storedDocuments = new Map<string, MockStoredDocument>();
 
   const defaultDocuments: MindooDBAppDocumentApi = {
-    async list(_query?: MindooDBAppDocumentListQuery): Promise<MindooDBAppDocumentListResult> {
+    async list(query?: MindooDBAppDocumentListQuery): Promise<MindooDBAppDocumentListResult> {
+      const status = query?.status ?? "existing";
+      const skip = Math.max(0, query?.skip ?? 0);
+      const limit = Math.max(1, query?.limit ?? 50);
+      const offset = decodeMockListCursor(query?.cursor) + skip;
+      const metadataOnly = query?.metadataOnly ?? false;
+
+      const items = Array.from(storedDocuments.values())
+        .filter((document) => status === "all" ? true : status === "deleted" ? document.isDeleted : !document.isDeleted)
+        .filter((document) => metadataOnly ? true : matchesDocumentFilter(document, query?.filter))
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const page = items.slice(offset, offset + limit).map((document) => {
+        if (metadataOnly) {
+          return {
+            id: document.id,
+            isDeleted: document.isDeleted,
+          };
+        }
+        const projectedData = query?.fields
+          ? Object.fromEntries(query.fields.map((field) => [field, getFieldValue(document.data, field)]))
+          : document.data;
+        return {
+          id: document.id,
+          data: projectedData,
+          attachmentCount: document.attachments?.length ?? 0,
+          updatedAt: document.updatedAt,
+          isDeleted: status !== "existing" ? document.isDeleted : undefined,
+        };
+      });
+      const nextCursor = offset + page.length < items.length ? String(offset + page.length) : null;
       return {
-        items: [],
-        nextCursor: null,
+        items: page,
+        nextCursor,
       };
     },
     async get(_docId: string): Promise<MindooDBAppDocument | null> {
-      return null;
+      const document = storedDocuments.get(_docId);
+      if (!document || document.isDeleted) {
+        return null;
+      }
+      return {
+        id: document.id,
+        data: structuredClone(document.data),
+        attachments: document.attachments ? structuredClone(document.attachments) : [],
+        updatedAt: document.updatedAt,
+      };
     },
     async create(input) {
       createCounter += 1;
-      return {
+      const createdAt = new Date().toISOString();
+      const created = {
         id: `doc-${createCounter}`,
         data: { ...input.data },
         attachments: [],
+        updatedAt: createdAt,
+      };
+      storedDocuments.set(created.id, {
+        ...created,
+        data: structuredClone(created.data),
+        attachments: [],
+        isDeleted: false,
+      });
+      return {
+        ...created,
       };
     },
     async update(docId, patch) {
-      return {
+      const updatedAt = new Date().toISOString();
+      const existing = storedDocuments.get(docId);
+      const updated = {
         id: docId,
         data: { ...patch.data },
-        attachments: [],
+        attachments: existing?.attachments ? structuredClone(existing.attachments) : [],
+        updatedAt,
       };
+      storedDocuments.set(docId, {
+        ...updated,
+        data: structuredClone(updated.data),
+        attachments: updated.attachments ? structuredClone(updated.attachments) : [],
+        isDeleted: false,
+      });
+      return updated;
     },
     async delete(_docId: string) {
+      const existing = storedDocuments.get(_docId);
+      if (existing) {
+        storedDocuments.set(_docId, {
+          ...existing,
+          isDeleted: true,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       return { ok: true as const };
     },
     async listHistory(_docId: string): Promise<MindooDBAppDocumentHistoryEntry[]> {
