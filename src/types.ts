@@ -218,6 +218,23 @@ export interface MindooDBAppAttachmentInfo {
   size: number;
 }
 
+/** Preview modes supported by the Haven-hosted attachment preview dialog. */
+export type MindooDBAppAttachmentPreviewMode =
+  | "image"
+  | "pdf"
+  | "text"
+  | "docx"
+  | "pptx"
+  | "spreadsheet"
+  | "video"
+  | "audio";
+
+/** Optional parameters for opening an attachment preview in Haven. */
+export interface MindooDBAppAttachmentPreviewOptions {
+  /** Historical snapshot timestamp previously obtained from `documents.history.getAtTimestamp()`. */
+  timestamp?: number;
+}
+
 /** Database entry visible to the app during launch and database listing. */
 export interface MindooDBAppDatabaseInfo {
   id: string;
@@ -492,6 +509,11 @@ export interface MindooDBAppAttachmentApi {
   remove(docId: string, attachmentName: string): Promise<{ ok: true }>;
   openReadStream(docId: string, attachmentName: string): Promise<MindooDBAppReadableAttachmentStream>;
   openWriteStream(docId: string, attachmentName: string, contentType?: string): Promise<MindooDBAppWritableAttachmentStream>;
+  openPreview(
+    docId: string,
+    attachmentName: string,
+    options?: MindooDBAppAttachmentPreviewOptions,
+  ): Promise<{ ok: true }>;
 }
 
 /** Database handle returned from `session.openDatabase()`. */

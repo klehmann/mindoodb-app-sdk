@@ -360,6 +360,9 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
     async openWriteStream(_docId: string, _attachmentName: string, _contentType?: string) {
       return createDefaultWritableAttachmentStream();
     },
+    async openPreview(_docId: string, _attachmentName: string, _options?: { timestamp?: number }) {
+      return { ok: true as const };
+    },
   };
 
   const methods: MockDatabaseMethods = definition.methods ?? {};
@@ -840,6 +843,12 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         writeStreams.set(streamId, stream);
         return { streamId };
       }
+      case "attachments.openPreview":
+        return await state.getDatabase(String(params.databaseId)).attachments.openPreview(
+          String(params.docId),
+          String(params.attachmentName),
+          typeof params.timestamp === "number" ? { timestamp: params.timestamp } : undefined,
+        );
       case "views.getDefinition":
         return await (await resolveViewHandle(String(params.viewId))).getDefinition();
       case "views.refresh":
