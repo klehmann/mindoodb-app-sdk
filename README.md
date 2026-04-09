@@ -1,29 +1,50 @@
 # mindoodb-app-sdk
 
-`mindoodb-app-sdk` is the browser-side SDK for building apps that run inside MindooDB Haven and talk to the Haven host bridge.
+Build apps that run inside **MindooDB Haven** -- the browser-based workspace for end-to-end encrypted, offline-first data.
 
-Use it when your app is launched by Haven in an iframe or in a separate window and needs:
+`mindoodb-app-sdk` is the TypeScript SDK that connects your web application to Haven through a secure message bridge. Your app runs in a sandboxed iframe (or a separate browser window) and gains access to databases, documents, attachments, virtual views, and live host events -- all without ever touching encryption keys or raw sync state.
 
-- launch metadata such as user, runtime, theme, and current iframe viewport
-- access to the databases Haven mapped into the app session
-- document, history, attachment, and view operations through a stable bridge API
-- host-driven UI events such as theme and viewport changes
+## What is a MindooDB App?
 
-## What the Haven host bridge provides
+[MindooDB](https://mindoodb.com) is an **end-to-end encrypted, offline-first sync database**. Data is encrypted on the client before it ever leaves the device. Under the hood it uses [Automerge](https://automerge.org/) CRDTs so multiple users can edit concurrently and conflicts resolve automatically.
 
-The Haven host bridge is a `postMessage` + `MessageChannel` / `MessagePort` connection between your app and Haven.
+**Haven** is the browser-based workspace that sits on top of MindooDB. Users organize databases, applications, notes, and media on a visual grid -- think of it as a customizable home screen for encrypted data that works offline and syncs in the background.
 
-Once connected, Haven provides:
+A **MindooDB App** is any web application that uses this SDK to communicate with Haven. When Haven launches your app, it opens it inside a sandboxed iframe (or a new browser tab) and establishes a `postMessage` + `MessagePort` bridge. Through this bridge your app can:
 
-- a `MindooDBAppSession` for the current launch
-- a `launchContext` snapshot with app id, user, runtime, theme, launch parameters, and current viewport
-- database handles that are already permission-scoped and mapped by Haven
-- live host events:
-  - `onThemeChange()` when Haven switches between light and dark mode or theme presets
-  - `onViewportChange()` when the iframe size changes inside Haven
-- CRUD, history, attachments, and app-defined virtual views over the same bridge
+- read launch metadata (user, theme, viewport, mapped databases, configured views)
+- perform CRUD operations on JSON documents with full change history
+- upload, download, and preview file attachments
+- query virtual views with categorization, sorting, and aggregation
+- react to live theme and viewport events from Haven
 
-Your app does not open arbitrary MindooDB databases directly. Haven decides which logical databases are visible and what permissions each one has.
+**Security model:** Every app runs on a **separate origin** inside a sandboxed iframe. It cannot access Haven's storage, cookies, or other apps. Haven decides exactly which databases and permissions each app receives -- your app only sees data that was explicitly shared with it.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Haven (browser tab)                                    │
+│                                                         │
+│  ┌──────────────┐   ┌─────────────┐   ┌─────────────┐  │
+│  │  Haven UI    │──▶│ Bridge Host │──▶│  MindooDB    │  │
+│  │  (theme,     │   │  (RPC +     │   │  (encrypted  │  │
+│  │   viewport)  │   │   streams)  │   │   databases) │  │
+│  └──────────────┘   └──────┬──────┘   └─────────────┘  │
+│                            │                            │
+│              postMessage + MessagePort                  │
+│                            │                            │
+│  ┌─────────────────────────┼─────────────────────────┐  │
+│  │  Your App (sandboxed iframe / window)             │  │
+│  │                         │                         │  │
+│  │              ┌──────────▼──────────┐              │  │
+│  │              │  mindoodb-app-sdk   │              │  │
+│  │              └─────────────────────┘              │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+The bridge carries RPC calls (documents, views, database info), binary attachment streams, and push events (theme changes, viewport resizes) over a single `MessagePort`.
 
 ## Install
 
@@ -31,209 +52,291 @@ Your app does not open arbitrary MindooDB databases directly. Haven decides whic
 npm install mindoodb-app-sdk
 ```
 
-For local development against an unpublished workspace copy, prefer `npm link`:
+## Get started in 5 minutes
+
+The fastest way to start building is to clone the **example app**, run it locally, and connect it to Haven:
 
 ```bash
-# In the SDK package
-npm link
-
-# In your app project
-npm link mindoodb-app-sdk
+git clone https://github.com/niclas-niclas/mindoodb-app-example.git
+cd mindoodb-app-example
+npm install
+npm run dev:local
 ```
 
-When you want to switch back to the published npm version, run `npm unlink mindoodb-app-sdk` in the app project and then `npm install`.
+This spins up a local Vite dev server on `http://localhost:4200` with hot module reload.
 
-## Getting started
+Then, in Haven:
 
-### 1. Register an app in Haven
+1. Go to **Application settings** and register a new app pointing to `http://localhost:4200`.
+2. Map one or more databases (and optionally views) to the app.
+3. Launch the app -- it connects via the SDK bridge and displays live data.
 
-Create an app registration in Haven that points to either:
+From here, **fork or duplicate** the example project to start building your own app while exploring the platform in a running Haven client.
 
-- an external dev server or deployment URL, such as `http://localhost:4173`
-- a hosted app bundle imported into Haven
+The example app is also deployed at **https://mindoodb-app-example.mindoo.de** so you can register it in Haven without running anything locally.
 
-Pick one runtime:
+> See the [mindoodb-app-example README](https://github.com/niclas-niclas/mindoodb-app-example) for the full project walkthrough.
 
-- `iframe`: the app is embedded in Haven
-- `window`: the app opens in its own tab or popup
+## Quick start (from scratch)
 
-### 2. Let Haven launch the app
-
-When Haven launches an app, it injects bridge launch parameters into the app URL:
-
-- `mindoodbAppLaunchId`
-- `mindoodbAppId`
-- `mindoodbAppRuntime`
-
-`createMindooDBAppBridge().connect()` reads `mindoodbAppLaunchId` from the current browser URL automatically.
-
-### 3. Connect to the bridge
+If you prefer starting from an empty project:
 
 ```ts
 import { createMindooDBAppBridge } from "mindoodb-app-sdk";
 
-const bridge = createMindooDBAppBridge();
-const session = await bridge.connect();
-const launchContext = await session.getLaunchContext();
-```
-
-If you need to override the launch id or target origin manually:
-
-```ts
-const session = await createMindooDBAppBridge().connect({
-  launchId: "custom-launch-id",
-  targetOrigin: "https://haven.example.com",
-});
-```
-
-### 4. Read the launch context
-
-The launch context is your initial snapshot of the Haven host state:
-
-```ts
-const launchContext = await session.getLaunchContext();
-
-console.log(launchContext.runtime);      // "iframe" | "window"
-console.log(launchContext.theme.mode);   // "light" | "dark"
-console.log(launchContext.viewport);     // { width, height } | null
-console.log(launchContext.user.username);
-console.log(launchContext.launchParameters);
-console.log(launchContext.databases);
-console.log(launchContext.views);
-```
-
-`launchContext.viewport` is especially useful for responsive layouts inside embedded iframes. It is the initial viewport snapshot; later changes arrive through `onViewportChange()`.
-
-### 5. Subscribe to host-driven events
-
-```ts
-const stopThemeSync = session.onThemeChange((theme) => {
-  console.log("Theme changed:", theme.mode, theme.preset);
-});
-
-const stopViewportSync = session.onViewportChange((viewport) => {
-  console.log("Viewport changed:", viewport.width, viewport.height);
-});
-
-// Later, during teardown:
-stopThemeSync();
-stopViewportSync();
-```
-
-The intended pattern is:
-
-- use `getLaunchContext()` for the initial host snapshot
-- use `onThemeChange()` and `onViewportChange()` for live updates
-
-### 6. Discover the databases Haven exposed
-
-```ts
-const databases = launchContext.databases;
-
-for (const database of databases) {
-  console.log(database.id, database.title, database.capabilities);
-}
-```
-
-Prefer `launchContext.databases` for the initial snapshot so your app discovers databases and views from the same source. `session.listDatabases()` is still available when you want to refresh database metadata later.
-
-### 7. Open a database and work with documents
-
-```ts
-const databases = launchContext.databases;
-const db = await session.openDatabase(databases[0]!.id);
-
-const list = await db.documents.list({ limit: 25 });
-const firstDoc = list.items[0] ? await db.documents.get(list.items[0].id) : null;
-
-await db.documents.create({
-  data: {
-    employee: "Jane Doe",
-    workDate: "2026-04-04",
-    hours: 8,
-  },
-  decryptionKeyId: "payroll",
-});
-```
-
-Omit `decryptionKeyId` to keep using the tenant's `"default"` document key.
-
-Document operations:
-
-- `documents.list()`
-- `documents.get()`
-- `documents.create()`
-- `documents.update()`
-- `documents.delete()`
-- `documents.listHistory()`
-- `documents.getAtTimestamp()`
-
-When creating a document, apps can optionally pass `decryptionKeyId` to use a named document key instead of `"default"`.
-
-Attachment operations:
-
-- `attachments.list(docId)`
-- `attachments.remove(docId, attachmentName)`
-- `attachments.openReadStream(docId, attachmentName)`
-- `attachments.openWriteStream(docId, attachmentName, contentType?)`
-
-## Quick start example
-
-```ts
-import { createMindooDBAppBridge, createViewLanguage } from "mindoodb-app-sdk";
-
+// 1. Create the bridge and connect to Haven
 const bridge = createMindooDBAppBridge();
 const session = await bridge.connect();
 
-const launchContext = await session.getLaunchContext();
-console.log("Connected runtime:", launchContext.runtime);
-console.log("Initial viewport:", launchContext.viewport);
+// 2. Read the launch context
+const ctx = await session.getLaunchContext();
+console.log("Runtime:", ctx.runtime);   // "iframe" | "window"
+console.log("Theme:", ctx.theme.mode);  // "light" | "dark"
+console.log("Databases:", ctx.databases.map((db) => db.title));
 
+// 3. Subscribe to live host events
 session.onThemeChange((theme) => {
   document.documentElement.dataset.theme = theme.mode;
 });
 
 session.onViewportChange((viewport) => {
-  console.log("Resize:", viewport.width, viewport.height);
+  console.log("Iframe resized:", viewport.width, viewport.height);
 });
 
-const databases = launchContext.databases;
-const db = await session.openDatabase(databases[0]!.id);
+// 4. Open a database and list documents
+const db = await session.openDatabase(ctx.databases[0]!.id);
+const result = await db.documents.list({ limit: 25 });
+console.log("Documents:", result.items);
+```
 
-const list = await db.documents.list({ limit: 25 });
-const firstDoc = list.items[0] ? await db.documents.get(list.items[0].id) : null;
+When Haven launches your app it injects a `mindoodbAppLaunchId` query parameter into the URL. `connect()` reads it automatically -- no manual wiring needed.
 
-const v = createViewLanguage<{ employee: string; hours: number; rate?: number }>();
+## Core concepts
+
+### Launch context
+
+After connecting, call `session.getLaunchContext()` to receive the initial host snapshot:
+
+```ts
+interface MindooDBAppLaunchContext {
+  appId: string;
+  appInstanceId: string;
+  appVersion?: string;
+  launchId: string;
+  runtime: "iframe" | "window";
+  theme: { mode: "light" | "dark"; preset: string };
+  viewport: { width: number; height: number } | null;
+  tenantId?: string;
+  preferredDatabaseId?: string;
+  user: { id: string; username: string };
+  launchParameters: Record<string, string>;
+  databases: MindooDBAppDatabaseInfo[];
+  views: MindooDBAppResolvedViewDefinition[];
+}
+```
+
+`viewport` is the iframe size at launch time. It is `null` when the app runs in `window` mode (separate browser tab). Later changes arrive through `onViewportChange()`.
+
+### Databases and capabilities
+
+Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
+
+| Capability | Allows |
+|---|---|
+| `read` | List and read documents |
+| `create` | Create new documents |
+| `update` | Update existing documents |
+| `delete` | Delete documents |
+| `history` | Access document revision history and historical snapshots |
+| `attachments` | List, upload, download, remove, and preview file attachments |
+| `views` | Create app-defined virtual views for this database |
+
+```ts
+const db = ctx.databases[0]!;
+
+if (db.capabilities.includes("history")) {
+  // show history UI
+}
+if (!db.capabilities.includes("delete")) {
+  // hide delete button
+}
+```
+
+### Theme and viewport events
+
+Haven pushes two types of live events to your app:
+
+**Theme changes** occur when the user switches between light/dark mode or changes the UI theme preset:
+
+```ts
+// Initial snapshot from launch context
+const { mode, preset } = ctx.theme; // e.g. { mode: "dark", preset: "aura" }
+
+// Live updates
+const stopTheme = session.onThemeChange((theme) => {
+  document.documentElement.dataset.theme = theme.mode;
+  document.documentElement.dataset.themePreset = theme.preset;
+});
+```
+
+**Viewport changes** fire when the iframe is resized inside Haven (e.g. the user resizes a chicklet on the workspace grid):
+
+```ts
+// Initial snapshot (null in window mode)
+const viewport = ctx.viewport; // { width: 800, height: 600 }
+
+// Live updates
+const stopViewport = session.onViewportChange((viewport) => {
+  console.log(viewport.width, viewport.height);
+});
+```
+
+Both subscription functions return an unsubscribe callback. Call it during teardown.
+
+### Documents
+
+Open a database, then use the `documents` API for full CRUD plus history:
+
+```ts
+const db = await session.openDatabase(databaseId);
+
+// List
+const result = await db.documents.list({ limit: 50, fields: ["title"] });
+
+// Read
+const doc = await db.documents.get(docId);
+
+// Create (optionally with a named document key)
+const created = await db.documents.create({
+  data: { title: "Meeting notes", content: "..." },
+  decryptionKeyId: "team-key",  // omit to use "default"
+});
+
+// Update
+const updated = await db.documents.update(docId, {
+  data: { title: "Updated title" },
+});
+
+// Delete
+await db.documents.delete(docId);
+```
+
+### Document history
+
+When the `history` capability is granted, you can walk the full revision timeline of any document:
+
+```ts
+// List all revisions
+const history = await db.documents.listHistory(docId);
+// Each entry: { timestamp, publicKey, identityLabel?, isDeleted, isCurrent, summary? }
+
+// Load the document state at a specific point in time
+const snapshot = await db.documents.getAtTimestamp(docId, history[0]!.timestamp);
+// { id, timestamp, state: "exists" | "deleted" | "missing", data }
+```
+
+### Attachments
+
+When the `attachments` capability is granted, each document can carry file attachments. The SDK uses **chunked binary streams** over the bridge for uploads and downloads:
+
+```ts
+// List attachments for a document
+const files = await db.attachments.list(docId);
+// Each: { attachmentId, fileName, mimeType, size }
+
+// Download (pull-based read stream)
+const reader = await db.attachments.openReadStream(docId, "report.pdf");
+const chunks: Uint8Array[] = [];
+let chunk = await reader.read();
+while (chunk !== null) {
+  chunks.push(chunk);
+  chunk = await reader.read();
+}
+await reader.close();
+
+// Upload (push-based write stream)
+const writer = await db.attachments.openWriteStream(docId, "photo.jpg", "image/jpeg");
+await writer.write(fileBytes);
+await writer.close();
+
+// Remove
+await db.attachments.remove(docId, "old-file.txt");
+```
+
+### Attachment previews
+
+Haven includes a **built-in file viewer** that your app can open for common attachment formats. This is one of the most powerful SDK features -- it works with both online and offline data, and media formats support streaming playback with skip/seek.
+
+**Supported preview formats:**
+
+| Mode | Formats |
+|---|---|
+| `image` | All common image formats (JPEG, PNG, GIF, WebP, SVG, ...) |
+| `pdf` | PDF documents |
+| `text` | Plain text, Markdown, CSV, JSON, XML, YAML, SVG, log files |
+| `docx` | Microsoft Word (.docx) |
+| `pptx` | Microsoft PowerPoint (.pptx) |
+| `spreadsheet` | Microsoft Excel (.xls, .xlsx, .xlsm, .xlsb) |
+| `video` | Video files with embedded player (streaming + seek support) |
+| `audio` | Audio files with embedded player (streaming + seek support) |
+
+**Open the Haven preview dialog:**
+
+```ts
+await db.attachments.openPreview(docId, "presentation.pptx");
+```
+
+You can also preview attachments from a **historical document snapshot**:
+
+```ts
+await db.attachments.openPreview(docId, "report.pdf", {
+  timestamp: historyEntry.timestamp,
+});
+```
+
+**Check preview support locally** before showing a preview button:
+
+```ts
+import { canPreviewAttachment } from "mindoodb-app-sdk";
+
+const mode = canPreviewAttachment("slides.pptx", "application/octet-stream");
+// Returns "pptx" -- Haven can preview this file
+
+const unsupported = canPreviewAttachment("data.bin", "application/octet-stream");
+// Returns null -- no built-in preview available
+```
+
+### Virtual Views
+
+Views let you query documents with categorization, sorting, filtering, and aggregation -- similar to a spreadsheet pivot table. There are two ways to work with views:
+
+**App-defined views** -- create a view definition programmatically:
+
+```ts
+import { createViewLanguage } from "mindoodb-app-sdk";
+
+const v = createViewLanguage<{ employee: string; hours: number }>();
+
 const view = await session.createView({
-  databaseId: databases[0]!.id,
+  databaseId: "main",
   definition: {
-  title: "Hours by employee",
-  defaultExpand: "collapsed",
-  filter: {
-    mode: "expression",
-    expression: v.gt(v.toNumber(v.field("hours")), v.number(0)),
-  },
-  columns: [
-    {
-      name: "employee",
-      title: "Employee",
-      role: "category",
-      expression: v.field("employee"),
-      sorting: "ascending",
-    },
-    {
-      name: "amount",
-      title: "Amount",
-      role: "display",
-      expression: v.let(
-        {
-          hours: v.toNumber(v.field("hours")),
-          rate: v.coalesce(v.toNumber(v.field("rate")), v.number(1)),
-        },
-        ({ hours, rate }) => v.mul(v.coalesce(hours, v.number(0)), v.coalesce(rate, v.number(0))),
-      ),
-    },
-  ],
+    title: "Hours by employee",
+    defaultExpand: "collapsed",
+    columns: [
+      {
+        name: "employee",
+        title: "Employee",
+        role: "category",
+        expression: v.field("employee"),
+        sorting: "ascending",
+      },
+      {
+        name: "hours",
+        title: "Hours",
+        role: "display",
+        expression: v.toNumber(v.field("hours")),
+      },
+    ],
   },
 });
 
@@ -242,99 +345,35 @@ console.log(page.rows);
 await view.dispose();
 ```
 
-## Views and expression language
-
-Views are app-defined and session-scoped. Create a definition with `session.createView()`, open Haven-configured mappings with `session.openView()`, page through rows, inspect categories, manage expansion state, then dispose the handle when done.
+**Haven-configured views** -- open views that the Haven administrator attached to the app registration:
 
 ```ts
-import { createViewLanguage } from "mindoodb-app-sdk";
+const viewDefs = ctx.views; // from launch context
 
-const v = createViewLanguage<{
-  employee: string;
-  workDate: string;
-  hours: number;
-  rate?: number;
-  note?: string;
-}>();
+const view = await session.openView(viewDefs[0]!.id);
+const page = await view.page({ pageSize: 50 });
 
-const view = await session.createView({
-  databaseId: "main",
-  definition: {
-  title: "By employee",
-  defaultExpand: "collapsed",
-  filter: {
-    mode: "expression",
-    expression: v.gt(v.toNumber(v.field("hours")), v.number(0)),
-  },
-  columns: [
-    {
-      name: "employee",
-      title: "Employee",
-      role: "category",
-      expression: v.field("employee"),
-      sorting: "ascending",
-    },
-    {
-      name: "amount",
-      title: "Amount",
-      role: "display",
-      expression: v.let(
-        {
-          hours: v.toNumber(v.field("hours")),
-          rate: v.coalesce(v.toNumber(v.field("rate")), v.number(1)),
-        },
-        ({ hours, rate }) => v.mul(v.coalesce(hours, v.number(0)), v.coalesce(rate, v.number(0))),
-      ),
-      sorting: "descending",
-    },
-  ],
-  },
-});
-
-const page = await view.page({ pageSize: 100 });
-const firstCategory = page.rows.find((row) => row.type === "category");
-
-if (firstCategory) {
-  await view.expand(firstCategory.key);
-  const categoryRows = await view.pageCategory(firstCategory.key, { pageSize: 25 });
-  const categoryDocumentIds = await view.listCategoryDocumentIds(firstCategory.key);
-  const sameCategory = await view.getCategory({ path: firstCategory.categoryPath });
-}
+// Expand/collapse categories
+await view.expandAll();
+await view.collapse(someCategoryKey);
 
 await view.dispose();
 ```
 
-Available view-handle operations:
+The expression language is fully declarative -- apps define filter and column logic through a typed builder API that compiles to JSON-safe expression objects. No app-provided JavaScript runs inside the bridge host.
 
-- `view.getDefinition()`
-- `view.refresh()`
-- `view.page({ pageSize, position, expansion, rootRowKey })`
-- `view.getExpansionState()`
-- `view.setExpansionState(state)`
-- `view.expand(rowKey)`
-- `view.collapse(rowKey)`
-- `view.expandAll()`
-- `view.collapseAll()`
-- `view.getRow(rowKey)`
-- `view.getCategory({ path })`
-- `view.pageCategory(categoryKey, { pageSize, position })`
-- `view.listCategoryDocumentIds(categoryKey)`
-- `view.dispose()`
+Available expression helpers:
 
-The expression language is fully declarative. Apps define filter and column logic through a typed builder API that compiles to JSON-safe expression objects. No app-provided JavaScript runs inside the bridge host.
+- **Field access:** `field()`, `value()`, `origin()`
+- **Literals and conversion:** `literal()`, `string()`, `number()`, `boolean()`, `toNumber()`, `toString()`, `toBoolean()`
+- **Math and comparisons:** `add()`, `sub()`, `mul()`, `div()`, `mod()`, `eq()`, `neq()`, `gt()`, `gte()`, `lt()`, `lte()`
+- **Boolean logic:** `and()`, `or()`, `not()`
+- **String helpers:** `concat()`, `lower()`, `upper()`, `trim()`, `contains()`, `startsWith()`, `endsWith()`
+- **Null/existence:** `coalesce()`, `exists()`, `notExists()`
+- **Date/path:** `datePart()`, `pathJoin()`
+- **Control flow:** `ifElse()`, `let()`
 
-Helpers currently include:
-
-- field/value access: `field()`, `value()`, `origin()`
-- literals and conversion: `literal()`, `string()`, `number()`, `boolean()`, `toNumber()`, `toString()`, `toBoolean()`
-- math and comparisons: `add()`, `sub()`, `mul()`, `div()`, `mod()`, `eq()`, `neq()`, `gt()`, `gte()`, `lt()`, `lte()`
-- boolean logic: `and()`, `or()`, `not()`
-- string helpers: `concat()`, `lower()`, `upper()`, `trim()`, `contains()`, `startsWith()`, `endsWith()`
-- null/existence helpers: `coalesce()`, `exists()`, `notExists()`
-- date/path helpers: `datePart()`, `pathJoin()`
-- control flow: `ifElse()`, `let()`
-
-The dedicated language guide lives in the `mindoodb-view-language` package. The SDK re-exports `createViewLanguage()` for convenience.
+The full language guide lives in the `mindoodb-view-language` package. The SDK re-exports `createViewLanguage()` for convenience.
 
 ## Testing without Haven
 
@@ -342,51 +381,138 @@ You do **not** need a full Haven environment to test apps that use `mindoodb-app
 
 The SDK ships a dedicated `mindoodb-app-sdk/testing` entrypoint with two levels of test helpers:
 
-- Level 1: simple app-test helpers that return a fake `MindooDBAppSession` and bridge object for unit, composable, store, and component tests
-- Level 2: a fake bridge host harness for tests that should exercise the real `createMindooDBAppBridge()` handshake over `postMessage` and `MessageChannel`
+- **Level 1 -- app tests:** Returns a fake `MindooDBAppSession` and bridge for unit, composable, store, and component tests. No `postMessage` or `MessageChannel` involved.
+- **Level 2 -- bridge protocol tests:** A fake host harness that exercises the real `createMindooDBAppBridge()` handshake over `postMessage` and `MessageChannel`. Useful for integration-style tests.
 
-Use Level 1 when you only need app behavior. Use Level 2 when you want to validate your bridge integration itself.
+Use Level 1 when you are testing app behavior. Use Level 2 when you want to validate the bridge transport itself.
 
 See [`TESTING.md`](./TESTING.md) for setup instructions and Vitest examples.
 
+## Deployment
+
+MindooDB Apps are standard web applications -- deploy them anywhere you can serve static files.
+
+**Cloudflare Pages / Workers** is one of the easiest options. The [example app](https://github.com/niclas-niclas/mindoodb-app-example) is deployed this way at https://mindoodb-app-example.mindoo.de using a simple `wrangler.jsonc` configuration:
+
+```bash
+npm run build
+wrangler deploy
+```
+
+Other static hosting options work just as well: Netlify, Vercel, any web server serving your `dist/` folder.
+
+**Haven-hosted bundles** are an alternative: import your built app directly into Haven, where it is served by a service worker on an opaque origin. Haven-hosted apps load without a network connection and receive a stricter sandbox.
+
 ## Local development workflow
 
-The recommended local setup is:
+For interactive development with the full Haven host bridge:
 
 1. Run Haven locally.
-2. Run your app on its own dev server, for example Vite on `http://localhost:4173`.
-3. Register that URL in Haven as an external app.
-4. Launch the app from Haven so it receives a real `mindoodbAppLaunchId`.
+2. Run your app on its own dev server (e.g. `npm run dev` with Vite).
+3. Register the dev server URL in Haven's Application settings.
+4. Map databases and optionally views to the app.
+5. Launch from Haven -- you get hot reload, real bridge communication, and live theme/viewport events.
 
-This gives you:
+This is separate from the automated testing workflow above. Running Haven is useful for interactive development but not required for Level 1 or Level 2 tests.
 
-- normal browser dev-server behavior
-- hot module reload
-- the full Haven host bridge
-- realistic iframe sizing and theme changes during development
+## API reference
 
-The sample `mindoodb-timerecords` app in this workspace is a good reference for this setup.
+### MindooDBAppBridge
 
-This local development workflow is separate from the automated testing workflow above. Running Haven locally is useful for interactive development, but it is not required for Level 1 or Level 2 automated tests.
+| Method | Returns |
+|---|---|
+| `connect(options?)` | `Promise<MindooDBAppSession>` |
+
+Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
+
+### MindooDBAppSession
+
+| Method | Returns |
+|---|---|
+| `getLaunchContext()` | `Promise<MindooDBAppLaunchContext>` |
+| `listDatabases()` | `Promise<MindooDBAppDatabaseInfo[]>` |
+| `openDatabase(databaseId)` | `Promise<MindooDBAppDatabase>` |
+| `createView(input)` | `Promise<MindooDBAppViewHandle>` |
+| `openView(viewId)` | `Promise<MindooDBAppViewHandle>` |
+| `onThemeChange(listener)` | `() => void` (unsubscribe) |
+| `onViewportChange(listener)` | `() => void` (unsubscribe) |
+| `disconnect()` | `Promise<void>` |
+
+### MindooDBAppDatabase
+
+| Property / Method | Returns |
+|---|---|
+| `info()` | `Promise<MindooDBAppDatabaseInfo>` |
+| `documents` | `MindooDBAppDocumentApi` |
+| `attachments` | `MindooDBAppAttachmentApi` |
+
+### MindooDBAppDocumentApi
+
+| Method | Returns |
+|---|---|
+| `list(query?)` | `Promise<MindooDBAppDocumentListResult>` |
+| `get(docId)` | `Promise<MindooDBAppDocument \| null>` |
+| `create(input)` | `Promise<MindooDBAppDocument>` |
+| `update(docId, patch)` | `Promise<MindooDBAppDocument>` |
+| `delete(docId)` | `Promise<{ ok: true }>` |
+| `listHistory(docId)` | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
+| `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>` |
+
+### MindooDBAppAttachmentApi
+
+| Method | Returns |
+|---|---|
+| `list(docId)` | `Promise<MindooDBAppAttachmentInfo[]>` |
+| `remove(docId, attachmentName)` | `Promise<{ ok: true }>` |
+| `openReadStream(docId, attachmentName)` | `Promise<MindooDBAppReadableAttachmentStream>` |
+| `openWriteStream(docId, attachmentName, contentType?)` | `Promise<MindooDBAppWritableAttachmentStream>` |
+| `openPreview(docId, attachmentName, options?)` | `Promise<{ ok: true }>` |
+
+### MindooDBAppViewHandle
+
+| Method | Returns |
+|---|---|
+| `getDefinition()` | `Promise<MindooDBAppViewDefinition>` |
+| `refresh()` | `Promise<void>` |
+| `page(input?)` | `Promise<MindooDBAppViewPageResult>` |
+| `getExpansionState()` | `Promise<MindooDBAppViewExpansionState>` |
+| `setExpansionState(state)` | `Promise<MindooDBAppViewExpansionState>` |
+| `expand(rowKey)` | `Promise<MindooDBAppViewExpansionState>` |
+| `collapse(rowKey)` | `Promise<MindooDBAppViewExpansionState>` |
+| `expandAll()` | `Promise<MindooDBAppViewExpansionState>` |
+| `collapseAll()` | `Promise<MindooDBAppViewExpansionState>` |
+| `getRow(rowKey)` | `Promise<MindooDBAppViewRow \| null>` |
+| `getCategory(input)` | `Promise<MindooDBAppViewRow \| null>` |
+| `pageCategory(categoryKey, input?)` | `Promise<MindooDBAppViewPageResult>` |
+| `listCategoryDocumentIds(categoryKey)` | `Promise<string[]>` |
+| `dispose()` | `Promise<void>` |
+
+### Exported functions
+
+| Function | Description |
+|---|---|
+| `createMindooDBAppBridge()` | Create the bridge object used to connect to Haven |
+| `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`) |
+| `createViewLanguage<T>()` | Create a typed expression builder for view definitions |
 
 ## Permissions and mappings
 
-Apps never choose arbitrary database targets themselves. Haven decides:
+Apps never choose arbitrary database targets. Haven decides:
 
-- which logical database handles are visible to the app
-- whether each handle can read, create, update, delete, inspect history, access attachments, or create views
-- how each logical handle maps to a concrete tenant/database target
+- which databases are visible to the app
+- what capabilities each database has (`read`, `create`, `update`, `delete`, `history`, `attachments`, `views`)
+- how each logical database maps to a concrete tenant and database target
 
-Your app should always react to what Haven grants instead of assuming a fixed environment.
+Your app should always adapt to what Haven grants instead of assuming a fixed environment.
 
 ## When not to use this SDK
 
-`mindoodb-app-sdk` is for MindooDB apps that intentionally integrate with the Haven host bridge.
+`mindoodb-app-sdk` is for web apps that integrate with the Haven host bridge.
 
-If you are embedding generic third-party web content that does not speak the MindooDB bridge protocol, use a general iframe integration such as `iframe-resizer` instead of this SDK.
+If you are embedding generic third-party web content that does not speak the MindooDB bridge protocol, use a general iframe integration instead of this SDK.
 
 ## Current limitations
 
-- the bridge currently expects a browser environment with `window`, `postMessage`, and `MessagePort`
-- viewport updates are host-driven and only available when the app is actually launched by Haven
-- your app is still responsible for its own UI layout and responsive behavior after receiving host theme and viewport updates
+- The bridge expects a browser environment with `window`, `postMessage`, and `MessagePort`.
+- Viewport updates are host-driven and only available when the app is launched by Haven.
+- Your app is responsible for its own UI layout and responsive behavior after receiving host theme and viewport updates.
