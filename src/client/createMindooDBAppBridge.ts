@@ -481,6 +481,12 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         });
         return new MindooDBAppWritableAttachmentStreamImpl(this.rpc, result.streamId);
       },
+      preparePreviewSession: async (docId, attachmentName, options) => await this.rpc.call("attachments.preparePreviewSession", {
+        databaseId: this.databaseId,
+        docId,
+        attachmentName,
+        timestamp: options?.timestamp,
+      }),
       openPreview: async (docId, attachmentName, options) => await this.rpc.call("attachments.openPreview", {
         databaseId: this.databaseId,
         docId,

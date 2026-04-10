@@ -235,6 +235,12 @@ export interface MindooDBAppAttachmentPreviewOptions {
   timestamp?: number;
 }
 
+/** Resolved Haven preview session prepared for opening in a separate tab or window. */
+export interface MindooDBAppAttachmentPreviewSession {
+  sessionId: string;
+  previewUrl: string;
+}
+
 /** Database entry visible to the app during launch and database listing. */
 export interface MindooDBAppDatabaseInfo {
   id: string;
@@ -515,6 +521,11 @@ export interface MindooDBAppAttachmentApi {
   remove(docId: string, attachmentName: string): Promise<{ ok: true }>;
   openReadStream(docId: string, attachmentName: string): Promise<MindooDBAppReadableAttachmentStream>;
   openWriteStream(docId: string, attachmentName: string, contentType?: string): Promise<MindooDBAppWritableAttachmentStream>;
+  preparePreviewSession(
+    docId: string,
+    attachmentName: string,
+    options?: MindooDBAppAttachmentPreviewOptions,
+  ): Promise<MindooDBAppAttachmentPreviewSession>;
   openPreview(
     docId: string,
     attachmentName: string,
