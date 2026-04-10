@@ -1,6 +1,6 @@
 {
   "name": "mindoodb-app-sdk",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "MindooDB app SDK for building apps that connect to the Haven host bridge",
   "license": "ISC",
   "author": "Mindoo GmbH",
@@ -40,7 +40,7 @@
     "prepublishOnly": "npm run build && npm run test"
   },
   "dependencies": {
-    "mindoodb-view-language": "file:../mindoodb-view-language"
+    "mindoodb-view-language": "0.0.7"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
