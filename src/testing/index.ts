@@ -8,7 +8,7 @@ import type {
   MindooDBAppBridgeRpcRequest,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
-  MindooDBAppCreateViewInput,
+  MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDocument,
@@ -20,15 +20,17 @@ import type {
   MindooDBAppHostTheme,
   MindooDBAppLaunchContext,
   MindooDBAppReadableAttachmentStream,
+  MindooDBAppScopedDocId,
   MindooDBAppSession,
-  MindooDBAppViewCategoryChildrenPageRequest,
   MindooDBAppViewDefinition,
-  MindooDBAppViewExpansionState,
-  MindooDBAppViewHandle,
-  MindooDBAppViewLookupByPath,
-  MindooDBAppViewPageRequest,
-  MindooDBAppViewPageResult,
-  MindooDBAppViewRow,
+  MindooDBAppViewEntry,
+  MindooDBAppViewNavigator,
+  MindooDBAppViewNavigatorExpansionState,
+  MindooDBAppViewNavigatorOpenOptions,
+  MindooDBAppViewNavigatorPageOptions,
+  MindooDBAppViewNavigatorPageResult,
+  MindooDBAppViewNavigatorRangeQuery,
+  MindooDBAppViewNavigatorSelectionState,
   MindooDBAppViewport,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
@@ -37,8 +39,8 @@ const PROTOCOL = "mindoodb-app-bridge";
 
 type MaybePromise<T> = T | Promise<T>;
 type MockViewApi = {
-  create(definition: MindooDBAppViewDefinition): MaybePromise<MindooDBAppViewHandle>;
-  open(viewId: string): MaybePromise<MindooDBAppViewHandle>;
+  create(input: MindooDBAppCreateViewNavigatorInput): MaybePromise<MindooDBAppViewNavigator>;
+  open(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): MaybePromise<MindooDBAppViewNavigator>;
 };
 
 function createBridgeErrorPayload(error: unknown, fallbackCode = "bridge-error"): MindooDBAppBridgeErrorPayload {
@@ -254,17 +256,22 @@ function decodeMockListCursor(cursor?: string | null) {
   return Number.isFinite(offset) && offset >= 0 ? offset : 0;
 }
 
-function createDefaultViewHandle(): MindooDBAppViewHandle {
+function createDefaultViewNavigator(): MindooDBAppViewNavigator {
   const definition: MindooDBAppViewDefinition = {
     title: "Mock View",
     columns: [],
   };
-  const expansion: MindooDBAppViewExpansionState = {
-    mode: "collapsed",
-    ids: [],
+  let expansion: MindooDBAppViewNavigatorExpansionState = {
+    expandAllByDefault: false,
+    expandLevel: 0,
+    entryKeys: [],
   };
-  const emptyPage: MindooDBAppViewPageResult = {
-    rows: [],
+  let selection: MindooDBAppViewNavigatorSelectionState = {
+    selectAllByDefault: false,
+    entryKeys: [],
+  };
+  const emptyPage: MindooDBAppViewNavigatorPageResult = {
+    entries: [],
     nextPosition: null,
     hasMore: false,
   };
@@ -273,43 +280,176 @@ function createDefaultViewHandle(): MindooDBAppViewHandle {
       return definition;
     },
     async refresh() {},
-    async page(_input?: MindooDBAppViewPageRequest) {
+    async getCurrentEntry() {
+      return null;
+    },
+    async gotoFirst() {
+      return false;
+    },
+    async gotoLast() {
+      return false;
+    },
+    async gotoNext() {
+      return false;
+    },
+    async gotoPrev() {
+      return false;
+    },
+    async gotoNextSibling() {
+      return false;
+    },
+    async gotoPrevSibling() {
+      return false;
+    },
+    async gotoParent() {
+      return false;
+    },
+    async gotoFirstChild() {
+      return false;
+    },
+    async gotoLastChild() {
+      return false;
+    },
+    async gotoPos(_position: string) {
+      return false;
+    },
+    async getPos(_position: string) {
+      return null;
+    },
+    async findCategoryEntryByParts(_parts: unknown[]) {
+      return null;
+    },
+    async entriesForward(_options?: MindooDBAppViewNavigatorPageOptions) {
       return emptyPage;
+    },
+    async entriesBackward(_options?: MindooDBAppViewNavigatorPageOptions) {
+      return emptyPage;
+    },
+    async gotoNextSelected() {
+      return false;
+    },
+    async gotoPrevSelected() {
+      return false;
+    },
+    async select(origin: string, docId: string, selectParentCategories = false) {
+      const key = `${origin}:${docId}`;
+      selection = {
+        ...selection,
+        entryKeys: Array.from(new Set([...selection.entryKeys, key])),
+      };
+      if (selectParentCategories) {
+        selection = {
+          ...selection,
+          entryKeys: [...selection.entryKeys],
+        };
+      }
+    },
+    async deselect(origin: string, docId: string) {
+      const key = `${origin}:${docId}`;
+      selection = {
+        ...selection,
+        entryKeys: selection.entryKeys.filter((entry) => entry !== key),
+      };
+    },
+    async selectAllEntries() {
+      selection = {
+        selectAllByDefault: true,
+        entryKeys: [],
+      };
+    },
+    async deselectAllEntries() {
+      selection = {
+        selectAllByDefault: false,
+        entryKeys: [],
+      };
+    },
+    async isSelected(origin: string, docId: string) {
+      const key = `${origin}:${docId}`;
+      return selection.selectAllByDefault
+        ? !selection.entryKeys.includes(key)
+        : selection.entryKeys.includes(key);
+    },
+    async getSelectionState() {
+      return selection;
+    },
+    async setSelectionState(state: MindooDBAppViewNavigatorSelectionState) {
+      selection = {
+        selectAllByDefault: state.selectAllByDefault,
+        entryKeys: [...state.entryKeys],
+      };
+    },
+    async expand(origin: string, docId: string) {
+      const key = `${origin}:${docId}`;
+      expansion = {
+        ...expansion,
+        entryKeys: Array.from(new Set([...expansion.entryKeys, key])),
+      };
+    },
+    async collapse(origin: string, docId: string) {
+      const key = `${origin}:${docId}`;
+      expansion = {
+        ...expansion,
+        entryKeys: expansion.entryKeys.filter((entry) => entry !== key),
+      };
+    },
+    async expandAll() {
+      expansion = {
+        expandAllByDefault: true,
+        expandLevel: expansion.expandLevel,
+        entryKeys: [],
+      };
+    },
+    async collapseAll() {
+      expansion = {
+        expandAllByDefault: false,
+        expandLevel: 0,
+        entryKeys: [],
+      };
+    },
+    async expandToLevel(level: number) {
+      expansion = {
+        ...expansion,
+        expandLevel: level,
+      };
+    },
+    async isExpanded(_entryKey: string) {
+      return expansion.expandAllByDefault;
     },
     async getExpansionState() {
       return expansion;
     },
-    async setExpansionState(state: MindooDBAppViewExpansionState) {
-      return state;
-    },
-    async expand(rowKey: string) {
-      return {
-        mode: "collapsed",
-        ids: [rowKey],
+    async setExpansionState(state: MindooDBAppViewNavigatorExpansionState) {
+      expansion = {
+        expandAllByDefault: state.expandAllByDefault,
+        expandLevel: state.expandLevel,
+        entryKeys: [...state.entryKeys],
       };
     },
-    async collapse(_rowKey: string) {
-      return expansion;
+    async childEntries(_entryKey: string, _descending?: boolean) {
+      return [];
     },
-    async expandAll() {
-      return {
-        mode: "expanded",
-        ids: [],
-      };
+    async childCategories(_entryKey: string, _descending?: boolean) {
+      return [];
     },
-    async collapseAll() {
-      return expansion;
+    async childDocuments(_entryKey: string, _descending?: boolean) {
+      return [];
     },
-    async getRow(_rowKey: string) {
-      return null;
+    async childCategoriesByKey(_entryKey: string, _key: unknown, _exact?: boolean, _descending?: boolean) {
+      return [];
     },
-    async getCategory(_input: MindooDBAppViewLookupByPath) {
-      return null;
+    async childDocumentsByKey(_entryKey: string, _key: unknown, _exact?: boolean, _descending?: boolean) {
+      return [];
     },
-    async pageCategory(_categoryKey: string, _input?: MindooDBAppViewCategoryChildrenPageRequest) {
-      return emptyPage;
+    async childCategoriesBetween(_entryKey: string, _range: MindooDBAppViewNavigatorRangeQuery) {
+      return [];
     },
-    async listCategoryDocumentIds(_categoryKey: string) {
+    async childDocumentsBetween(_entryKey: string, _range: MindooDBAppViewNavigatorRangeQuery) {
+      return [];
+    },
+    async getSortedDocIds(_descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
+      return [];
+    },
+    async getSortedDocIdsScoped(_entryKey: string, _descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
       return [];
     },
     async dispose() {},
@@ -324,7 +464,7 @@ type MockDatabaseMethods = {
 
 function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): MindooDBAppDatabase {
   let createCounter = 0;
-  const defaultViewFactory = async () => createDefaultViewHandle();
+  const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
 
   const defaultDocuments: MindooDBAppDocumentApi = {
@@ -436,7 +576,7 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
   };
 
   const defaultViews: MockViewApi = {
-    async create(_definition: MindooDBAppViewDefinition) {
+    async create(_input: MindooDBAppCreateViewNavigatorInput) {
       return await defaultViewFactory();
     },
     async open(_viewId: string) {
@@ -491,8 +631,8 @@ type MockSessionState = {
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
-  createView: (input: MindooDBAppCreateViewInput) => Promise<MindooDBAppViewHandle>;
-  openView: (viewId: string) => Promise<MindooDBAppViewHandle>;
+  createViewNavigator: (input: MindooDBAppCreateViewNavigatorInput) => Promise<MindooDBAppViewNavigator>;
+  openViewNavigator: (viewId: string, options?: MindooDBAppViewNavigatorOpenOptions) => Promise<MindooDBAppViewNavigator>;
   bridge: MindooDBAppBridge;
   session: MindooDBAppSession;
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
@@ -505,7 +645,7 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewApis = new Map<string, MockViewApi>();
-  const sessionViews = new Map<string, MindooDBAppViewHandle>();
+  const sessionViews = new Map<string, MindooDBAppViewNavigator>();
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
 
   const setDatabases = (definitions: MockMindooDBAppDatabaseDefinition[]) => {
@@ -518,11 +658,11 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
     for (const definition of definitions) {
       databaseHandles.set(definition.info.id, createDatabaseHandle(definition));
       databaseViewApis.set(definition.info.id, {
-        async create(_definition: MindooDBAppViewDefinition) {
-          return await createDefaultViewHandle();
+        async create(_input: MindooDBAppCreateViewNavigatorInput) {
+          return await createDefaultViewNavigator();
         },
         async open(_viewId: string) {
-          return await createDefaultViewHandle();
+          return await createDefaultViewNavigator();
         },
         ...(definition.methods?.views ?? {}),
       });
@@ -549,17 +689,21 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       }
       return database;
     },
-    async createView(input) {
-      const api = databaseViewApis.get(input.databaseId);
-      if (!api) {
-        throw new Error(`Unknown test database for view creation: ${input.databaseId}`);
+    async createViewNavigator(input) {
+      const firstDatabaseId = input.databaseIds[0];
+      if (!firstDatabaseId) {
+        throw new Error("At least one test database is required for view creation.");
       }
-      const view = await api.create(input.definition);
+      const api = databaseViewApis.get(firstDatabaseId);
+      if (!api) {
+        throw new Error(`Unknown test database for view creation: ${firstDatabaseId}`);
+      }
+      const view = await api.create(input);
       const viewId = input.definition.id || crypto.randomUUID();
       sessionViews.set(viewId, view);
       return view;
     },
-    async openView(viewId) {
+    async openViewNavigator(viewId, options) {
       const existing = sessionViews.get(viewId);
       if (existing) {
         return existing;
@@ -572,7 +716,7 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       if (!api) {
         throw new Error(`Unknown test database for view ${viewId}: ${sourceDatabaseId}`);
       }
-      const view = await api.open(viewId);
+      const view = await api.open(viewId, options);
       sessionViews.set(viewId, view);
       return view;
     },
@@ -621,8 +765,8 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       }
       return database;
     },
-    createView: session.createView,
-    openView: session.openView,
+    createViewNavigator: session.createViewNavigator,
+    openViewNavigator: session.openViewNavigator,
     bridge,
     session,
     emitThemeChange(theme) {
@@ -722,7 +866,7 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
   const customRequestHandlers = new Map(Object.entries(options.requestHandlers ?? {}));
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
-  const viewSessions = new Map<string, MindooDBAppViewHandle>();
+  const viewSessions = new Map<string, MindooDBAppViewNavigator>();
   const readStreams = new Map<string, MindooDBAppReadableAttachmentStream>();
   const writeStreams = new Map<string, MindooDBAppWritableAttachmentStream>();
   let viewCounter = 0;
@@ -827,14 +971,14 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     installed = true;
   }
 
-  async function resolveViewHandle(viewId: string) {
+  async function resolveViewNavigator(viewId: string) {
     const existing = viewSessions.get(viewId);
     if (existing) {
       return existing;
     }
-    const handle = await state.openView(viewId);
-    viewSessions.set(viewId, handle);
-    return handle;
+    const navigator = await state.openViewNavigator(viewId);
+    viewSessions.set(viewId, navigator);
+    return navigator;
   }
 
   function postRpcSuccess(port: MessagePort, requestId: string, result: unknown) {
@@ -882,18 +1026,27 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
       case "session.openDatabase":
         state.getDatabase(String(params.databaseId));
         return { ok: true };
-      case "session.createView": {
-        const viewId = `view-${viewCounter += 1}`;
-        const handle = await state.createView({
-          databaseId: String(params.databaseId),
+      case "session.createViewNavigator": {
+        const navigatorId = `navigator-${viewCounter += 1}`;
+        const navigator = await state.createViewNavigator({
+          databaseIds: Array.isArray(params.databaseIds)
+            ? params.databaseIds.map((entry) => String(entry))
+            : [],
           definition: params.definition as MindooDBAppViewDefinition,
+          options: params.options as MindooDBAppViewNavigatorOpenOptions | undefined,
         });
-        viewSessions.set(viewId, handle);
-        return { viewId };
+        viewSessions.set(navigatorId, navigator);
+        return { navigatorId };
       }
-      case "session.openView":
-        await state.openView(String(params.viewId));
-        return { ok: true };
+      case "session.openViewNavigator": {
+        const navigatorId = `navigator-${viewCounter += 1}`;
+        const navigator = await state.openViewNavigator(
+          String(params.viewId),
+          params.options as MindooDBAppViewNavigatorOpenOptions | undefined,
+        );
+        viewSessions.set(navigatorId, navigator);
+        return { navigatorId };
+      }
       case "session.disconnect":
         await state.session.disconnect();
         return { ok: true };
@@ -958,47 +1111,131 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
           String(params.attachmentName),
           typeof params.timestamp === "number" ? { timestamp: params.timestamp } : undefined,
         );
-      case "views.getDefinition":
-        return await (await resolveViewHandle(String(params.viewId))).getDefinition();
-      case "views.refresh":
-        return await (await resolveViewHandle(String(params.viewId))).refresh();
-      case "views.page":
-        return await (await resolveViewHandle(String(params.viewId))).page(
-          params.request as MindooDBAppViewPageRequest | undefined,
+      case "viewNavigators.getDefinition":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getDefinition();
+      case "viewNavigators.refresh":
+        return await (await resolveViewNavigator(String(params.navigatorId))).refresh();
+      case "viewNavigators.current.get":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getCurrentEntry();
+      case "viewNavigators.goto.first":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoFirst();
+      case "viewNavigators.goto.last":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoLast();
+      case "viewNavigators.goto.next":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNext();
+      case "viewNavigators.goto.prev":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrev();
+      case "viewNavigators.goto.nextSibling":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNextSibling();
+      case "viewNavigators.goto.prevSibling":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrevSibling();
+      case "viewNavigators.goto.parent":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoParent();
+      case "viewNavigators.goto.firstChild":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoFirstChild();
+      case "viewNavigators.goto.lastChild":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoLastChild();
+      case "viewNavigators.goto.pos":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPos(String(params.position));
+      case "viewNavigators.pos.get":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getPos(String(params.position));
+      case "viewNavigators.category.findByParts":
+        return await (await resolveViewNavigator(String(params.navigatorId))).findCategoryEntryByParts(
+          Array.isArray(params.parts) ? params.parts : [],
         );
-      case "views.expansion.get":
-        return await (await resolveViewHandle(String(params.viewId))).getExpansionState();
-      case "views.expansion.set":
-        return await (await resolveViewHandle(String(params.viewId))).setExpansionState(
-          params.expansion as MindooDBAppViewExpansionState,
+      case "viewNavigators.entries.forward":
+        return await (await resolveViewNavigator(String(params.navigatorId))).entriesForward(
+          params.options as MindooDBAppViewNavigatorPageOptions | undefined,
         );
-      case "views.expansion.expand":
-        return await (await resolveViewHandle(String(params.viewId))).expand(String(params.rowKey));
-      case "views.expansion.collapse":
-        return await (await resolveViewHandle(String(params.viewId))).collapse(String(params.rowKey));
-      case "views.expansion.expandAll":
-        return await (await resolveViewHandle(String(params.viewId))).expandAll();
-      case "views.expansion.collapseAll":
-        return await (await resolveViewHandle(String(params.viewId))).collapseAll();
-      case "views.row.get":
-        return await (await resolveViewHandle(String(params.viewId))).getRow(String(params.rowKey));
-      case "views.category.get":
-        return await (await resolveViewHandle(String(params.viewId))).getCategory(
-          params.lookup as MindooDBAppViewLookupByPath,
+      case "viewNavigators.entries.backward":
+        return await (await resolveViewNavigator(String(params.navigatorId))).entriesBackward(
+          params.options as MindooDBAppViewNavigatorPageOptions | undefined,
         );
-      case "views.category.page":
-        return await (await resolveViewHandle(String(params.viewId))).pageCategory(
-          String(params.categoryKey),
-          params.request as MindooDBAppViewCategoryChildrenPageRequest | undefined,
+      case "viewNavigators.goto.nextSelected":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNextSelected();
+      case "viewNavigators.goto.prevSelected":
+        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrevSelected();
+      case "viewNavigators.selection.select":
+        return await (await resolveViewNavigator(String(params.navigatorId))).select(
+          String(params.origin),
+          String(params.docId),
+          Boolean(params.selectParentCategories),
         );
-      case "views.category.documentIds":
-        return await (await resolveViewHandle(String(params.viewId))).listCategoryDocumentIds(
-          String(params.categoryKey),
+      case "viewNavigators.selection.deselect":
+        return await (await resolveViewNavigator(String(params.navigatorId))).deselect(String(params.origin), String(params.docId));
+      case "viewNavigators.selection.selectAll":
+        return await (await resolveViewNavigator(String(params.navigatorId))).selectAllEntries();
+      case "viewNavigators.selection.deselectAll":
+        return await (await resolveViewNavigator(String(params.navigatorId))).deselectAllEntries();
+      case "viewNavigators.selection.isSelected":
+        return await (await resolveViewNavigator(String(params.navigatorId))).isSelected(String(params.origin), String(params.docId));
+      case "viewNavigators.selection.get":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getSelectionState();
+      case "viewNavigators.selection.set":
+        return await (await resolveViewNavigator(String(params.navigatorId))).setSelectionState(
+          params.state as MindooDBAppViewNavigatorSelectionState,
         );
-      case "views.dispose": {
-        const key = String(params.viewId);
-        const handle = await resolveViewHandle(String(params.viewId));
-        await handle.dispose();
+      case "viewNavigators.expansion.expand":
+        return await (await resolveViewNavigator(String(params.navigatorId))).expand(String(params.origin), String(params.docId));
+      case "viewNavigators.expansion.collapse":
+        return await (await resolveViewNavigator(String(params.navigatorId))).collapse(String(params.origin), String(params.docId));
+      case "viewNavigators.expansion.expandAll":
+        return await (await resolveViewNavigator(String(params.navigatorId))).expandAll();
+      case "viewNavigators.expansion.collapseAll":
+        return await (await resolveViewNavigator(String(params.navigatorId))).collapseAll();
+      case "viewNavigators.expansion.expandToLevel":
+        return await (await resolveViewNavigator(String(params.navigatorId))).expandToLevel(Number(params.level));
+      case "viewNavigators.expansion.isExpanded":
+        return await (await resolveViewNavigator(String(params.navigatorId))).isExpanded(String(params.entryKey));
+      case "viewNavigators.expansion.get":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getExpansionState();
+      case "viewNavigators.expansion.set":
+        return await (await resolveViewNavigator(String(params.navigatorId))).setExpansionState(
+          params.state as MindooDBAppViewNavigatorExpansionState,
+        );
+      case "viewNavigators.children.entries":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childEntries(String(params.entryKey), Boolean(params.descending));
+      case "viewNavigators.children.categories":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childCategories(String(params.entryKey), Boolean(params.descending));
+      case "viewNavigators.children.documents":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childDocuments(String(params.entryKey), Boolean(params.descending));
+      case "viewNavigators.children.categoriesByKey":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childCategoriesByKey(
+          String(params.entryKey),
+          params.key,
+          typeof params.exact === "boolean" ? params.exact : undefined,
+          typeof params.descending === "boolean" ? params.descending : undefined,
+        );
+      case "viewNavigators.children.documentsByKey":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childDocumentsByKey(
+          String(params.entryKey),
+          params.key,
+          typeof params.exact === "boolean" ? params.exact : undefined,
+          typeof params.descending === "boolean" ? params.descending : undefined,
+        );
+      case "viewNavigators.children.categoriesBetween":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childCategoriesBetween(
+          String(params.entryKey),
+          params.range as MindooDBAppViewNavigatorRangeQuery,
+        );
+      case "viewNavigators.children.documentsBetween":
+        return await (await resolveViewNavigator(String(params.navigatorId))).childDocumentsBetween(
+          String(params.entryKey),
+          params.range as MindooDBAppViewNavigatorRangeQuery,
+        );
+      case "viewNavigators.sortedDocIds.get":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getSortedDocIds(
+          typeof params.descending === "boolean" ? params.descending : undefined,
+        );
+      case "viewNavigators.sortedDocIds.scoped":
+        return await (await resolveViewNavigator(String(params.navigatorId))).getSortedDocIdsScoped(
+          String(params.entryKey),
+          typeof params.descending === "boolean" ? params.descending : undefined,
+        );
+      case "viewNavigators.dispose": {
+        const key = String(params.navigatorId);
+        const navigator = await resolveViewNavigator(key);
+        await navigator.dispose();
         viewSessions.delete(key);
         return undefined;
       }
@@ -1083,7 +1320,7 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
           return;
         }
         const builtinResult = await handleBuiltinRequest(message);
-        if (builtinResult === undefined && message.method !== "views.dispose") {
+        if (builtinResult === undefined && message.method !== "viewNavigators.dispose") {
           postRpcError(port, message.id, {
             code: "unsupported-method",
             message: `No fake bridge handler is configured for ${message.method}.`,

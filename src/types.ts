@@ -491,28 +491,135 @@ export interface MindooDBAppDocumentApi {
   getAtTimestamp(docId: string, timestamp: number): Promise<MindooDBAppHistoricalDocument>;
 }
 
-/** Handle for one created or opened virtual view. */
-export interface MindooDBAppViewHandle {
-  getDefinition(): Promise<MindooDBAppViewDefinition>;
-  refresh(): Promise<void>;
-  page(input?: MindooDBAppViewPageRequest): Promise<MindooDBAppViewPageResult>;
-  getExpansionState(): Promise<MindooDBAppViewExpansionState>;
-  setExpansionState(state: MindooDBAppViewExpansionState): Promise<MindooDBAppViewExpansionState>;
-  expand(rowKey: string): Promise<MindooDBAppViewExpansionState>;
-  collapse(rowKey: string): Promise<MindooDBAppViewExpansionState>;
-  expandAll(): Promise<MindooDBAppViewExpansionState>;
-  collapseAll(): Promise<MindooDBAppViewExpansionState>;
-  getRow(rowKey: string): Promise<MindooDBAppViewRow | null>;
-  getCategory(input: MindooDBAppViewLookupByPath): Promise<MindooDBAppViewRow | null>;
-  pageCategory(categoryKey: string, input?: MindooDBAppViewCategoryChildrenPageRequest): Promise<MindooDBAppViewPageResult>;
-  listCategoryDocumentIds(categoryKey: string): Promise<string[]>;
-  dispose(): Promise<void>;
+export type MindooDBAppViewEntryKind = "category" | "document";
+
+/** Unique document identity within a multi-source view. */
+export interface MindooDBAppScopedDocId {
+  origin: string;
+  docId: string;
 }
 
-/** Payload used when creating one dynamic view inside the current app session. */
-export interface MindooDBAppCreateViewInput {
-  databaseId: string;
+/** Serialized view entry returned by the navigator APIs. */
+export interface MindooDBAppViewEntry {
+  /** Unique occurrence key within the current navigator session. */
+  key: string;
+  kind: MindooDBAppViewEntryKind;
+  origin: string;
+  docId: string | null;
+  level: number;
+  parentKey: string | null;
+  categoryPath: unknown[];
+  columnValues: Record<string, unknown>;
+  descendantDocumentCount: number;
+  childCategoryCount: number;
+  childDocumentCount: number;
+  /** Stable continuation token for the current occurrence. */
+  position: string | null;
+  expanded: boolean;
+  selected: boolean;
+  isVisible: boolean;
+}
+
+/** Options that shape which subtree and entry kinds a navigator exposes. */
+export interface MindooDBAppViewNavigatorOpenOptions {
+  includeCategories?: boolean;
+  includeDocuments?: boolean;
+  hideEmptyCategories?: boolean;
+  rootCategoryPath?: unknown[];
+  rootEntryKey?: string;
+}
+
+/** Input used when creating a dynamic view and immediately opening a navigator. */
+export interface MindooDBAppCreateViewNavigatorInput {
+  databaseIds: string[];
   definition: MindooDBAppViewDefinition;
+  options?: MindooDBAppViewNavigatorOpenOptions;
+}
+
+/** @deprecated Use `MindooDBAppCreateViewNavigatorInput`. */
+export type MindooDBAppCreateViewInput = MindooDBAppCreateViewNavigatorInput;
+
+/** Range query options for key and key-range lookups within a category. */
+export interface MindooDBAppViewNavigatorRangeQuery {
+  startKey?: unknown;
+  endKey?: unknown;
+  descending?: boolean;
+  exact?: boolean;
+}
+
+/** Options for batched navigator reads. */
+export interface MindooDBAppViewNavigatorPageOptions {
+  limit?: number;
+  selectedOnly?: boolean;
+  startPosition?: string | null;
+}
+
+/** Paged batch of navigator entries. */
+export interface MindooDBAppViewNavigatorPageResult {
+  entries: MindooDBAppViewEntry[];
+  nextPosition: string | null;
+  hasMore: boolean;
+}
+
+/** Serializable selection state for restoring a navigator session. */
+export interface MindooDBAppViewNavigatorSelectionState {
+  selectAllByDefault: boolean;
+  entryKeys: string[];
+}
+
+/** Serializable expansion state for restoring a navigator session. */
+export interface MindooDBAppViewNavigatorExpansionState {
+  expandAllByDefault: boolean;
+  expandLevel: number;
+  entryKeys: string[];
+}
+
+/** Stateful view navigator that closely mirrors the core VirtualViewNavigator. */
+export interface MindooDBAppViewNavigator {
+  getDefinition(): Promise<MindooDBAppViewDefinition>;
+  refresh(): Promise<void>;
+  getCurrentEntry(): Promise<MindooDBAppViewEntry | null>;
+  gotoFirst(): Promise<boolean>;
+  gotoLast(): Promise<boolean>;
+  gotoNext(): Promise<boolean>;
+  gotoPrev(): Promise<boolean>;
+  gotoNextSibling(): Promise<boolean>;
+  gotoPrevSibling(): Promise<boolean>;
+  gotoParent(): Promise<boolean>;
+  gotoFirstChild(): Promise<boolean>;
+  gotoLastChild(): Promise<boolean>;
+  gotoPos(position: string): Promise<boolean>;
+  getPos(position: string): Promise<MindooDBAppViewEntry | null>;
+  findCategoryEntryByParts(parts: unknown[]): Promise<MindooDBAppViewEntry | null>;
+  entriesForward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult>;
+  entriesBackward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult>;
+  gotoNextSelected(): Promise<boolean>;
+  gotoPrevSelected(): Promise<boolean>;
+  select(origin: string, docId: string, selectParentCategories?: boolean): Promise<void>;
+  deselect(origin: string, docId: string): Promise<void>;
+  selectAllEntries(): Promise<void>;
+  deselectAllEntries(): Promise<void>;
+  isSelected(origin: string, docId: string): Promise<boolean>;
+  getSelectionState(): Promise<MindooDBAppViewNavigatorSelectionState>;
+  setSelectionState(state: MindooDBAppViewNavigatorSelectionState): Promise<void>;
+  expand(origin: string, docId: string): Promise<void>;
+  collapse(origin: string, docId: string): Promise<void>;
+  expandAll(): Promise<void>;
+  collapseAll(): Promise<void>;
+  expandToLevel(level: number): Promise<void>;
+  isExpanded(entryKey: string): Promise<boolean>;
+  getExpansionState(): Promise<MindooDBAppViewNavigatorExpansionState>;
+  setExpansionState(state: MindooDBAppViewNavigatorExpansionState): Promise<void>;
+  childEntries(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
+  childCategories(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
+  childDocuments(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
+  childCategoriesByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
+  childDocumentsByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
+  childCategoriesBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]>;
+  childDocumentsBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]>;
+  getSortedDocIds(descending?: boolean): Promise<MindooDBAppScopedDocId[]>;
+  getSortedDocIdsScoped(entryKey: string, descending?: boolean): Promise<MindooDBAppScopedDocId[]>;
+  dispose(): Promise<void>;
 }
 
 /** Attachment operations exposed by an opened database handle. */
@@ -545,8 +652,8 @@ export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
-  createView(input: MindooDBAppCreateViewInput): Promise<MindooDBAppViewHandle>;
-  openView(viewId: string): Promise<MindooDBAppViewHandle>;
+  createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator>;
+  openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator>;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
   onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
   disconnect(): Promise<void>;

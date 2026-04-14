@@ -234,7 +234,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     await expect(readable.read()).resolves.toBeNull();
   });
 
-  it("supports declarative view operations over the bridge port", async () => {
+  it("supports navigator-based view operations over the bridge port", async () => {
     const v = createViewLanguage<{ employee: string; hours: number; rate: number; workDate: string }>();
     const requests: string[] = [];
     const host = {
@@ -250,40 +250,37 @@ describe("createMindooDBAppBridge attachment streaming", () => {
             return;
           }
           requests.push(message.method);
-          if (message.method === "session.openDatabase") {
+          if (message.method === "session.createViewNavigator") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
-              result: { ok: true },
+              result: { navigatorId: "navigator-1" },
             });
             return;
           }
-          if (message.method === "session.createView") {
-            port.postMessage({
-              protocol: "mindoodb-app-bridge",
-              kind: "success",
-              id: message.id,
-              result: { viewId: "view-1" },
-            });
-            return;
-          }
-          if (message.method === "views.page") {
+          if (message.method === "viewNavigators.entries.forward") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
               result: {
-                rows: [{
-                  key: "employees::Ada",
-                  type: "category",
+                entries: [{
+                  key: "1",
+                  kind: "category",
                   level: 0,
+                  origin: "main",
                   docId: null,
                   parentKey: null,
                   categoryPath: ["Ada"],
-                  values: { employee: "Ada" },
+                  columnValues: { employee: "Ada" },
                   descendantDocumentCount: 1,
+                  childCategoryCount: 0,
+                  childDocumentCount: 1,
+                  position: "1",
                   expanded: true,
+                  selected: false,
+                  isVisible: true,
                 }],
                 nextPosition: null,
                 hasMore: false,
@@ -291,66 +288,65 @@ describe("createMindooDBAppBridge attachment streaming", () => {
             });
             return;
           }
-          if (message.method === "views.expansion.get" || message.method === "views.expansion.set" || message.method === "views.expansion.expandAll") {
-            port.postMessage({
-              protocol: "mindoodb-app-bridge",
-              kind: "success",
-              id: message.id,
-              result: { mode: "expanded", ids: [] },
-            });
-            return;
-          }
-          if (message.method === "views.row.get" || message.method === "views.category.get") {
+          if (message.method === "viewNavigators.current.get" || message.method === "viewNavigators.category.findByParts" || message.method === "viewNavigators.pos.get") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
               result: {
-                key: "employees::Ada",
-                type: "category",
+                key: "1",
+                kind: "category",
                 level: 0,
+                origin: "main",
                 docId: null,
                 parentKey: null,
                 categoryPath: ["Ada"],
-                values: { employee: "Ada" },
+                columnValues: { employee: "Ada" },
                 descendantDocumentCount: 1,
+                childCategoryCount: 0,
+                childDocumentCount: 1,
+                position: "1",
                 expanded: true,
+                selected: false,
+                isVisible: true,
               },
             });
             return;
           }
-          if (message.method === "views.category.page") {
+          if (message.method === "viewNavigators.goto.first" || message.method === "viewNavigators.selection.isSelected") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
-              result: {
-                rows: [{
-                  key: "doc-1",
-                  type: "document",
-                  level: 1,
-                  docId: "doc-1",
-                  parentKey: "employees::Ada",
-                  categoryPath: ["Ada"],
-                  values: { employee: "Ada", amount: 40 },
-                  descendantDocumentCount: 1,
-                }],
-                nextPosition: null,
-                hasMore: false,
-              },
+              result: message.method === "viewNavigators.goto.first" ? true : false,
             });
             return;
           }
-          if (message.method === "views.category.documentIds") {
+          if (message.method === "viewNavigators.selection.get") {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
-              result: ["doc-1"],
+              result: { selectAllByDefault: false, entryKeys: [] },
             });
             return;
           }
-          if (message.method === "views.dispose") {
+          if (message.method === "viewNavigators.expansion.get") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { expandAllByDefault: true, expandLevel: 0, entryKeys: [] },
+            });
+            return;
+          }
+          if (
+            message.method === "viewNavigators.selection.select"
+            || message.method === "viewNavigators.selection.set"
+            || message.method === "viewNavigators.expansion.expandAll"
+            || message.method === "viewNavigators.expansion.set"
+            || message.method === "viewNavigators.dispose"
+          ) {
             port.postMessage({
               protocol: "mindoodb-app-bridge",
               kind: "success",
@@ -381,8 +377,8 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
 
     const session = await createMindooDBAppBridge().connect();
-    const view = await session.createView({
-      databaseId: "main",
+    const navigator = await session.createViewNavigator({
+      databaseIds: ["main"],
       definition: {
         title: "Hours by employee",
         columns: [
@@ -406,34 +402,43 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       },
     });
 
-    const page = await view.page({ pageSize: 25 });
-    const expansion = await view.getExpansionState();
-    const updatedExpansion = await view.setExpansionState({ mode: "expanded", ids: [] });
-    const category = await view.getCategory({ path: ["Ada"] });
-    const row = await view.getRow("employees::Ada");
-    const children = await view.pageCategory("employees::Ada", { pageSize: 10 });
-    const documentIds = await view.listCategoryDocumentIds("employees::Ada");
-    await view.expandAll();
-    await view.dispose();
+    const page = await navigator.entriesForward({ limit: 25 });
+    const moved = await navigator.gotoFirst();
+    const current = await navigator.getCurrentEntry();
+    const category = await navigator.findCategoryEntryByParts(["Ada"]);
+    const sameCategory = await navigator.getPos("1");
+    await navigator.select("main", "doc-1");
+    const selected = await navigator.isSelected("main", "doc-1");
+    const selection = await navigator.getSelectionState();
+    await navigator.setSelectionState({ selectAllByDefault: false, entryKeys: [] });
+    const expansion = await navigator.getExpansionState();
+    await navigator.expandAll();
+    await navigator.setExpansionState({ expandAllByDefault: true, expandLevel: 0, entryKeys: [] });
+    await navigator.dispose();
 
-    expect(page.rows).toHaveLength(1);
-    expect(expansion).toEqual({ mode: "expanded", ids: [] });
-    expect(updatedExpansion).toEqual({ mode: "expanded", ids: [] });
-    expect(category?.key).toBe("employees::Ada");
-    expect(row?.key).toBe("employees::Ada");
-    expect(children.rows[0]?.docId).toBe("doc-1");
-    expect(documentIds).toEqual(["doc-1"]);
+    expect(page.entries).toHaveLength(1);
+    expect(moved).toBe(true);
+    expect(current?.key).toBe("1");
+    expect(category?.key).toBe("1");
+    expect(sameCategory?.key).toBe("1");
+    expect(selected).toBe(false);
+    expect(selection).toEqual({ selectAllByDefault: false, entryKeys: [] });
+    expect(expansion).toEqual({ expandAllByDefault: true, expandLevel: 0, entryKeys: [] });
     expect(requests).toEqual(expect.arrayContaining([
-      "session.createView",
-      "views.page",
-      "views.expansion.get",
-      "views.expansion.set",
-      "views.category.get",
-      "views.row.get",
-      "views.category.page",
-      "views.category.documentIds",
-      "views.expansion.expandAll",
-      "views.dispose",
+      "session.createViewNavigator",
+      "viewNavigators.entries.forward",
+      "viewNavigators.goto.first",
+      "viewNavigators.current.get",
+      "viewNavigators.category.findByParts",
+      "viewNavigators.pos.get",
+      "viewNavigators.selection.select",
+      "viewNavigators.selection.isSelected",
+      "viewNavigators.selection.get",
+      "viewNavigators.selection.set",
+      "viewNavigators.expansion.get",
+      "viewNavigators.expansion.expandAll",
+      "viewNavigators.expansion.set",
+      "viewNavigators.dispose",
     ]));
   });
 

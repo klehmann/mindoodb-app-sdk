@@ -410,20 +410,26 @@ const unsupported = canPreviewAttachment("data.bin", "application/octet-stream")
 
 ### Virtual Views
 
-Views let you query documents with categorization, sorting, filtering, and aggregation -- similar to a spreadsheet pivot table. There are two ways to work with views:
+Views let you query documents with categorization, sorting, filtering, and aggregation -- similar to a spreadsheet pivot table. The SDK now exposes a **stateful navigator API** that mirrors the core `VirtualViewNavigator` closely.
 
-**App-defined views** -- create a view definition programmatically:
+There are two ways to open one:
+
+**App-defined multi-database views** -- create a view definition programmatically and immediately open a navigator:
 
 ```ts
 import { createViewLanguage } from "mindoodb-app-sdk";
 
 const v = createViewLanguage<{ employee: string; hours: number }>();
 
-const view = await session.createView({
-  databaseId: "main",
+const navigator = await session.createViewNavigator({
+  databaseIds: ["main", "archive"],
   definition: {
     title: "Hours by employee",
     defaultExpand: "collapsed",
+    filter: {
+      mode: "expression",
+      expression: v.gt(v.toNumber(v.field("hours")), v.number(0)),
+    },
     columns: [
       {
         name: "employee",
@@ -442,27 +448,98 @@ const view = await session.createView({
   },
 });
 
-const page = await view.page({ pageSize: 100 });
-console.log(page.rows);
-await view.dispose();
+const batch = await navigator.entriesForward({ limit: 100 });
+console.log(batch.entries);
+
+await navigator.dispose();
 ```
 
-**Haven-configured views** -- open views that the Haven administrator attached to the app registration:
+**Haven-configured views** -- open a view that Haven attached to the app registration:
 
 ```ts
 const viewDefs = ctx.views; // from launch context
 
-const view = await session.openView(viewDefs[0]!.id);
-const page = await view.page({ pageSize: 50 });
+const navigator = await session.openViewNavigator(viewDefs[0]!.id, {
+  includeCategories: true,
+  includeDocuments: true,
+  hideEmptyCategories: true,
+});
 
-// Expand/collapse categories
-await view.expandAll();
-await view.collapse(someCategoryKey);
+await navigator.gotoFirst();
+const current = await navigator.getCurrentEntry();
+console.log(current);
 
-await view.dispose();
+await navigator.dispose();
 ```
 
-The expression language is fully declarative -- apps define filter and column logic through a typed builder API that compiles to JSON-safe expression objects. No app-provided JavaScript runs inside the bridge host.
+#### Common navigator patterns
+
+**Single-step traversal**:
+
+```ts
+await navigator.gotoFirst();
+
+do {
+  const entry = await navigator.getCurrentEntry();
+  if (entry) {
+    console.log(entry.kind, entry.categoryPath, entry.columnValues);
+  }
+} while (await navigator.gotoNext());
+```
+
+**Batch reads for UI rendering**:
+
+```ts
+const page1 = await navigator.entriesForward({ limit: 50 });
+const page2 = page1.nextPosition
+  ? await navigator.entriesForward({ limit: 50, startPosition: page1.nextPosition })
+  : null;
+```
+
+**Category lookup plus child traversal**:
+
+```ts
+const category = await navigator.findCategoryEntryByParts(["Ada"]);
+if (category) {
+  const docs = await navigator.childDocuments(category.key);
+  console.log(docs.map((entry) => entry.docId));
+}
+```
+
+**Key lookup and key-range lookup**:
+
+```ts
+const category = await navigator.findCategoryEntryByParts(["Ada"]);
+if (category) {
+  const exact = await navigator.childDocumentsByKey(category.key, "2026-04-14", true);
+  const range = await navigator.childDocumentsBetween(category.key, {
+    startKey: "2026-04-01",
+    endKey: "2026-04-30",
+  });
+}
+```
+
+**Expansion and selection state**:
+
+```ts
+await navigator.expandAll();
+await navigator.select("main", "doc-123");
+
+const expansion = await navigator.getExpansionState();
+const selection = await navigator.getSelectionState();
+
+await navigator.setExpansionState(expansion);
+await navigator.setSelectionState(selection);
+```
+
+The expression language is fully declarative: apps define filter and column logic through a typed builder API that compiles to JSON-safe expression objects. No app-provided JavaScript runs inside the bridge host.
+
+#### Performance notes
+
+- `goto*()` and `getCurrentEntry()` are lightweight stateful cursor operations. They may still produce many bridge round-trips if you call them for every rendered row.
+- `entriesForward()` and `entriesBackward()` exist specifically to reduce those round-trips for UI rendering.
+- `refresh()` rebuilds or invalidates the host-side navigator state and should be treated as an expensive operation compared to simple cursor movement.
+- Child/key/range helpers operate on the same host-side navigator session. They do not create a separate query engine.
 
 Available expression helpers:
 
@@ -534,8 +611,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `getLaunchContext()` | `Promise<MindooDBAppLaunchContext>` |
 | `listDatabases()` | `Promise<MindooDBAppDatabaseInfo[]>` |
 | `openDatabase(databaseId)` | `Promise<MindooDBAppDatabase>` |
-| `createView(input)` | `Promise<MindooDBAppViewHandle>` |
-| `openView(viewId)` | `Promise<MindooDBAppViewHandle>` |
+| `createViewNavigator(input)` | `Promise<MindooDBAppViewNavigator>` |
+| `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>` |
 | `onThemeChange(listener)` | `() => void` (unsubscribe) |
 | `onViewportChange(listener)` | `() => void` (unsubscribe) |
 | `disconnect()` | `Promise<void>` |
@@ -572,23 +649,45 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openWriteStream(docId, attachmentName, contentType?)` | `Promise<MindooDBAppWritableAttachmentStream>` |
 | `openPreview(docId, attachmentName, options?)` | `Promise<{ ok: true }>` |
 
-### MindooDBAppViewHandle
+### MindooDBAppViewNavigator
 
 | Method | Returns |
 |---|---|
 | `getDefinition()` | `Promise<MindooDBAppViewDefinition>` |
 | `refresh()` | `Promise<void>` |
-| `page(input?)` | `Promise<MindooDBAppViewPageResult>` |
-| `getExpansionState()` | `Promise<MindooDBAppViewExpansionState>` |
-| `setExpansionState(state)` | `Promise<MindooDBAppViewExpansionState>` |
-| `expand(rowKey)` | `Promise<MindooDBAppViewExpansionState>` |
-| `collapse(rowKey)` | `Promise<MindooDBAppViewExpansionState>` |
-| `expandAll()` | `Promise<MindooDBAppViewExpansionState>` |
-| `collapseAll()` | `Promise<MindooDBAppViewExpansionState>` |
-| `getRow(rowKey)` | `Promise<MindooDBAppViewRow \| null>` |
-| `getCategory(input)` | `Promise<MindooDBAppViewRow \| null>` |
-| `pageCategory(categoryKey, input?)` | `Promise<MindooDBAppViewPageResult>` |
-| `listCategoryDocumentIds(categoryKey)` | `Promise<string[]>` |
+| `getCurrentEntry()` | `Promise<MindooDBAppViewEntry \| null>` |
+| `gotoFirst()` / `gotoLast()` | `Promise<boolean>` |
+| `gotoNext()` / `gotoPrev()` | `Promise<boolean>` |
+| `gotoNextSibling()` / `gotoPrevSibling()` | `Promise<boolean>` |
+| `gotoParent()` | `Promise<boolean>` |
+| `gotoFirstChild()` / `gotoLastChild()` | `Promise<boolean>` |
+| `gotoPos(position)` | `Promise<boolean>` |
+| `getPos(position)` | `Promise<MindooDBAppViewEntry \| null>` |
+| `findCategoryEntryByParts(parts)` | `Promise<MindooDBAppViewEntry \| null>` |
+| `entriesForward(options?)` | `Promise<MindooDBAppViewNavigatorPageResult>` |
+| `entriesBackward(options?)` | `Promise<MindooDBAppViewNavigatorPageResult>` |
+| `gotoNextSelected()` / `gotoPrevSelected()` | `Promise<boolean>` |
+| `select(origin, docId, selectParentCategories?)` | `Promise<void>` |
+| `deselect(origin, docId)` | `Promise<void>` |
+| `selectAllEntries()` / `deselectAllEntries()` | `Promise<void>` |
+| `isSelected(origin, docId)` | `Promise<boolean>` |
+| `getSelectionState()` | `Promise<MindooDBAppViewNavigatorSelectionState>` |
+| `setSelectionState(state)` | `Promise<void>` |
+| `expand(origin, docId)` / `collapse(origin, docId)` | `Promise<void>` |
+| `expandAll()` / `collapseAll()` | `Promise<void>` |
+| `expandToLevel(level)` | `Promise<void>` |
+| `isExpanded(entryKey)` | `Promise<boolean>` |
+| `getExpansionState()` | `Promise<MindooDBAppViewNavigatorExpansionState>` |
+| `setExpansionState(state)` | `Promise<void>` |
+| `childEntries(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childCategories(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childDocuments(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childCategoriesByKey(entryKey, key, exact?, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childDocumentsByKey(entryKey, key, exact?, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childCategoriesBetween(entryKey, range)` | `Promise<MindooDBAppViewEntry[]>` |
+| `childDocumentsBetween(entryKey, range)` | `Promise<MindooDBAppViewEntry[]>` |
+| `getSortedDocIds(descending?)` | `Promise<MindooDBAppScopedDocId[]>` |
+| `getSortedDocIdsScoped(entryKey, descending?)` | `Promise<MindooDBAppScopedDocId[]>` |
 | `dispose()` | `Promise<void>` |
 
 ### Exported functions

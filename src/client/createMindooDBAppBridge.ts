@@ -1,3 +1,42 @@
+/**
+ * Client-side implementation of the MindooDB App Bridge.
+ *
+ * This module is the SDK's main entry point: apps call
+ * `createMindooDBAppBridge().connect()` to establish a connection with the
+ * Haven host, and then interact with databases, documents, views, and
+ * attachments through the returned `MindooDBAppSession`.
+ *
+ * ## Connection lifecycle
+ *
+ * 1. `createMindooDBAppBridge()` returns a lightweight factory (no side
+ *    effects).
+ * 2. `bridge.connect(options?)` resolves the `launchId` (from options or the
+ *    URL query string), locates the Haven host window (`window.parent` for
+ *    iframes, `window.opener` for pop-outs), creates a `MessageChannel`,
+ *    posts a `mindoodb-app:connect` handshake, and waits for the host to
+ *    reply with `mindoodb-app:connected` on the dedicated port.
+ * 3. All subsequent communication flows through the `MessagePort` via a
+ *    `PortRpcClient`.  RPC requests are serialised JSON; binary attachment
+ *    traffic uses a separate stream protocol with explicit ack/error flow
+ *    control.
+ *
+ * ## Key classes
+ *
+ * - {@link MindooDBAppSessionImpl} -- top-level session facade exposing
+ *   database opening, navigator creation, and host-event subscriptions.
+ * - {@link MindooDBAppDatabaseImpl} -- per-database facade wiring
+ *   `documents.*` and `attachments.*` RPC methods.
+ * - {@link MindooDBAppViewNavigatorImpl} -- stateful view navigator proxy
+ *   mapping every `MindooDBAppViewNavigator` method to a
+ *   `viewNavigators.*` RPC call, including traversal, expansion, selection,
+ *   and child/key/range lookups.
+ * - {@link MindooDBAppReadableAttachmentStreamImpl} /
+ *   {@link MindooDBAppWritableAttachmentStreamImpl} -- pull-based and
+ *   push-based attachment stream adapters built on the port's stream
+ *   protocol.
+ *
+ * @module createMindooDBAppBridge
+ */
 import { PortRpcClient } from "./portRpcClient";
 import type {
   MindooDBAppAttachmentApi,
@@ -12,25 +51,30 @@ import type {
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
   MindooDBAppBridgeStreamOpenResult,
-  MindooDBAppCreateViewInput,
+  MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDocumentApi,
   MindooDBAppLaunchContext,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSession,
-  MindooDBAppViewCategoryChildrenPageRequest,
+  MindooDBAppScopedDocId,
   MindooDBAppViewDefinition,
-  MindooDBAppViewExpansionState,
-  MindooDBAppViewHandle,
-  MindooDBAppViewLookupByPath,
-  MindooDBAppViewPageRequest,
-  MindooDBAppViewPageResult,
-  MindooDBAppViewRow,
+  MindooDBAppViewEntry,
+  MindooDBAppViewNavigator,
+  MindooDBAppViewNavigatorExpansionState,
+  MindooDBAppViewNavigatorOpenOptions,
+  MindooDBAppViewNavigatorPageOptions,
+  MindooDBAppViewNavigatorPageResult,
+  MindooDBAppViewNavigatorRangeQuery,
+  MindooDBAppViewNavigatorSelectionState,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
 
+/** Wire protocol identifier shared with the Haven host. */
 const PROTOCOL = "mindoodb-app-bridge";
+
+/** Default maximum wait (ms) for the host to acknowledge the handshake. */
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 
 /** Copies a `Uint8Array` into a transferable `ArrayBuffer` for stream writes. */
@@ -100,7 +144,13 @@ function resolveTargetWindow() {
   throw new Error("Could not find a MindooDB Administrator host window.");
 }
 
-/** Performs the initial postMessage handshake and resolves with the dedicated bridge port. */
+/**
+ * Perform the initial `postMessage` handshake with the Haven host.
+ *
+ * Creates a `MessageChannel`, sends port2 to the host via the connect
+ * message, and listens on port1 for the `mindoodb-app:connected` reply.
+ * Rejects if the host does not respond within `connectTimeoutMs`.
+ */
 function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefined, launchId: string) {
   const targetWindow = resolveTargetWindow();
   const targetOrigin = options?.targetOrigin ?? "*";
@@ -144,108 +194,245 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
   });
 }
 
-/** Client-side implementation of a virtual view handle backed by bridge RPC calls. */
-class MindooDBAppViewHandleImpl implements MindooDBAppViewHandle {
+/**
+ * Client-side proxy for a single host-side `VirtualViewNavigator`.
+ *
+ * Every public method maps 1:1 to a `viewNavigators.*` RPC call, passing
+ * the `navigatorId` allocated by the host during `createViewNavigator` or
+ * `openViewNavigator`.  The host retains the navigator's cursor, expansion,
+ * and selection state between calls, so this class is intentionally
+ * stateless -- all state lives server-side.
+ *
+ * Methods are grouped into:
+ * - **Traversal** (`gotoFirst`, `gotoNext`, `gotoParent`, ...): move the
+ *   host cursor and return whether the move succeeded.
+ * - **Position lookup** (`getPos`, `findCategoryEntryByParts`): locate an
+ *   entry without moving the cursor.
+ * - **Batch reads** (`entriesForward`, `entriesBackward`): collect a page
+ *   of serialised entries from a cloned navigator on the host, leaving the
+ *   primary cursor untouched.
+ * - **Selection / Expansion**: toggle or query per-entry UI state.
+ * - **Child / Key / Range lookups**: list direct children, optionally
+ *   filtered by key or key range.
+ * - **Lifecycle** (`refresh`, `dispose`): rebuild or release the host-side
+ *   navigator session.
+ */
+class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
   constructor(
     private readonly rpc: PortRpcClient,
-    private readonly viewId: string,
+    private readonly navigatorId: string,
   ) {}
 
-  async getDefinition(): Promise<MindooDBAppViewDefinition> {
-    return await this.rpc.call("views.getDefinition", {
-      viewId: this.viewId,
+  /** Shorthand: call an RPC method with the navigator ID automatically injected. */
+  private async call<TResult>(method: string, params: Record<string, unknown> = {}) {
+    return await this.rpc.call<TResult>(method, {
+      navigatorId: this.navigatorId,
+      ...params,
     });
+  }
+
+  async getDefinition(): Promise<MindooDBAppViewDefinition> {
+    return await this.call("viewNavigators.getDefinition");
   }
 
   async refresh(): Promise<void> {
-    await this.rpc.call("views.refresh", {
-      viewId: this.viewId,
+    await this.call("viewNavigators.refresh");
+  }
+
+  async getCurrentEntry(): Promise<MindooDBAppViewEntry | null> {
+    return await this.call("viewNavigators.current.get");
+  }
+
+  async gotoFirst(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.first");
+  }
+
+  async gotoLast(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.last");
+  }
+
+  async gotoNext(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.next");
+  }
+
+  async gotoPrev(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.prev");
+  }
+
+  async gotoNextSibling(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.nextSibling");
+  }
+
+  async gotoPrevSibling(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.prevSibling");
+  }
+
+  async gotoParent(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.parent");
+  }
+
+  async gotoFirstChild(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.firstChild");
+  }
+
+  async gotoLastChild(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.lastChild");
+  }
+
+  async gotoPos(position: string): Promise<boolean> {
+    return await this.call("viewNavigators.goto.pos", { position });
+  }
+
+  async getPos(position: string): Promise<MindooDBAppViewEntry | null> {
+    return await this.call("viewNavigators.pos.get", { position });
+  }
+
+  async findCategoryEntryByParts(parts: unknown[]): Promise<MindooDBAppViewEntry | null> {
+    return await this.call("viewNavigators.category.findByParts", { parts });
+  }
+
+  async entriesForward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult> {
+    return await this.call("viewNavigators.entries.forward", { options: options ?? {} });
+  }
+
+  async entriesBackward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult> {
+    return await this.call("viewNavigators.entries.backward", { options: options ?? {} });
+  }
+
+  async gotoNextSelected(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.nextSelected");
+  }
+
+  async gotoPrevSelected(): Promise<boolean> {
+    return await this.call("viewNavigators.goto.prevSelected");
+  }
+
+  async select(origin: string, docId: string, selectParentCategories?: boolean): Promise<void> {
+    await this.call("viewNavigators.selection.select", {
+      origin,
+      docId,
+      selectParentCategories,
     });
   }
 
-  async page(input?: MindooDBAppViewPageRequest): Promise<MindooDBAppViewPageResult> {
-    return await this.rpc.call("views.page", {
-      viewId: this.viewId,
-      request: input ?? {},
+  async deselect(origin: string, docId: string): Promise<void> {
+    await this.call("viewNavigators.selection.deselect", { origin, docId });
+  }
+
+  async selectAllEntries(): Promise<void> {
+    await this.call("viewNavigators.selection.selectAll");
+  }
+
+  async deselectAllEntries(): Promise<void> {
+    await this.call("viewNavigators.selection.deselectAll");
+  }
+
+  async isSelected(origin: string, docId: string): Promise<boolean> {
+    return await this.call("viewNavigators.selection.isSelected", { origin, docId });
+  }
+
+  async getSelectionState(): Promise<MindooDBAppViewNavigatorSelectionState> {
+    return await this.call("viewNavigators.selection.get");
+  }
+
+  async setSelectionState(state: MindooDBAppViewNavigatorSelectionState): Promise<void> {
+    await this.call("viewNavigators.selection.set", { state });
+  }
+
+  async expand(origin: string, docId: string): Promise<void> {
+    await this.call("viewNavigators.expansion.expand", { origin, docId });
+  }
+
+  async collapse(origin: string, docId: string): Promise<void> {
+    await this.call("viewNavigators.expansion.collapse", { origin, docId });
+  }
+
+  async expandAll(): Promise<void> {
+    await this.call("viewNavigators.expansion.expandAll");
+  }
+
+  async collapseAll(): Promise<void> {
+    await this.call("viewNavigators.expansion.collapseAll");
+  }
+
+  async expandToLevel(level: number): Promise<void> {
+    await this.call("viewNavigators.expansion.expandToLevel", { level });
+  }
+
+  async isExpanded(entryKey: string): Promise<boolean> {
+    return await this.call("viewNavigators.expansion.isExpanded", { entryKey });
+  }
+
+  async getExpansionState(): Promise<MindooDBAppViewNavigatorExpansionState> {
+    return await this.call("viewNavigators.expansion.get");
+  }
+
+  async setExpansionState(state: MindooDBAppViewNavigatorExpansionState): Promise<void> {
+    await this.call("viewNavigators.expansion.set", { state });
+  }
+
+  async childEntries(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.entries", { entryKey, descending });
+  }
+
+  async childCategories(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.categories", { entryKey, descending });
+  }
+
+  async childDocuments(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.documents", { entryKey, descending });
+  }
+
+  async childCategoriesByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.categoriesByKey", {
+      entryKey,
+      key,
+      exact,
+      descending,
     });
   }
 
-  async getExpansionState(): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.get", {
-      viewId: this.viewId,
+  async childDocumentsByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.documentsByKey", {
+      entryKey,
+      key,
+      exact,
+      descending,
     });
   }
 
-  async setExpansionState(state: MindooDBAppViewExpansionState): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.set", {
-      viewId: this.viewId,
-      expansion: state,
-    });
+  async childCategoriesBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.categoriesBetween", { entryKey, range });
   }
 
-  async expand(rowKey: string): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.expand", {
-      viewId: this.viewId,
-      rowKey,
-    });
+  async childDocumentsBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.documentsBetween", { entryKey, range });
   }
 
-  async collapse(rowKey: string): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.collapse", {
-      viewId: this.viewId,
-      rowKey,
-    });
+  async getSortedDocIds(descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
+    return await this.call<MindooDBAppScopedDocId[]>("viewNavigators.sortedDocIds.get", { descending });
   }
 
-  async expandAll(): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.expandAll", {
-      viewId: this.viewId,
-    });
-  }
-
-  async collapseAll(): Promise<MindooDBAppViewExpansionState> {
-    return await this.rpc.call("views.expansion.collapseAll", {
-      viewId: this.viewId,
-    });
-  }
-
-  async getRow(rowKey: string): Promise<MindooDBAppViewRow | null> {
-    return await this.rpc.call("views.row.get", {
-      viewId: this.viewId,
-      rowKey,
-    });
-  }
-
-  async getCategory(input: MindooDBAppViewLookupByPath): Promise<MindooDBAppViewRow | null> {
-    return await this.rpc.call("views.category.get", {
-      viewId: this.viewId,
-      lookup: input,
-    });
-  }
-
-  async pageCategory(categoryKey: string, input?: MindooDBAppViewCategoryChildrenPageRequest): Promise<MindooDBAppViewPageResult> {
-    return await this.rpc.call("views.category.page", {
-      viewId: this.viewId,
-      categoryKey,
-      request: input ?? {},
-    });
-  }
-
-  async listCategoryDocumentIds(categoryKey: string): Promise<string[]> {
-    return await this.rpc.call("views.category.documentIds", {
-      viewId: this.viewId,
-      categoryKey,
-    });
+  async getSortedDocIdsScoped(entryKey: string, descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
+    return await this.call<MindooDBAppScopedDocId[]>("viewNavigators.sortedDocIds.scoped", { entryKey, descending });
   }
 
   async dispose(): Promise<void> {
-    await this.rpc.call("views.dispose", {
-      viewId: this.viewId,
-    });
+    await this.call("viewNavigators.dispose");
   }
 }
 
-/** Pull-based attachment reader that consumes stream chunks from the bridge port. */
+/**
+ * Pull-based attachment download stream.
+ *
+ * Each `read()` call sends a `stream-read` message to the host and parks on
+ * a promise until the host replies with a `stream-chunk` (carrying an
+ * `ArrayBuffer`) or a terminal `stream-chunk` with `done: true`.
+ *
+ * Only one `read()` may be in-flight at a time; calling `read()` while a
+ * previous read is pending throws immediately.  `close()` can be called at
+ * any time and is idempotent.
+ */
 class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAttachmentStream {
   private readonly unsubscribe: () => void;
   private closed = false;
@@ -316,7 +503,18 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
   }
 }
 
-/** Write-side attachment stream that serializes writes until the host acknowledges them. */
+/**
+ * Push-based attachment upload stream with back-pressure.
+ *
+ * Each `write(chunk)` transfers a binary `ArrayBuffer` to the host and
+ * waits for a `stream-ack` before the next write can proceed.  Writes are
+ * serialised through an internal promise queue so callers can fire-and-forget
+ * multiple `write()` calls and the class will sequence them correctly.
+ *
+ * `close()` gracefully finalises the upload (waits for the host ack);
+ * `abort()` tells the host to discard the partial upload.  Both are
+ * idempotent and enqueued behind any in-flight write.
+ */
 class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAttachmentStream {
   private readonly unsubscribe: () => void;
   private closed = false;
@@ -415,7 +613,18 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
   }
 }
 
-/** Database facade exposing document, view, and attachment APIs over RPC. */
+/**
+ * Per-database facade that wires the public `MindooDBAppDatabase` interface
+ * to bridge RPC calls.
+ *
+ * Created by `MindooDBAppSessionImpl.openDatabase()`.  The `databaseId` is
+ * injected into every outgoing RPC request so the host can route the call
+ * to the correct database binding.
+ *
+ * Sub-APIs:
+ * - `documents` -- list, get, create, update, delete, history.
+ * - `attachments` -- list, remove, read/write streams, preview.
+ */
 class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly documents: MindooDBAppDocumentApi;
   public readonly attachments: MindooDBAppAttachmentApi;
@@ -504,7 +713,20 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   }
 }
 
-/** Session facade exposed after a successful bridge connection. */
+/**
+ * Top-level session facade returned by `bridge.connect()`.
+ *
+ * Wraps the `PortRpcClient` and provides:
+ * - `getLaunchContext()` / `listDatabases()` -- read-only session metadata.
+ * - `openDatabase(id)` -- creates a `MindooDBAppDatabaseImpl` for CRUD
+ *   and attachment operations.
+ * - `createViewNavigator(input)` / `openViewNavigator(viewId)` -- allocate
+ *   a host-side navigator and return a `MindooDBAppViewNavigatorImpl`.
+ * - `onThemeChange` / `onViewportChange` -- subscribe to push events from
+ *   the host.
+ * - `disconnect()` -- sends a disconnect RPC, then unconditionally disposes
+ *   the port client.
+ */
 class MindooDBAppSessionImpl implements MindooDBAppSession {
   constructor(private readonly rpc: PortRpcClient) {}
 
@@ -513,6 +735,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return await this.rpc.call("session.getLaunchContext", {});
   }
 
+  /** Lists the databases that the host has made available for this app session. */
   async listDatabases(): Promise<MindooDBAppDatabaseInfo[]> {
     return await this.rpc.call("session.listDatabases", {});
   }
@@ -523,16 +746,30 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
   }
 
-  async createView(input: MindooDBAppCreateViewInput): Promise<MindooDBAppViewHandle> {
-    const result = await this.rpc.call<{ viewId: string }>("session.createView", input);
-    return new MindooDBAppViewHandleImpl(this.rpc, result.viewId);
+  /**
+   * Create a navigator from an ad-hoc view definition and one or more database bindings.
+   *
+   * The host builds a `VirtualView` from `input.definition`, optionally applying
+   * open options (root scoping, category filtering), and returns a `navigatorId`
+   * that all subsequent navigator RPCs reference.
+   */
+  async createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator> {
+    const result = await this.rpc.call<{ navigatorId: string }>("session.createViewNavigator", input);
+    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId);
   }
 
-  async openView(viewId: string): Promise<MindooDBAppViewHandle> {
-    await this.rpc.call("session.openView", { viewId });
-    return new MindooDBAppViewHandleImpl(this.rpc, viewId);
+  /**
+   * Open a navigator for a preconfigured view that the host already knows about.
+   *
+   * `viewId` must match one of the views declared in the launch context. The
+   * host resolves the full view definition and database bindings automatically.
+   */
+  async openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator> {
+    const result = await this.rpc.call<{ navigatorId: string }>("session.openViewNavigator", { viewId, options: options ?? {} });
+    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId);
   }
 
+  /** Subscribe to host-pushed theme changes (dark/light mode, color tokens). */
   onThemeChange(listener: (theme: MindooDBAppLaunchContext["theme"]) => void) {
     return this.rpc.addMessageListener((message) => {
       if (isThemeChangedMessage(message)) {
@@ -541,6 +778,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     });
   }
 
+  /** Subscribe to host-pushed viewport dimension changes (resize, orientation). */
   onViewportChange(listener: (viewport: NonNullable<MindooDBAppLaunchContext["viewport"]>) => void) {
     return this.rpc.addMessageListener((message) => {
       if (isViewportChangedMessage(message)) {
