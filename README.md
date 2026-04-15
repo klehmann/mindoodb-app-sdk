@@ -137,6 +137,74 @@ interface MindooDBAppLaunchContext {
 
 `viewport` is the iframe size at launch time. It is `null` when the app runs in `window` mode (separate browser tab). Later changes arrive through `onViewportChange()`.
 
+You can use `runtime` to decide when a host-rendered overlay is necessary:
+
+```ts
+const ctx = await session.getLaunchContext();
+
+if (ctx.runtime === "iframe") {
+  // Prefer host-rendered menus when clipping outside the iframe matters.
+} else {
+  // A regular in-app menu is often fine in a separate window.
+}
+```
+
+### Host-rendered menus
+
+When your app runs inside an iframe, Haven can render a structured menu above the iframe chrome. This is useful for context menus, toolbar drop-downs, and simple pickers such as font-family or font-size lists.
+
+```ts
+const result = await session.menus.show({
+  anchor: {
+    type: "point",
+    x: event.clientX,
+    y: event.clientY,
+  },
+  kind: "context",
+  items: [
+    { id: "rename", label: "Rename" },
+    { separator: true },
+    { id: "delete", label: "Delete", destructive: true },
+  ],
+});
+
+if (result.action === "selected") {
+  console.log("Chosen action:", result.itemId);
+}
+```
+
+Rect anchors work well for button-triggered menus:
+
+```ts
+const bounds = button.getBoundingClientRect();
+const frameBounds = document.documentElement.getBoundingClientRect();
+
+await session.menus.show({
+  anchor: {
+    type: "rect",
+    rect: {
+      left: bounds.left - frameBounds.left,
+      top: bounds.top - frameBounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    },
+  },
+  kind: "dropdown",
+  placement: "bottom-start",
+  items: [
+    { id: "sans", label: "Sans Serif", checked: true },
+    { id: "serif", label: "Serif" },
+  ],
+});
+```
+
+Important constraints:
+
+- Menus are host-rendered and data-only. Apps cannot pass HTML, CSS, or script.
+- `show()` resolves to either `{ action: "selected", itemId }` or `{ action: "dismissed", reason }`.
+- Call `session.menus.hide()` if your app needs to explicitly dismiss a pending host menu.
+- Host-rendered menus are intended for `runtime === "iframe"`. Window-mode apps can usually show local menus instead.
+
 ### Databases and capabilities
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
@@ -613,6 +681,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openDatabase(databaseId)` | `Promise<MindooDBAppDatabase>` |
 | `createViewNavigator(input)` | `Promise<MindooDBAppViewNavigator>` |
 | `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>` |
+| `menus.show(input)` | `Promise<MindooDBAppShowMenuResult>` |
+| `menus.hide()` | `Promise<void>` |
 | `onThemeChange(listener)` | `() => void` (unsubscribe) |
 | `onViewportChange(listener)` | `() => void` (unsubscribe) |
 | `disconnect()` | `Promise<void>` |

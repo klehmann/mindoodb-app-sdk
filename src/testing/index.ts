@@ -19,9 +19,12 @@ import type {
   MindooDBAppHistoricalDocument,
   MindooDBAppHostTheme,
   MindooDBAppLaunchContext,
+  MindooDBAppMenuApi,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppScopedDocId,
   MindooDBAppSession,
+  MindooDBAppShowMenuInput,
+  MindooDBAppShowMenuResult,
   MindooDBAppViewDefinition,
   MindooDBAppViewEntry,
   MindooDBAppViewNavigator,
@@ -646,7 +649,29 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
+  let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null = null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
+
+  const menus: MindooDBAppMenuApi = {
+    async show(_input: MindooDBAppShowMenuInput) {
+      if (activeMenuResolve) {
+        activeMenuResolve({
+          action: "dismissed",
+          reason: "replaced",
+        });
+      }
+      return await new Promise<MindooDBAppShowMenuResult>((resolve) => {
+        activeMenuResolve = resolve;
+      });
+    },
+    async hide() {
+      activeMenuResolve?.({
+        action: "dismissed",
+        reason: "hide",
+      });
+      activeMenuResolve = null;
+    },
+  };
 
   const setDatabases = (definitions: MockMindooDBAppDatabaseDefinition[]) => {
     databaseHandles.clear();
@@ -720,6 +745,7 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       sessionViews.set(viewId, view);
       return view;
     },
+    menus,
     onThemeChange(listener) {
       themeListeners.add(listener);
       return () => {
@@ -1047,6 +1073,11 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         viewSessions.set(navigatorId, navigator);
         return { navigatorId };
       }
+      case "menus.show":
+        return await state.session.menus.show(request.params as unknown as MindooDBAppShowMenuInput);
+      case "menus.hide":
+        await state.session.menus.hide();
+        return { ok: true };
       case "session.disconnect":
         await state.session.disconnect();
         return { ok: true };

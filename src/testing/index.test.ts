@@ -96,4 +96,57 @@ describe("mindoodb-app-sdk/testing", () => {
 
     host.dispose();
   });
+
+  it("supports structured host-rendered menus in the mock and fake bridge helpers", async () => {
+    const mock = createMockMindooDBAppBridge();
+    const mockSession = await mock.bridge.connect();
+    const pendingSelection = mockSession.menus.show({
+      anchor: {
+        type: "point",
+        x: 16,
+        y: 24,
+      },
+      items: [{
+        id: "rename",
+        label: "Rename",
+      }],
+    });
+    await mockSession.menus.hide();
+    await expect(pendingSelection).resolves.toEqual({
+      action: "dismissed",
+      reason: "hide",
+    });
+
+    const host = createFakeBridgeHost({
+      requestHandlers: {
+        "menus.show": () => ({
+          action: "selected",
+          itemId: "properties",
+        }),
+      },
+    });
+
+    host.install();
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.menus.show({
+      anchor: {
+        type: "rect",
+        rect: {
+          left: 20,
+          top: 30,
+          width: 80,
+          height: 24,
+        },
+      },
+      kind: "dropdown",
+      items: [{
+        id: "properties",
+        label: "Properties",
+      }],
+    })).resolves.toEqual({
+      action: "selected",
+      itemId: "properties",
+    });
+    host.dispose();
+  });
 });

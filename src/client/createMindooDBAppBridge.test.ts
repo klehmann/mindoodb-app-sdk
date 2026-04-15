@@ -575,4 +575,115 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     unsubscribeViewport();
     await session.disconnect();
   });
+
+  it("routes host-rendered menu requests over the bridge", async () => {
+    let capturedShowParams: unknown = null;
+    let hideCalled = false;
+
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+
+          if (message.method === "menus.show") {
+            capturedShowParams = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                action: "selected",
+                itemId: "rename",
+              },
+            });
+            return;
+          }
+
+          if (message.method === "menus.hide") {
+            hideCalled = true;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+
+          if (message.method === "session.disconnect") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-menu",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.menus.show({
+      anchor: {
+        type: "point",
+        x: 120,
+        y: 48,
+      },
+      kind: "context",
+      items: [
+        {
+          id: "rename",
+          label: "Rename",
+        },
+      ],
+    })).resolves.toEqual({
+      action: "selected",
+      itemId: "rename",
+    });
+
+    expect(capturedShowParams).toEqual({
+      anchor: {
+        type: "point",
+        x: 120,
+        y: 48,
+      },
+      kind: "context",
+      items: [
+        {
+          id: "rename",
+          label: "Rename",
+        },
+      ],
+    });
+
+    await session.menus.hide();
+    expect(hideCalled).toBe(true);
+    await session.disconnect();
+  });
 });

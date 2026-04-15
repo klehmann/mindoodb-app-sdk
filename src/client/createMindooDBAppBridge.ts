@@ -56,8 +56,11 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppDocumentApi,
   MindooDBAppLaunchContext,
+  MindooDBAppMenuApi,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSession,
+  MindooDBAppShowMenuInput,
+  MindooDBAppShowMenuResult,
   MindooDBAppScopedDocId,
   MindooDBAppViewDefinition,
   MindooDBAppViewEntry,
@@ -728,7 +731,17 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
  *   the port client.
  */
 class MindooDBAppSessionImpl implements MindooDBAppSession {
-  constructor(private readonly rpc: PortRpcClient) {}
+  public readonly menus: MindooDBAppMenuApi;
+
+  constructor(private readonly rpc: PortRpcClient) {
+    this.menus = {
+      show: async (input: MindooDBAppShowMenuInput) =>
+        await this.rpc.call<MindooDBAppShowMenuResult>("menus.show", input),
+      hide: async () => {
+        await this.rpc.call("menus.hide", {});
+      },
+    };
+  }
 
   /** Returns the launch context provided by the Administrator host. */
   async getLaunchContext(): Promise<MindooDBAppLaunchContext> {

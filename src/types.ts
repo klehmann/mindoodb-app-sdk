@@ -467,6 +467,108 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeThemeChangedMessage
   | MindooDBAppBridgeViewportChangedMessage;
 
+/** Placement hint for a host-rendered overlay menu. */
+export type MindooDBAppMenuPlacement =
+  | "auto"
+  | "bottom-start"
+  | "bottom-end"
+  | "top-start"
+  | "top-end"
+  | "right-start"
+  | "left-start";
+
+/** Semantic hint allowing Haven to tune menu behavior or styling. */
+export type MindooDBAppMenuKind = "context" | "dropdown" | "picker";
+
+/** Rectangle expressed in app-viewport coordinates. */
+export interface MindooDBAppMenuRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Point anchor used for context menus or other click-triggered overlays. */
+export interface MindooDBAppMenuPointAnchor {
+  type: "point";
+  x: number;
+  y: number;
+}
+
+/** Rectangle anchor used for toolbar menus or picker buttons. */
+export interface MindooDBAppMenuRectAnchor {
+  type: "rect";
+  rect: MindooDBAppMenuRect;
+}
+
+/** Anchor describing where the host should position the rendered menu. */
+export type MindooDBAppMenuAnchor =
+  | MindooDBAppMenuPointAnchor
+  | MindooDBAppMenuRectAnchor;
+
+/** Visual separator between menu groups. */
+export interface MindooDBAppMenuSeparatorItem {
+  separator: true;
+}
+
+/** One actionable entry in a structured host-rendered menu. */
+export interface MindooDBAppMenuCommandItem {
+  id: string;
+  label: string;
+  enabled?: boolean;
+  destructive?: boolean;
+  checked?: boolean;
+  items?: MindooDBAppMenuItem[];
+}
+
+/** Structured menu item transported over the app bridge. */
+export type MindooDBAppMenuItem =
+  | MindooDBAppMenuSeparatorItem
+  | MindooDBAppMenuCommandItem;
+
+/** Request payload for a host-rendered overlay menu. */
+export interface MindooDBAppShowMenuInput {
+  anchor: MindooDBAppMenuAnchor;
+  placement?: MindooDBAppMenuPlacement;
+  kind?: MindooDBAppMenuKind;
+  items: MindooDBAppMenuItem[];
+  dismissOnOutsideClick?: boolean;
+  dismissOnEscape?: boolean;
+  dismissOnViewportChange?: boolean;
+}
+
+/** Reason why a host-rendered menu was dismissed without a selection. */
+export type MindooDBAppMenuDismissReason =
+  | "outside_click"
+  | "escape"
+  | "app_blur"
+  | "viewport_change"
+  | "hide"
+  | "replaced";
+
+/** Successful selection result returned from a host-rendered menu. */
+export interface MindooDBAppMenuSelectionResult {
+  action: "selected";
+  itemId: string;
+}
+
+/** Dismissal result returned from a host-rendered menu. */
+export interface MindooDBAppMenuDismissedResult {
+  action: "dismissed";
+  reason: MindooDBAppMenuDismissReason;
+}
+
+/** Result returned when Haven closes or resolves a host-rendered menu. */
+export type MindooDBAppShowMenuResult =
+  | MindooDBAppMenuSelectionResult
+  | MindooDBAppMenuDismissedResult;
+
+/** Overlay menu operations exposed by the host session. */
+export interface MindooDBAppMenuApi {
+  show(input: MindooDBAppShowMenuInput): Promise<MindooDBAppShowMenuResult>;
+  hide(): Promise<void>;
+}
+
 /** Pull-based read stream for document attachments. */
 export interface MindooDBAppReadableAttachmentStream {
   read(): Promise<Uint8Array | null>;
@@ -654,6 +756,7 @@ export interface MindooDBAppSession {
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
   createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator>;
   openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator>;
+  menus: MindooDBAppMenuApi;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
   onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
   disconnect(): Promise<void>;
