@@ -107,9 +107,30 @@ session.onViewportChange((viewport) => {
 const db = await session.openDatabase(ctx.databases[0]!.id);
 const result = await db.documents.list({ limit: 25 });
 console.log("Documents:", result.items);
+
+// 5. Open a Haven-configured view
+//
+// A "view" is a pre-built, categorized query that a Haven administrator
+// attaches to your app (think: a pivot table over one or more databases).
+// `ctx.views` is the list of views that were made available at launch time.
+// `openViewNavigator()` returns a stateful "cursor" over the view's rows
+// that you can page through and navigate entry by entry.
+if (ctx.views[0]) {
+  const viewNav = await session.openViewNavigator(ctx.views[0].id);
+
+  // Move the cursor to the first row and read a batch of visible entries.
+  await viewNav.gotoFirst();
+  const page = await viewNav.entriesForward({ limit: 50 });
+  console.log("View rows:", page.entries);
+
+  // Always dispose when you are done -- this frees the host-side navigator.
+  await viewNav.dispose();
+}
 ```
 
 When Haven launches your app it injects a `mindoodbAppLaunchId` query parameter into the URL. `connect()` reads it automatically -- no manual wiring needed.
+
+> New to views? They are optional. If your app only needs raw document access you can stop at step 4. The full navigator API (paging, category expand/collapse, selection, child lookups, dynamic app-defined views via `session.createViewNavigator()`) is documented in the [Virtual Views](#virtual-views) section below, and the [`mindoodb-app-example`](https://github.com/klehmann/mindoodb-app-example) repo shows an end-to-end UI built on top of it.
 
 ## Core concepts
 
@@ -443,12 +464,13 @@ Haven includes a **built-in file viewer** that your app can open for common atta
 |---|---|
 | `image` | All common image formats (JPEG, PNG, GIF, WebP, SVG, ...) |
 | `pdf` | PDF documents |
-| `text` | Plain text, Markdown, CSV, JSON, XML, YAML, SVG, log files |
+| `markdown` | Markdown rendered to HTML (.md, .markdown, .mdown, .mkd, .mkdn) |
+| `text` | Plain text, CSV, JSON, XML, YAML, SVG, log files |
 | `docx` | Microsoft Word (.docx) |
 | `pptx` | Microsoft PowerPoint (.pptx) |
 | `spreadsheet` | Microsoft Excel (.xls, .xlsx, .xlsm, .xlsb) |
-| `video` | Video files with embedded player (streaming + seek support) |
-| `audio` | Audio files with embedded player (streaming + seek support) |
+| `video` | Video files with embedded player, streaming + seek (.mp4, .m4v, .webm, .ogv, .ogg, plus any `video/*`) |
+| `audio` | Audio files with embedded player, streaming + seek (.mp3, .m4a, .wav, .aac, .oga, plus any `audio/*`) |
 
 **Open the Haven preview dialog:**
 

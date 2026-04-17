@@ -190,7 +190,7 @@ export type MindooDBAppCapability =
   | "attachments"
   | "views";
 
-/** Metadata about the current app launch supplied by the Administrator host. */
+/** Metadata about the current app launch supplied by the Haven host. */
 export interface MindooDBAppLaunchContext {
   appId: string;
   appInstanceId: string;
@@ -223,6 +223,7 @@ export type MindooDBAppAttachmentPreviewMode =
   | "image"
   | "pdf"
   | "text"
+  | "markdown"
   | "docx"
   | "pptx"
   | "spreadsheet"

@@ -12,6 +12,19 @@ export function canPreviewAttachment(
 ): MindooDBAppAttachmentPreviewMode | null {
   const normalizedMimeType = mimeType.toLowerCase();
   const normalizedFileName = fileName.toLowerCase();
+  if (
+    normalizedMimeType === "text/markdown"
+    || normalizedMimeType === "text/x-markdown"
+    || normalizedMimeType === "application/markdown"
+    || normalizedMimeType === "application/x-markdown"
+    || normalizedFileName.endsWith(".md")
+    || normalizedFileName.endsWith(".markdown")
+    || normalizedFileName.endsWith(".mdown")
+    || normalizedFileName.endsWith(".mkd")
+    || normalizedFileName.endsWith(".mkdn")
+  ) {
+    return "markdown";
+  }
   if (normalizedMimeType.startsWith("image/")) {
     return "image";
   }
@@ -19,6 +32,24 @@ export function canPreviewAttachment(
     return "video";
   }
   if (normalizedMimeType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (
+    normalizedFileName.endsWith(".mp4")
+    || normalizedFileName.endsWith(".m4v")
+    || normalizedFileName.endsWith(".webm")
+    || normalizedFileName.endsWith(".ogv")
+    || normalizedFileName.endsWith(".ogg")
+  ) {
+    return "video";
+  }
+  if (
+    normalizedFileName.endsWith(".m4a")
+    || normalizedFileName.endsWith(".mp3")
+    || normalizedFileName.endsWith(".wav")
+    || normalizedFileName.endsWith(".aac")
+    || normalizedFileName.endsWith(".oga")
+  ) {
     return "audio";
   }
   if (normalizedMimeType === "application/pdf" || normalizedFileName.endsWith(".pdf")) {
@@ -55,7 +86,6 @@ export function canPreviewAttachment(
     || normalizedMimeType === "image/svg+xml"
     || normalizedFileName.endsWith(".json")
     || normalizedFileName.endsWith(".txt")
-    || normalizedFileName.endsWith(".md")
     || normalizedFileName.endsWith(".csv")
     || normalizedFileName.endsWith(".log")
     || normalizedFileName.endsWith(".xml")
