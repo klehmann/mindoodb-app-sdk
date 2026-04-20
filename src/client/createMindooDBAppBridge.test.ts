@@ -442,7 +442,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     ]));
   });
 
-  it("exposes host theme and viewport snapshots with live update events", async () => {
+  it("exposes host theme, viewport, and ui preferences with live update events", async () => {
     let bridgePort: MessagePort | null = null;
     const host = {
       postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
@@ -475,6 +475,9 @@ describe("createMindooDBAppBridge attachment streaming", () => {
                 viewport: {
                   width: 960,
                   height: 640,
+                },
+                uiPreferences: {
+                  iosMultitaskingOptimized: false,
                 },
                 user: {
                   id: "user-1",
@@ -519,11 +522,15 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const session = await createMindooDBAppBridge().connect();
     const themeChanges: Array<{ mode: string; preset: string }> = [];
     const viewportChanges: Array<{ width: number; height: number }> = [];
+    const uiPreferencesChanges: Array<{ iosMultitaskingOptimized: boolean }> = [];
     const unsubscribe = session.onThemeChange((theme) => {
       themeChanges.push(theme);
     });
     const unsubscribeViewport = session.onViewportChange((viewport) => {
       viewportChanges.push(viewport);
+    });
+    const unsubscribeUiPreferences = session.onUiPreferencesChange((uiPreferences) => {
+      uiPreferencesChanges.push(uiPreferences);
     });
 
     await expect(session.getLaunchContext()).resolves.toMatchObject({
@@ -535,6 +542,9 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       viewport: {
         width: 960,
         height: 640,
+      },
+      uiPreferences: {
+        iosMultitaskingOptimized: false,
       },
     });
 
@@ -560,6 +570,13 @@ describe("createMindooDBAppBridge attachment streaming", () => {
         height: 480,
       },
     });
+    hostPort.postMessage({
+      protocol: "mindoodb-app-bridge",
+      kind: "ui-preferences-changed",
+      uiPreferences: {
+        iosMultitaskingOptimized: true,
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(themeChanges).toEqual([{
@@ -570,9 +587,13 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       width: 720,
       height: 480,
     }]);
+    expect(uiPreferencesChanges).toEqual([{
+      iosMultitaskingOptimized: true,
+    }]);
 
     unsubscribe();
     unsubscribeViewport();
+    unsubscribeUiPreferences();
     await session.disconnect();
   });
 

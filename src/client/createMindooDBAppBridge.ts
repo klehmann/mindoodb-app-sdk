@@ -47,6 +47,7 @@ import type {
   MindooDBAppBridgeConnectedMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeThemeChangedMessage,
+  MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
@@ -108,6 +109,11 @@ function isThemeChangedMessage(message: MindooDBAppBridgePortMessage): message i
 /** Narrows a port message to a host viewport change event. */
 function isViewportChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeViewportChangedMessage {
   return message.kind === "viewport-changed";
+}
+
+/** Narrows a port message to a host UI preferences change event. */
+function isUiPreferencesChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeUiPreferencesChangedMessage {
+  return message.kind === "ui-preferences-changed";
 }
 
 /** Converts a stream error payload into a normal `Error`. */
@@ -725,7 +731,8 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
  *   and attachment operations.
  * - `createViewNavigator(input)` / `openViewNavigator(viewId)` -- allocate
  *   a host-side navigator and return a `MindooDBAppViewNavigatorImpl`.
- * - `onThemeChange` / `onViewportChange` -- subscribe to push events from
+ * - `onThemeChange` / `onViewportChange` / `onUiPreferencesChange` --
+ *   subscribe to push events from
  *   the host.
  * - `disconnect()` -- sends a disconnect RPC, then unconditionally disposes
  *   the port client.
@@ -796,6 +803,15 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return this.rpc.addMessageListener((message) => {
       if (isViewportChangedMessage(message)) {
         listener(message.viewport);
+      }
+    });
+  }
+
+  /** Subscribe to host-pushed embedded UI preference changes. */
+  onUiPreferencesChange(listener: (uiPreferences: MindooDBAppLaunchContext["uiPreferences"]) => void) {
+    return this.rpc.addMessageListener((message) => {
+      if (isUiPreferencesChangedMessage(message)) {
+        listener(message.uiPreferences);
       }
     });
   }

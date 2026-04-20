@@ -7,6 +7,7 @@ import type {
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeRpcRequest,
   MindooDBAppBridgeThemeChangedMessage,
+  MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
@@ -35,6 +36,7 @@ import type {
   MindooDBAppViewNavigatorRangeQuery,
   MindooDBAppViewNavigatorSelectionState,
   MindooDBAppViewport,
+  MindooDBAppUiPreferences,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
 
@@ -73,6 +75,7 @@ function mergeLaunchContext(
       ...current,
       theme: { ...current.theme },
       viewport: current.viewport ? { ...current.viewport } : null,
+      uiPreferences: { ...current.uiPreferences },
       user: { ...current.user },
       launchParameters: { ...current.launchParameters },
       databases: current.databases.map((database) => ({
@@ -108,6 +111,9 @@ function mergeLaunchContext(
     viewport: patch.viewport === undefined
       ? (current.viewport ? { ...current.viewport } : null)
       : (patch.viewport ? { ...patch.viewport } : null),
+    uiPreferences: patch.uiPreferences
+      ? { ...current.uiPreferences, ...patch.uiPreferences }
+      : { ...current.uiPreferences },
     user: patch.user ? { ...current.user, ...patch.user } : { ...current.user },
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
@@ -179,6 +185,9 @@ function createDefaultLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): 
     viewport: {
       width: 1024,
       height: 768,
+    },
+    uiPreferences: {
+      iosMultitaskingOptimized: false,
     },
     user: {
       id: "user-1",
@@ -640,12 +649,14 @@ type MockSessionState = {
   session: MindooDBAppSession;
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
   emitViewportChange: (viewport: MindooDBAppViewport) => void;
+  emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
 };
 
 function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {}): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
+  const uiPreferencesListeners = new Set<(uiPreferences: MindooDBAppUiPreferences) => void>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
@@ -758,6 +769,12 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
         viewportListeners.delete(listener);
       };
     },
+    onUiPreferencesChange(listener) {
+      uiPreferencesListeners.add(listener);
+      return () => {
+        uiPreferencesListeners.delete(listener);
+      };
+    },
     async disconnect() {
       await options.onDisconnect?.();
     },
@@ -803,6 +820,10 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       launchContext = mergeLaunchContext(launchContext, { viewport });
       viewportListeners.forEach((listener) => listener({ ...viewport }));
     },
+    emitUiPreferencesChange(uiPreferences) {
+      launchContext = mergeLaunchContext(launchContext, { uiPreferences });
+      uiPreferencesListeners.forEach((listener) => listener({ ...launchContext.uiPreferences }));
+    },
   };
 }
 
@@ -826,6 +847,7 @@ export interface MockMindooDBAppSessionController {
   setDatabases(definitions: MockMindooDBAppDatabaseDefinition[]): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
+  emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
 }
 
 export function createMockMindooDBAppSession(
@@ -841,6 +863,7 @@ export function createMockMindooDBAppSession(
     setDatabases: state.setDatabases,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
+    emitUiPreferencesChange: state.emitUiPreferencesChange,
   };
 }
 
@@ -882,6 +905,7 @@ export interface FakeBridgeHostController {
   dispose(): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
+  emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   postPortMessage(message: MindooDBAppBridgePortMessage, transfer?: Transferable[]): void;
   setRequestHandler(method: string, handler: FakeBridgeRequestHandler): void;
   clearRequestHandler(method: string): void;
@@ -1413,6 +1437,15 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         protocol: PROTOCOL,
         kind: "viewport-changed",
         viewport,
+      };
+      connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    emitUiPreferencesChange(uiPreferences) {
+      state.emitUiPreferencesChange(uiPreferences);
+      const payload: MindooDBAppBridgeUiPreferencesChangedMessage = {
+        protocol: PROTOCOL,
+        kind: "ui-preferences-changed",
+        uiPreferences,
       };
       connectedPorts.forEach((port) => port.postMessage(payload));
     },

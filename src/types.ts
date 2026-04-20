@@ -72,6 +72,11 @@ export interface MindooDBAppViewport {
   height: number;
 }
 
+/** Host-controlled UI preferences exposed to embedded apps. */
+export interface MindooDBAppUiPreferences {
+  iosMultitaskingOptimized: boolean;
+}
+
 /** Saved categorization mode for Haven-managed view mappings delivered at launch time. */
 export type MindooDBAppConfiguredViewCategorizationStyle = "document_then_category" | "category_then_document";
 
@@ -199,6 +204,7 @@ export interface MindooDBAppLaunchContext {
   runtime: MindooDBAppRuntime;
   theme: MindooDBAppHostTheme;
   viewport: MindooDBAppViewport | null;
+  uiPreferences: MindooDBAppUiPreferences;
   tenantId?: string;
   preferredDatabaseId?: string;
   user: {
@@ -461,12 +467,20 @@ export interface MindooDBAppBridgeViewportChangedMessage {
   viewport: MindooDBAppViewport;
 }
 
+/** Host-pushed event emitted when host-controlled UI preferences change. */
+export interface MindooDBAppBridgeUiPreferencesChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "ui-preferences-changed";
+  uiPreferences: MindooDBAppUiPreferences;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
   | MindooDBAppBridgeStreamMessage
   | MindooDBAppBridgeThemeChangedMessage
-  | MindooDBAppBridgeViewportChangedMessage;
+  | MindooDBAppBridgeViewportChangedMessage
+  | MindooDBAppBridgeUiPreferencesChangedMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -760,6 +774,7 @@ export interface MindooDBAppSession {
   menus: MindooDBAppMenuApi;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
   onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
+  onUiPreferencesChange(listener: (uiPreferences: MindooDBAppUiPreferences) => void): () => void;
   disconnect(): Promise<void>;
 }
 
