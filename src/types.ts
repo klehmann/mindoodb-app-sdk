@@ -316,6 +316,23 @@ export interface MindooDBAppDocumentHeadCursorResult {
   cursor: string | null;
 }
 
+/** Opaque cursor representing the DB state reflected in a bridge-built view snapshot. */
+export interface MindooDBAppViewCursorResult {
+  viewCursor: string | null;
+}
+
+/** Lightweight document row returned by multi-source view-cursor delta queries. */
+export interface MindooDBAppScopedDocumentSummary extends MindooDBAppDocumentSummary {
+  origin: string;
+  databaseId: string;
+}
+
+/** Result returned when querying document changes since a view snapshot cursor. */
+export interface MindooDBAppViewCursorDocumentListResult {
+  items: MindooDBAppScopedDocumentSummary[];
+  nextCursor: string | null;
+}
+
 /** Payload used when creating a new document. */
 export interface MindooDBAppCreateDocumentInput {
   data: Record<string, unknown>;
@@ -700,7 +717,8 @@ export interface MindooDBAppViewNavigatorExpansionState {
 /** Stateful view navigator that closely mirrors the core VirtualViewNavigator. */
 export interface MindooDBAppViewNavigator {
   getDefinition(): Promise<MindooDBAppViewDefinition>;
-  refresh(): Promise<void>;
+  getViewCursor(): Promise<string | null>;
+  refresh(): Promise<string | null>;
   getCurrentEntry(): Promise<MindooDBAppViewEntry | null>;
   gotoFirst(): Promise<boolean>;
   gotoLast(): Promise<boolean>;
@@ -775,6 +793,7 @@ export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
+  listDocumentsSinceViewCursor(cursor: string | null): Promise<MindooDBAppViewCursorDocumentListResult>;
   createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator>;
   openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator>;
   menus: MindooDBAppMenuApi;

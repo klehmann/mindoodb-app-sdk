@@ -255,7 +255,16 @@ describe("createMindooDBAppBridge attachment streaming", () => {
               protocol: "mindoodb-app-bridge",
               kind: "success",
               id: message.id,
-              result: { navigatorId: "navigator-1" },
+              result: { navigatorId: "navigator-1", viewCursor: "view-cursor-0" },
+            });
+            return;
+          }
+          if (message.method === "viewNavigators.refresh") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { viewCursor: "view-cursor-1" },
             });
             return;
           }
@@ -401,6 +410,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
         defaultExpand: "expanded",
       },
     });
+    expect(await navigator.getViewCursor()).toBe("view-cursor-0");
 
     const page = await navigator.entriesForward({ limit: 25 });
     const moved = await navigator.gotoFirst();
@@ -414,6 +424,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const expansion = await navigator.getExpansionState();
     await navigator.expandAll();
     await navigator.setExpansionState({ expandAllByDefault: true, expandLevel: 0, entryKeys: [] });
+    await expect(navigator.refresh()).resolves.toBe("view-cursor-1");
     await navigator.dispose();
 
     expect(page.entries).toHaveLength(1);
@@ -438,6 +449,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       "viewNavigators.expansion.get",
       "viewNavigators.expansion.expandAll",
       "viewNavigators.expansion.set",
+      "viewNavigators.refresh",
       "viewNavigators.dispose",
     ]));
   });

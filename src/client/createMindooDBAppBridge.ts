@@ -63,6 +63,7 @@ import type {
   MindooDBAppShowMenuInput,
   MindooDBAppShowMenuResult,
   MindooDBAppScopedDocId,
+  MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewDefinition,
   MindooDBAppViewEntry,
   MindooDBAppViewNavigator,
@@ -230,6 +231,7 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
   constructor(
     private readonly rpc: PortRpcClient,
     private readonly navigatorId: string,
+    private viewCursor: string | null,
   ) {}
 
   /** Shorthand: call an RPC method with the navigator ID automatically injected. */
@@ -244,8 +246,14 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     return await this.call("viewNavigators.getDefinition");
   }
 
-  async refresh(): Promise<void> {
-    await this.call("viewNavigators.refresh");
+  async getViewCursor(): Promise<string | null> {
+    return this.viewCursor;
+  }
+
+  async refresh(): Promise<string | null> {
+    const result = await this.call<{ viewCursor: string | null }>("viewNavigators.refresh");
+    this.viewCursor = result.viewCursor;
+    return this.viewCursor;
   }
 
   async getCurrentEntry(): Promise<MindooDBAppViewEntry | null> {
@@ -769,6 +777,10 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
   }
 
+  async listDocumentsSinceViewCursor(cursor: string | null): Promise<MindooDBAppViewCursorDocumentListResult> {
+    return await this.rpc.call("session.listDocumentsSinceViewCursor", { cursor });
+  }
+
   /**
    * Create a navigator from an ad-hoc view definition and one or more database bindings.
    *
@@ -777,8 +789,8 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
    * that all subsequent navigator RPCs reference.
    */
   async createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator> {
-    const result = await this.rpc.call<{ navigatorId: string }>("session.createViewNavigator", input);
-    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId);
+    const result = await this.rpc.call<{ navigatorId: string; viewCursor: string | null }>("session.createViewNavigator", input);
+    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId, result.viewCursor);
   }
 
   /**
@@ -788,8 +800,8 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
    * host resolves the full view definition and database bindings automatically.
    */
   async openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator> {
-    const result = await this.rpc.call<{ navigatorId: string }>("session.openViewNavigator", { viewId, options: options ?? {} });
-    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId);
+    const result = await this.rpc.call<{ navigatorId: string; viewCursor: string | null }>("session.openViewNavigator", { viewId, options: options ?? {} });
+    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId, result.viewCursor);
   }
 
   /** Subscribe to host-pushed theme changes (dark/light mode, color tokens). */

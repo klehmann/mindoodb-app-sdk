@@ -24,6 +24,7 @@ import type {
   MindooDBAppMenuApi,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppScopedDocId,
+  MindooDBAppScopedDocumentSummary,
   MindooDBAppSession,
   MindooDBAppShowMenuInput,
   MindooDBAppShowMenuResult,
@@ -36,6 +37,7 @@ import type {
   MindooDBAppViewNavigatorPageResult,
   MindooDBAppViewNavigatorRangeQuery,
   MindooDBAppViewNavigatorSelectionState,
+  MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewport,
   MindooDBAppUiPreferences,
   MindooDBAppWritableAttachmentStream,
@@ -288,11 +290,17 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
     nextPosition: null,
     hasMore: false,
   };
+  let viewCursor: string | null = null;
   return {
     async getDefinition() {
       return definition;
     },
-    async refresh() {},
+    async getViewCursor() {
+      return viewCursor;
+    },
+    async refresh() {
+      return viewCursor;
+    },
     async getCurrentEntry() {
       return null;
     },
@@ -730,6 +738,12 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
         throw new Error(`Unknown test database: ${databaseId}`);
       }
       return database;
+    },
+    async listDocumentsSinceViewCursor() {
+      return {
+        items: [] as MindooDBAppScopedDocumentSummary[],
+        nextCursor: null,
+      } satisfies MindooDBAppViewCursorDocumentListResult;
     },
     async createViewNavigator(input) {
       const firstDatabaseId = input.databaseIds[0];
