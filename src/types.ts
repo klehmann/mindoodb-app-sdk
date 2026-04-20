@@ -311,6 +311,11 @@ export interface MindooDBAppDocumentListResult {
   nextCursor: string | null;
 }
 
+/** Latest known changefeed cursor for a database. */
+export interface MindooDBAppDocumentHeadCursorResult {
+  cursor: string | null;
+}
+
 /** Payload used when creating a new document. */
 export interface MindooDBAppCreateDocumentInput {
   data: Record<string, unknown>;
@@ -600,6 +605,7 @@ export interface MindooDBAppWritableAttachmentStream {
 /** Document operations exposed by an opened database handle. */
 export interface MindooDBAppDocumentApi {
   list(query?: MindooDBAppDocumentListQuery): Promise<MindooDBAppDocumentListResult>;
+  getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult>;
   get(docId: string): Promise<MindooDBAppDocument | null>;
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
   update(docId: string, patch: MindooDBAppUpdateDocumentInput): Promise<MindooDBAppDocument>;

@@ -14,6 +14,7 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppDocument,
   MindooDBAppDocumentApi,
+  MindooDBAppDocumentHeadCursorResult,
   MindooDBAppDocumentHistoryEntry,
   MindooDBAppDocumentListQuery,
   MindooDBAppDocumentListResult,
@@ -513,6 +514,11 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       return {
         items: page,
         nextCursor,
+      };
+    },
+    async getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult> {
+      return {
+        cursor: String(storedDocuments.size),
       };
     },
     async get(_docId: string): Promise<MindooDBAppDocument | null> {
@@ -1107,6 +1113,8 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return { ok: true };
       case "documents.list":
         return await state.getDatabase(String(params.databaseId)).documents.list(params.query as MindooDBAppDocumentListQuery | undefined);
+      case "documents.getHeadCursor":
+        return await state.getDatabase(String(params.databaseId)).documents.getHeadCursor();
       case "documents.get":
         return await state.getDatabase(String(params.databaseId)).documents.get(String(params.docId));
       case "documents.create":

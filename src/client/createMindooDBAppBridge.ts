@@ -644,6 +644,9 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         databaseId: this.databaseId,
         query: query ?? {},
       }),
+      getHeadCursor: async () => await this.rpc.call("documents.getHeadCursor", {
+        databaseId: this.databaseId,
+      }),
       get: async (docId) => await this.rpc.call("documents.get", {
         databaseId: this.databaseId,
         docId,
