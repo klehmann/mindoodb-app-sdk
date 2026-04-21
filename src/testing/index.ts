@@ -40,6 +40,7 @@ import type {
   MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewport,
   MindooDBAppUiPreferences,
+  MindooDBAppUpdateDocumentInput,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
 
@@ -67,6 +68,20 @@ function createBridgeErrorPayload(error: unknown, fallbackCode = "bridge-error")
 
 function cloneBytes(chunk: Uint8Array) {
   return new Uint8Array(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
+}
+
+function applyDocumentUpdatePatch(
+  current: Record<string, unknown>,
+  patch: MindooDBAppUpdateDocumentInput,
+) {
+  const next = {
+    ...structuredClone(current),
+    ...(patch.set ? structuredClone(patch.set) : {}),
+  };
+  for (const key of patch.unset ?? []) {
+    Reflect.deleteProperty(next, key);
+  }
+  return next;
 }
 
 function mergeLaunchContext(
@@ -546,7 +561,7 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       const createdAt = new Date().toISOString();
       const created = {
         id: `doc-${createCounter}`,
-        data: { ...input.data },
+        data: { ...input.set },
         attachments: [],
         updatedAt: createdAt,
       };
@@ -565,7 +580,7 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       const existing = storedDocuments.get(docId);
       const updated = {
         id: docId,
-        data: { ...patch.data },
+        data: applyDocumentUpdatePatch(existing?.data ?? {}, patch),
         attachments: existing?.attachments ? structuredClone(existing.attachments) : [],
         updatedAt,
       };
@@ -1133,13 +1148,13 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return await state.getDatabase(String(params.databaseId)).documents.get(String(params.docId));
       case "documents.create":
         return await state.getDatabase(String(params.databaseId)).documents.create(params.input as {
-          data: Record<string, unknown>;
+          set: Record<string, unknown>;
           decryptionKeyId?: string;
         });
       case "documents.update":
         return await state.getDatabase(String(params.databaseId)).documents.update(
           String(params.docId),
-          params.patch as { data: Record<string, unknown> },
+          params.patch as MindooDBAppUpdateDocumentInput,
         );
       case "documents.delete":
         return await state.getDatabase(String(params.databaseId)).documents.delete(String(params.docId));

@@ -72,7 +72,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const session = await createMindooDBAppBridge().connect();
     const database = await session.openDatabase("main");
     await expect(database.documents.create({
-      data: {
+      set: {
         title: "Secret",
       },
       decryptionKeyId: "payroll",
@@ -85,7 +85,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
 
     expect(createInput).toEqual({
-      data: {
+      set: {
         title: "Secret",
       },
       decryptionKeyId: "payroll",

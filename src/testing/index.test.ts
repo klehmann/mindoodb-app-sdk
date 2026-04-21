@@ -42,6 +42,42 @@ describe("mindoodb-app-sdk/testing", () => {
     }]);
   });
 
+  it("applies top-level set and unset operations in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        title: "Original",
+        keep: true,
+        removeMe: "legacy",
+      },
+    });
+    await expect(database.documents.update(created.id, {
+      set: {
+        title: "Updated",
+      },
+      unset: ["removeMe"],
+    })).resolves.toEqual({
+      id: created.id,
+      data: {
+        title: "Updated",
+        keep: true,
+      },
+      attachments: [],
+      updatedAt: expect.any(String),
+    });
+  });
+
   it("connects through the real bridge using the fake host harness", async () => {
     const host = createFakeBridgeHost({
       launchContext: {

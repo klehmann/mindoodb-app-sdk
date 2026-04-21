@@ -333,16 +333,30 @@ export interface MindooDBAppViewCursorDocumentListResult {
   nextCursor: string | null;
 }
 
-/** Payload used when creating a new document. */
+/**
+ * Payload used when creating a new document.
+ *
+ * `set` becomes the initial top-level document state, mirroring the update
+ * API's field-assignment language while still creating a brand-new document.
+ */
 export interface MindooDBAppCreateDocumentInput {
-  data: Record<string, unknown>;
+  set: Record<string, unknown>;
   /** Optional named document key. Defaults to `"default"` when omitted. */
   decryptionKeyId?: string;
 }
 
-/** Patch payload used when updating an existing document. */
+/**
+ * Sparse patch payload used when updating an existing document.
+ *
+ * Prefer targeted `set` / `unset` operations over whole-document rewrites so
+ * MindooDB can preserve more meaningful change history and Automerge can merge
+ * smaller, more intentional updates.
+ */
 export interface MindooDBAppUpdateDocumentInput {
-  data: Record<string, unknown>;
+  /** Top-level fields to assign on the document. */
+  set?: Record<string, unknown>;
+  /** Top-level fields to remove from the document entirely. */
+  unset?: string[];
 }
 
 /** Query used for history lookups at a specific timestamp. */

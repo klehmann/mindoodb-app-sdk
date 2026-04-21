@@ -321,13 +321,14 @@ const doc = await db.documents.get(docId);
 
 // Create (optionally with a named document key)
 const created = await db.documents.create({
-  data: { title: "Meeting notes", content: "..." },
+  set: { title: "Meeting notes", content: "..." },
   decryptionKeyId: "team-key",  // omit to use "default"
 });
 
 // Update
 const updated = await db.documents.update(docId, {
-  data: { title: "Updated title" },
+  set: { title: "Updated title" },
+  unset: ["legacyField"],
 });
 
 // Delete
@@ -347,6 +348,8 @@ await db.documents.delete(docId);
 | `filter?: Record<string, unknown>` | Simple equality filter applied to document data when `metadataOnly` is `false` |
 
 `nextCursor` is the latest checkpoint reached by the page. Persist it after each successful call when you are building your own index or sync loop. If there were no changes after the supplied cursor, `nextCursor` is `null`.
+
+`documents.update()` accepts top-level `set` and `unset` operations. Prefer sending small, intentional field-level changes instead of rewriting whole documents when only a few fields changed. This keeps MindooDB change tracking more meaningful and helps Automerge produce cleaner merge results.
 
 When Haven can resolve the signing identity from the tenant directory, list items may also include `identityLabel` and `publicKeyFingerprint` for the latest visible change. Apps can use this to show who last touched a document without loading the full revision history first.
 
@@ -730,6 +733,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>` |
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
+
+For `update(docId, patch)`, use `{ set?: Record<string, unknown>; unset?: string[] }`. Both operations are shallow and apply to top-level document fields only.
 
 ### MindooDBAppAttachmentApi
 
