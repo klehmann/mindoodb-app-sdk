@@ -2,4 +2,6 @@ export * from "./types";
 export { canPreviewAttachment } from "./attachmentPreview";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
+export { createMindooDBTextBuffer, MindooDBTextBuffer } from "./textBuffer";
+export type { CreateMindooDBTextBufferOptions, MindooDBTextBufferFlushResult } from "./textBuffer";
 export { createViewLanguage } from "./viewLanguage";

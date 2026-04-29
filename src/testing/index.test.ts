@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMindooDBAppBridge } from "../client/createMindooDBAppBridge";
+import { createMindooDBTextBuffer } from "../textBuffer";
 import {
   createFakeBridgeHost,
   createMockMindooDBAppBridge,
@@ -42,6 +43,44 @@ describe("mindoodb-app-sdk/testing", () => {
     }]);
   });
 
+  it("honors caller-provided document ids and is idempotent in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      id: "AppSettings",
+      set: {
+        title: "Initial",
+      },
+    });
+    expect(created.id).toBe("AppSettings");
+
+    const reCreated = await database.documents.create({
+      id: "AppSettings",
+      set: {
+        title: "Should not overwrite",
+      },
+    });
+    expect(reCreated.id).toBe("AppSettings");
+    expect(reCreated.data).toEqual({ title: "Initial" });
+
+    const fetched = await database.documents.get("AppSettings");
+    expect(fetched).toMatchObject({
+      id: "AppSettings",
+      data: { title: "Initial" },
+      attachments: [],
+    });
+  });
+
   it("applies top-level set and unset operations in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
@@ -73,8 +112,49 @@ describe("mindoodb-app-sdk/testing", () => {
         title: "Updated",
         keep: true,
       },
+      heads: expect.any(Array),
       attachments: [],
       updatedAt: expect.any(String),
+    });
+  });
+
+  it("flushes buffered text edits through the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        body: "Hello world",
+      },
+    });
+    const buffer = createMindooDBTextBuffer({
+      database,
+      document: created,
+      path: ["body"],
+    });
+
+    buffer.replaceText("Hello collaborative world");
+    expect(buffer.value).toBe("Hello collaborative world");
+    expect(buffer.dirty).toBe(true);
+
+    const result = await buffer.flush();
+    expect(result.value).toBe("Hello collaborative world");
+    expect(result.reconciled).toBe(false);
+    expect(buffer.dirty).toBe(false);
+    await expect(database.documents.get(created.id)).resolves.toMatchObject({
+      data: {
+        body: "Hello collaborative world",
+      },
+      heads: expect.any(Array),
     });
   });
 

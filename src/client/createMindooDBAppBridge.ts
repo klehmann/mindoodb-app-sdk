@@ -45,6 +45,7 @@ import type {
   MindooDBAppBridgeConnectMessage,
   MindooDBAppBridgeConnectOptions,
   MindooDBAppBridgeConnectedMessage,
+  MindooDBAppBridgeHandshakeErrorMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
@@ -140,7 +141,7 @@ function resolveLaunchId(options: MindooDBAppBridgeConnectOptions | undefined) {
   return launchId;
 }
 
-/** Finds the Administrator window hosting the current app runtime. */
+/** Finds the Haven window hosting the current app runtime. */
 function resolveTargetWindow() {
   if (typeof window === "undefined") {
     throw new Error("The MindooDB app bridge is only available in the browser.");
@@ -151,15 +152,16 @@ function resolveTargetWindow() {
   if (window.opener) {
     return window.opener;
   }
-  throw new Error("Could not find a MindooDB Administrator host window.");
+  throw new Error("Could not find a MindooDB Haven host window.");
 }
 
 /**
  * Perform the initial `postMessage` handshake with the Haven host.
  *
  * Creates a `MessageChannel`, sends port2 to the host via the connect
- * message, and listens on port1 for the `mindoodb-app:connected` reply.
- * Rejects if the host does not respond within `connectTimeoutMs`.
+ * message, and listens on port1 for either `mindoodb-app:connected` or a
+ * host-side handshake error. Rejects if the host does not respond within
+ * `connectTimeoutMs`.
  */
 function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefined, launchId: string) {
   const targetWindow = resolveTargetWindow();
@@ -178,18 +180,29 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
     };
 
     const handleMessage = (event: MessageEvent<unknown>) => {
-      const payload = event.data as MindooDBAppBridgeConnectedMessage | undefined;
-      if (!payload || payload.protocol !== PROTOCOL || payload.type !== "mindoodb-app:connected") {
+      const payload = event.data as Partial<MindooDBAppBridgeConnectedMessage | MindooDBAppBridgeHandshakeErrorMessage> | undefined;
+      if (!payload || payload.protocol !== PROTOCOL) {
         return;
       }
-      cleanup();
-      resolve(channel.port1);
+      if (payload.type === "mindoodb-app:connected") {
+        cleanup();
+        resolve(channel.port1);
+        return;
+      }
+      if (payload.type === "mindoodb-app:error") {
+        cleanup();
+        channel.port1.close();
+        const message = typeof payload.error === "string" && payload.error.trim()
+          ? payload.error
+          : "MindooDB Haven bridge connection failed.";
+        reject(new Error(message));
+      }
     };
 
     timeoutId = window.setTimeout(() => {
       cleanup();
       channel.port1.close();
-      reject(new Error(`Timed out while connecting to the MindooDB Administrator bridge for launch ${launchId}.`));
+      reject(new Error(`Timed out while connecting to the MindooDB Haven bridge for launch ${launchId}.`));
     }, timeoutMs);
 
     channel.port1.addEventListener("message", handleMessage as EventListener);
@@ -672,6 +685,10 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         databaseId: this.databaseId,
         docId,
       }),
+      undelete: async (docId) => await this.rpc.call("documents.undelete", {
+        databaseId: this.databaseId,
+        docId,
+      }),
       listHistory: async (docId) => await this.rpc.call("documents.history.list", {
         databaseId: this.databaseId,
         docId,
@@ -681,23 +698,32 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         docId,
         timestamp,
       }),
+      getAtRevision: async (docId, revisionId) => await this.rpc.call("documents.history.getAtRevision", {
+        databaseId: this.databaseId,
+        docId,
+        revisionId,
+      }),
     };
 
     this.attachments = {
-      list: async (docId) => await this.rpc.call("attachments.list", {
+      list: async (docId, options) => await this.rpc.call("attachments.list", {
         databaseId: this.databaseId,
         docId,
+        timestamp: options?.timestamp,
+        revisionId: options?.revisionId,
       }),
       remove: async (docId, attachmentName) => await this.rpc.call("attachments.remove", {
         databaseId: this.databaseId,
         docId,
         attachmentName,
       }),
-      openReadStream: async (docId, attachmentName) => {
+      openReadStream: async (docId, attachmentName, options) => {
         const result = await this.rpc.call<MindooDBAppBridgeStreamOpenResult>("attachments.openReadStream", {
           databaseId: this.databaseId,
           docId,
           attachmentName,
+          timestamp: options?.timestamp,
+          revisionId: options?.revisionId,
         });
         return new MindooDBAppReadableAttachmentStreamImpl(this.rpc, result.streamId);
       },
@@ -715,12 +741,14 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         docId,
         attachmentName,
         timestamp: options?.timestamp,
+        revisionId: options?.revisionId,
       }),
       openPreview: async (docId, attachmentName, options) => await this.rpc.call("attachments.openPreview", {
         databaseId: this.databaseId,
         docId,
         attachmentName,
         timestamp: options?.timestamp,
+        revisionId: options?.revisionId,
       }),
     };
   }
@@ -761,7 +789,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     };
   }
 
-  /** Returns the launch context provided by the Administrator host. */
+  /** Returns the launch context provided by the Haven host. */
   async getLaunchContext(): Promise<MindooDBAppLaunchContext> {
     return await this.rpc.call("session.getLaunchContext", {});
   }
@@ -845,7 +873,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
  * Creates the browser-side bridge entry point used by MindooDB apps.
  *
  * The returned object performs the initial postMessage handshake with the
- * Administrator host and exposes a session with document, view, and attachment
+ * Haven host and exposes a session with document, view, and attachment
  * APIs over a dedicated `MessagePort`.
  */
 export function createMindooDBAppBridge(): MindooDBAppBridge {

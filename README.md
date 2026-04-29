@@ -319,21 +319,55 @@ const window = await db.documents.list({
 // Read
 const doc = await db.documents.get(docId);
 
-// Create (optionally with a named document key)
+// Create (MindooDB generates a UUID7 id; optionally use a named document key)
 const created = await db.documents.create({
   set: { title: "Meeting notes", content: "..." },
   decryptionKeyId: "team-key",  // omit to use "default"
 });
 
-// Update
+// Create with a caller-provided id (e.g. a known well-known document the app
+// always loads on launch, or migrating an id from another system).
+const settings = await db.documents.create({
+  id: "AppSettings",
+  set: { theme: "dark" },
+});
+// Subsequent calls with the same id return the existing document and DO NOT
+// overwrite `set`, so `documents.create({ id })` is safe to call on every app
+// launch as a "create-if-missing" primitive. Custom ids must match
+// /^[A-Za-z][A-Za-z0-9_]*$/ (first char must be a letter, subsequent chars
+// may be letters, digits, or `_`). Documents created with the same custom id
+// on different replicas merge correctly when synced.
+
+// Update top-level fields
 const updated = await db.documents.update(docId, {
   set: { title: "Updated title" },
   unset: ["legacyField"],
 });
 
+// Update with a granular text patch (see "Collaborative text editing" below).
+// `baseHeads` is the document version this edit was authored against; Haven
+// merges these splices with any concurrent changes since `baseHeads`.
+const merged = await db.documents.update(docId, {
+  text: [
+    {
+      path: ["body"],
+      baseHeads: doc!.heads,
+      edits: [
+        { index: 0,  deleteCount: 0, insert: "Hello, " },
+        { index: 12, deleteCount: 5, insert: "team"     },
+      ],
+    },
+  ],
+});
+
 // Delete
 await db.documents.delete(docId);
+
+// Undelete (resurrect a deleted document)
+await db.documents.undelete(docId);
 ```
+
+Every `MindooDBAppDocument` snapshot also exposes a `heads?: string[]` field. Those heads identify the document's current Automerge version and are the value you pass to `baseHeads` when issuing the next text patch. After Haven applies and merges your patch, the returned document carries the new `heads` you should use for the following edit cycle.
 
 `documents.list()` is backed by Haven's internal changefeed, not by a positional offset. The query object supports:
 
@@ -349,23 +383,186 @@ await db.documents.delete(docId);
 
 `nextCursor` is the latest checkpoint reached by the page. Persist it after each successful call when you are building your own index or sync loop. If there were no changes after the supplied cursor, `nextCursor` is `null`.
 
-`documents.update()` accepts top-level `set` and `unset` operations. Prefer sending small, intentional field-level changes instead of rewriting whole documents when only a few fields changed. This keeps MindooDB change tracking more meaningful and helps Automerge produce cleaner merge results.
+`documents.update()` accepts three independent operations on the same call:
+
+- `set` -- assign top-level fields (shallow JSON merge).
+- `unset` -- remove top-level fields entirely.
+- `text` -- one or more **granular text patches** applied to specific JSON paths. Each patch carries the `baseHeads` version it was authored against and is merged on the Haven side with any concurrent changes that arrived since. This is the recommended way to edit collaborative text fields like a markdown body. See [Collaborative text editing](#collaborative-text-editing) below.
+
+Prefer sending small, intentional field-level changes instead of rewriting whole documents when only a few fields changed. This keeps MindooDB change tracking more meaningful and helps Automerge produce cleaner merge results.
 
 When Haven can resolve the signing identity from the tenant directory, list items may also include `identityLabel` and `publicKeyFingerprint` for the latest visible change. Apps can use this to show who last touched a document without loading the full revision history first.
 
 ### Document history
 
-When the `history` capability is granted, you can walk the full revision timeline of any document:
+When the `history` capability is granted, you can walk the document revision list and load historical snapshots. Prefer `revisionId` for follow-up reads: it is a stable, DAG-backed identifier for the exact document revision, while timestamps are mainly useful for display and backwards-compatible point-in-time lookups.
 
 ```ts
 // List all revisions
 const history = await db.documents.listHistory(docId);
-// Each entry: { timestamp, publicKey, identityLabel?, isDeleted, isCurrent, summary? }
+// Each entry:
+// {
+//   revisionId,
+//   timestamp,
+//   heads?,
+//   publicKey,
+//   identityLabel?,
+//   isDeleted,
+//   isCurrent,
+//   summary?
+// }
 
-// Load the document state at a specific point in time
-const snapshot = await db.documents.getAtTimestamp(docId, history[0]!.timestamp);
-// { id, timestamp, state: "exists" | "deleted" | "missing", data }
+// Load the document state at an exact DAG revision
+const snapshot = await db.documents.getAtRevision(docId, history[0]!.revisionId);
+// {
+//   id,
+//   revisionId,
+//   timestamp,
+//   heads?,
+//   state: "exists" | "deleted" | "missing",
+//   data,
+//   attachments?,
+//   attachmentSnapshotRevisionId?
+// }
+
+// Timestamp lookup is still available when all you have is a timestamp.
+const pointInTime = await db.documents.getAtTimestamp(docId, history[0]!.timestamp);
 ```
+
+Historical snapshots include the document data payload as it existed at that revision. When the snapshot has attachments, `attachments` reflects the historical `_attachments` array for that same revision, including the attachment reference that Haven needs to stop at the correct historical `lastChunkId`.
+
+### Collaborative text editing
+
+MindooDB stores collaborative text fields as Automerge text CRDTs internally, but apps never touch Automerge directly -- the SDK bridge is JSON-only. Instead, your app describes text changes as **granular splice operations** against a known document version, and Haven applies and merges them on its side.
+
+Two layers are available:
+
+- **Low level**: raw text patches via `documents.update({ text: [...] })`.
+- **High level**: `createMindooDBTextBuffer(...)` -- a small editor-friendly helper that tracks local edits and flushes them as one patch.
+
+The end-to-end flow is the same in both cases:
+
+```
+            ┌────────────────────────────────────────────────────┐
+  edit ───► │ App buffer (local string + pending splices)        │ ──► flush
+            └─────────────────────────┬──────────────────────────┘
+                                      │ documents.update({
+                                      │   text: [{ path, baseHeads, edits }]
+                                      │ })
+                                      ▼
+            ┌────────────────────────────────────────────────────┐
+            │ Haven applies edits at `baseHeads` and merges with │
+            │ concurrent changes via Automerge                   │
+            └─────────────────────────┬──────────────────────────┘
+                                      │ canonical merged document
+                                      ▼
+            ┌────────────────────────────────────────────────────┐
+            │ App reconciles its editor with the canonical text  │
+            └────────────────────────────────────────────────────┘
+```
+
+#### Text patch shape
+
+```ts
+interface MindooDBAppTextEdit {
+  index: number;        // 0-based position in the current string at baseHeads
+  deleteCount: number;  // number of characters to remove at `index`
+  insert?: string;      // text to insert at `index` after deletion
+}
+
+interface MindooDBAppTextPatch {
+  path: Array<string | number>; // path inside `document.data`, e.g. ["body"]
+  baseHeads?: string[];         // document version the edits were authored against
+  edits: MindooDBAppTextEdit[]; // applied in order
+}
+```
+
+Each edit is a JavaScript-style `splice(index, deleteCount, insert)`. Multiple patches in a single `update()` call are applied atomically.
+
+#### Low-level: `documents.update({ text: [...] })`
+
+If your editor already exposes raw text operations (e.g. ProseMirror or CodeMirror transactions), forward them directly:
+
+```ts
+const doc = await db.documents.get(docId);
+
+// User typed "Hello, " at the beginning of the body.
+const result = await db.documents.update(docId, {
+  text: [{
+    path: ["body"],
+    baseHeads: doc!.heads,
+    edits: [{ index: 0, deleteCount: 0, insert: "Hello, " }],
+  }],
+});
+
+// `result.data.body`  -- canonical merged text
+// `result.heads`      -- new heads to use as `baseHeads` next time
+```
+
+When two app instances send patches concurrently against the same `baseHeads`, Haven merges both via Automerge and returns the canonical text. If the merged result differs from what your editor currently displays, replace the editor content with `result.data[path]`.
+
+#### High-level: `createMindooDBTextBuffer`
+
+For WYSIWYG editors that emit a full markdown / plain-text string after each transaction (Milkdown, TinyMCE, etc.), the SDK ships a small buffer helper that does the splice diffing and flush bookkeeping for you:
+
+```ts
+import { createMindooDBTextBuffer } from "mindoodb-app-sdk";
+
+const doc    = await db.documents.get(docId);
+const buffer = createMindooDBTextBuffer({
+  database: db,
+  document: doc!,
+  path: ["body"], // string field inside `document.data`
+});
+
+editor.value = buffer.value;
+
+// Editor reports a new full markdown value -- the buffer turns it into one splice.
+editor.on("update", (next: string) => {
+  buffer.replaceText(next);
+});
+
+// On save (e.g. Cmd+S), flush all pending edits to Haven.
+async function save() {
+  const result = await buffer.flush();
+  if (result.reconciled) {
+    // Haven merged in concurrent changes; show the canonical merged text.
+    editor.value = result.value;
+  }
+}
+
+// Re-read the document without saving (e.g. a Refresh button).
+async function refresh() {
+  const fresh = await db.documents.get(docId);
+  if (fresh && buffer.reconcile(fresh)) {
+    editor.value = buffer.value;
+  }
+}
+```
+
+Buffer API at a glance:
+
+| Member | Description |
+|---|---|
+| `value` / `toString()` | Current local text value |
+| `dirty` / `pendingCount` | Whether/how many local splices are buffered |
+| `splice(index, deleteCount, insert?)` | Record an exact text operation |
+| `replaceText(next)` | Diff `value` against `next` and record one minimal splice |
+| `reconcile(document)` | Adopt a fresh document snapshot, drop pending edits |
+| `flush()` | Send pending edits to Haven; resolves to `{ document, value, reconciled }` |
+
+`flush()` always sends the original `baseHeads` captured when the buffer was created (or last reconciled), so two windows editing the same document at the same heads will both produce a clean merge -- they will not overwrite each other.
+
+#### Concurrent-edit walkthrough
+
+1. Window A and window B both `documents.get(docId)` and create a buffer at the same `baseHeads`.
+2. Window A inserts text at the top, window B deletes a paragraph in the middle.
+3. Window A calls `buffer.flush()` first. Haven applies its patch, advances the document heads, and returns the canonical text to A.
+4. Window B calls `buffer.flush()` next. Haven still applies B's patch causally at B's original `baseHeads`, then merges with A's already-stored change. B's `result.reconciled` is `true` and `result.value` contains both A's and B's edits.
+
+#### End-to-end sample
+
+The [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) sample wires `MindooDBTextBuffer` to a Milkdown markdown editor with Save / Refresh / preview pane, and is the recommended starting point for building your own collaborative text app.
 
 ### Incremental sync
 
@@ -457,6 +654,26 @@ await writer.close();
 await db.attachments.remove(docId, "old-file.txt");
 ```
 
+For historical reads, pass the same `revisionId` you received from `documents.listHistory()` or from a `MindooDBAppHistoricalDocument`. This tells Haven to resolve the attachment from that revision's document payload instead of the latest document state:
+
+```ts
+const history = await db.documents.listHistory(docId);
+const revisionId = history[0]!.revisionId;
+const historical = await db.documents.getAtRevision(docId, revisionId);
+
+const historicalFiles = await db.attachments.list(docId, {
+  revisionId,
+});
+
+const historicalReader = await db.attachments.openReadStream(
+  docId,
+  historicalFiles[0]!.fileName,
+  { revisionId },
+);
+```
+
+Use `revisionId` instead of `timestamp` whenever possible. Attachment blobs can grow over time by appending chunks and changing the attachment's `lastChunkId` in newer document revisions; `revisionId` ensures Haven reads from the historical attachment reference and does not accidentally include chunks added later.
+
 ### Attachment previews
 
 Haven includes a **built-in file viewer** that your app can open for common attachment formats. This is one of the most powerful SDK features -- it works with both online and offline data, and media formats support streaming playback with skip/seek.
@@ -485,9 +702,11 @@ You can also preview attachments from a **historical document snapshot**:
 
 ```ts
 await db.attachments.openPreview(docId, "report.pdf", {
-  timestamp: historyEntry.timestamp,
+  revisionId: historyEntry.revisionId,
 });
 ```
+
+`timestamp` is still accepted in attachment options for compatibility, but `revisionId` is the preferred identifier because it targets an exact DAG revision.
 
 **Check preview support locally** before showing a preview button:
 
@@ -729,22 +948,41 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `create(input)` | `Promise<MindooDBAppDocument>` |
 | `update(docId, patch)` | `Promise<MindooDBAppDocument>` |
 | `delete(docId)` | `Promise<{ ok: true }>` |
+| `undelete(docId)` | `Promise<{ ok: true }>` |
 | `listHistory(docId)` | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>` |
+| `getAtRevision(docId, revisionId)` | `Promise<MindooDBAppHistoricalDocument>` |
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
-For `update(docId, patch)`, use `{ set?: Record<string, unknown>; unset?: string[] }`. Both operations are shallow and apply to top-level document fields only.
+For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; id?: string }`. The optional `id` lets the app pick the document id instead of letting MindooDB generate a UUID7; when provided it must match `/^[A-Za-z][A-Za-z0-9_]*$/` and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
+
+`delete(docId)` writes a lifecycle tombstone; it does not erase the document body from the append-only history. Use `undelete(docId)` to make the latest document state live again. If you want to record a deletion reason, first call `update(docId, { set: { intendedDeletionReason: "..." } })`, then call `delete(docId)`.
+
+For `update(docId, patch)`, use `MindooDBAppUpdateDocumentInput`:
+
+```ts
+interface MindooDBAppUpdateDocumentInput {
+  set?: Record<string, unknown>;     // shallow assign top-level fields
+  unset?: string[];                  // remove top-level fields entirely
+  text?: MindooDBAppTextPatch[];     // granular collaborative text edits
+}
+```
+
+`set` and `unset` apply to top-level fields only. `text` patches operate on string fields at any JSON path inside `document.data` and are merged on the Haven side using the document's Automerge heads. See [Collaborative text editing](#collaborative-text-editing).
 
 ### MindooDBAppAttachmentApi
 
 | Method | Returns |
 |---|---|
-| `list(docId)` | `Promise<MindooDBAppAttachmentInfo[]>` |
+| `list(docId, options?)` | `Promise<MindooDBAppAttachmentInfo[]>` |
 | `remove(docId, attachmentName)` | `Promise<{ ok: true }>` |
-| `openReadStream(docId, attachmentName)` | `Promise<MindooDBAppReadableAttachmentStream>` |
+| `openReadStream(docId, attachmentName, options?)` | `Promise<MindooDBAppReadableAttachmentStream>` |
 | `openWriteStream(docId, attachmentName, contentType?)` | `Promise<MindooDBAppWritableAttachmentStream>` |
+| `preparePreviewSession(docId, attachmentName, options?)` | `Promise<MindooDBAppAttachmentPreviewSession>` |
 | `openPreview(docId, attachmentName, options?)` | `Promise<{ ok: true }>` |
+
+`options` accepts `{ timestamp?: number; revisionId?: string }` for read-only historical attachment access. Mutation methods (`openWriteStream`, `remove`) always target the current document.
 
 ### MindooDBAppViewNavigator
 
@@ -792,6 +1030,7 @@ For `update(docId, patch)`, use `{ set?: Record<string, unknown>; unset?: string
 | Function | Description |
 |---|---|
 | `createMindooDBAppBridge()` | Create the bridge object used to connect to Haven |
+| `createMindooDBTextBuffer(options)` | Create an editor-friendly buffer for granular collaborative text edits on a document field |
 | `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`) |
 | `createViewLanguage<T>()` | Create a typed expression builder for view definitions |
 | `abbreviateCanonicalName(value)` | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo` |

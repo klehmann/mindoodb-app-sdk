@@ -81,7 +81,41 @@ function applyDocumentUpdatePatch(
   for (const key of patch.unset ?? []) {
     Reflect.deleteProperty(next, key);
   }
+  for (const textPatch of patch.text ?? []) {
+    applyMockTextPatch(next, textPatch.path, textPatch.edits);
+  }
   return next;
+}
+
+function applyMockTextPatch(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+  edits: NonNullable<MindooDBAppUpdateDocumentInput["text"]>[number]["edits"],
+) {
+  if (path.length === 0) {
+    throw new Error("Text patch path must contain at least one segment");
+  }
+  let parent: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index];
+    const nextSegment = path[index + 1];
+    if (parent[segment] == null) {
+      parent[segment] = typeof nextSegment === "number" ? [] : {};
+    }
+    parent = parent[segment];
+  }
+  const leaf = path[path.length - 1];
+  let value = parent[leaf];
+  if (value == null) {
+    value = "";
+  }
+  if (typeof value !== "string") {
+    throw new Error(`Cannot apply text patch to non-string value at ${path.map(String).join(".")}`);
+  }
+  for (const edit of edits) {
+    value = value.slice(0, edit.index) + (edit.insert ?? "") + value.slice(edit.index + edit.deleteCount);
+  }
+  parent[leaf] = value;
 }
 
 function mergeLaunchContext(
@@ -500,6 +534,7 @@ type MockDatabaseMethods = {
 
 function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): MindooDBAppDatabase {
   let createCounter = 0;
+  let changeCounter = 0;
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
 
@@ -552,16 +587,46 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       return {
         id: document.id,
         data: structuredClone(document.data),
+        heads: document.heads ? [...document.heads] : undefined,
         attachments: document.attachments ? structuredClone(document.attachments) : [],
         updatedAt: document.updatedAt,
       };
     },
     async create(input) {
-      createCounter += 1;
+      // Honor caller-provided ids: when `input.id` is present and a document
+      // already exists, return the existing document (mirrors MindooDB's
+      // idempotent create). Otherwise create a new document with the supplied
+      // id, falling back to a generated `doc-<counter>` id when none is given.
+      const callerId = typeof input.id === "string" && input.id.length > 0 ? input.id : null;
+      if (callerId) {
+        const existing = storedDocuments.get(callerId);
+        if (existing) {
+          if (existing.isDeleted) {
+            existing.isDeleted = false;
+            existing.updatedAt = new Date().toISOString();
+            existing.heads = [`mock-head-${++changeCounter}`];
+          }
+          return {
+            id: existing.id,
+            data: structuredClone(existing.data),
+            heads: existing.heads ? [...existing.heads] : undefined,
+            attachments: existing.attachments ? structuredClone(existing.attachments) : [],
+            updatedAt: existing.updatedAt,
+          };
+        }
+      }
+      let id: string;
+      if (callerId) {
+        id = callerId;
+      } else {
+        createCounter += 1;
+        id = `doc-${createCounter}`;
+      }
       const createdAt = new Date().toISOString();
       const created = {
-        id: `doc-${createCounter}`,
+        id,
         data: { ...input.set },
+        heads: [`mock-head-${++changeCounter}`],
         attachments: [],
         updatedAt: createdAt,
       };
@@ -581,6 +646,7 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       const updated = {
         id: docId,
         data: applyDocumentUpdatePatch(existing?.data ?? {}, patch),
+        heads: [`mock-head-${++changeCounter}`],
         attachments: existing?.attachments ? structuredClone(existing.attachments) : [],
         updatedAt,
       };
@@ -603,6 +669,18 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       }
       return { ok: true as const };
     },
+    async undelete(_docId: string) {
+      const existing = storedDocuments.get(_docId);
+      if (existing) {
+        storedDocuments.set(_docId, {
+          ...existing,
+          isDeleted: false,
+          heads: [`mock-head-${++changeCounter}`],
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      return { ok: true as const };
+    },
     async listHistory(_docId: string): Promise<MindooDBAppDocumentHistoryEntry[]> {
       return [];
     },
@@ -612,6 +690,18 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
         timestamp,
         state: "missing",
         data: null,
+        attachments: [],
+      };
+    },
+    async getAtRevision(docId: string, revisionId: string): Promise<MindooDBAppHistoricalDocument> {
+      return {
+        id: docId,
+        revisionId,
+        timestamp: Date.now(),
+        heads: [],
+        state: "missing",
+        data: null,
+        attachments: [],
       };
     },
   };
@@ -626,25 +716,25 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
   };
 
   const defaultAttachments: MindooDBAppAttachmentApi = {
-    async list(_docId: string) {
+    async list(_docId: string, _options?: { timestamp?: number; revisionId?: string }) {
       return [];
     },
     async remove(_docId: string, _attachmentName: string) {
       return { ok: true as const };
     },
-    async openReadStream(_docId: string, _attachmentName: string) {
+    async openReadStream(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
       return createDefaultReadableAttachmentStream();
     },
     async openWriteStream(_docId: string, _attachmentName: string, _contentType?: string) {
       return createDefaultWritableAttachmentStream();
     },
-    async preparePreviewSession(_docId: string, _attachmentName: string, _options?: { timestamp?: number }) {
+    async preparePreviewSession(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
       return {
         sessionId: "preview-session-1",
         previewUrl: "about:blank",
       };
     },
-    async openPreview(_docId: string, _attachmentName: string, _options?: { timestamp?: number }) {
+    async openPreview(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
       return { ok: true as const };
     },
   };
@@ -1150,6 +1240,7 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return await state.getDatabase(String(params.databaseId)).documents.create(params.input as {
           set: Record<string, unknown>;
           decryptionKeyId?: string;
+          id?: string;
         });
       case "documents.update":
         return await state.getDatabase(String(params.databaseId)).documents.update(
@@ -1158,6 +1249,8 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         );
       case "documents.delete":
         return await state.getDatabase(String(params.databaseId)).documents.delete(String(params.docId));
+      case "documents.undelete":
+        return await state.getDatabase(String(params.databaseId)).documents.undelete(String(params.docId));
       case "documents.history.list":
         return await state.getDatabase(String(params.databaseId)).documents.listHistory(String(params.docId));
       case "documents.history.getAtTimestamp":
@@ -1165,8 +1258,20 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
           String(params.docId),
           Number(params.timestamp),
         );
+      case "documents.history.getAtRevision":
+        return await state.getDatabase(String(params.databaseId)).documents.getAtRevision(
+          String(params.docId),
+          String(params.revisionId),
+        );
       case "attachments.list":
-        return await state.getDatabase(String(params.databaseId)).attachments.list(String(params.docId));
+        return await state.getDatabase(String(params.databaseId)).attachments.list(
+          String(params.docId),
+          typeof params.revisionId === "string"
+            ? { revisionId: params.revisionId }
+            : typeof params.timestamp === "number"
+              ? { timestamp: params.timestamp }
+              : undefined,
+        );
       case "attachments.remove":
         return await state.getDatabase(String(params.databaseId)).attachments.remove(
           String(params.docId),
@@ -1176,6 +1281,11 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         const stream = await state.getDatabase(String(params.databaseId)).attachments.openReadStream(
           String(params.docId),
           String(params.attachmentName),
+          typeof params.revisionId === "string"
+            ? { revisionId: params.revisionId }
+            : typeof params.timestamp === "number"
+              ? { timestamp: params.timestamp }
+              : undefined,
         );
         const streamId = `read-${streamCounter += 1}`;
         readStreams.set(streamId, stream);
@@ -1195,13 +1305,21 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return await state.getDatabase(String(params.databaseId)).attachments.openPreview(
           String(params.docId),
           String(params.attachmentName),
-          typeof params.timestamp === "number" ? { timestamp: params.timestamp } : undefined,
+          typeof params.revisionId === "string"
+            ? { revisionId: params.revisionId }
+            : typeof params.timestamp === "number"
+              ? { timestamp: params.timestamp }
+              : undefined,
         );
       case "attachments.preparePreviewSession":
         return await state.getDatabase(String(params.databaseId)).attachments.preparePreviewSession(
           String(params.docId),
           String(params.attachmentName),
-          typeof params.timestamp === "number" ? { timestamp: params.timestamp } : undefined,
+          typeof params.revisionId === "string"
+            ? { revisionId: params.revisionId }
+            : typeof params.timestamp === "number"
+              ? { timestamp: params.timestamp }
+              : undefined,
         );
       case "viewNavigators.getDefinition":
         return await (await resolveViewNavigator(String(params.navigatorId))).getDefinition();

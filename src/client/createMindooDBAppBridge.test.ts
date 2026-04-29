@@ -9,6 +9,40 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
+  it("rejects connect with the host handshake error instead of timing out", async () => {
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:error",
+          error: "Application view \"open-items\" references unknown origin \"archive\".",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-bad-view",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    await expect(createMindooDBAppBridge().connect()).rejects.toThrow(
+      "Application view \"open-items\" references unknown origin \"archive\".",
+    );
+  });
+
   it("forwards optional document decryptionKeyId on create", async () => {
     let createInput: unknown = null;
     const host = {
@@ -92,10 +126,97 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
   });
 
+  it("forwards optional caller-provided document id on create", async () => {
+    let createInput: unknown = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.create") {
+            createInput = (message.params as { input: unknown }).input;
+            const input = (message.params as { input: { id?: string } }).input;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: input.id ?? "doc-generated",
+                data: {
+                  title: "Settings",
+                },
+                attachments: [],
+              },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-create-id",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.create({
+      id: "AppSettings",
+      set: {
+        title: "Settings",
+      },
+      decryptionKeyId: "payroll",
+    })).resolves.toEqual({
+      id: "AppSettings",
+      data: {
+        title: "Settings",
+      },
+      attachments: [],
+    });
+
+    expect(createInput).toEqual({
+      id: "AppSettings",
+      set: {
+        title: "Settings",
+      },
+      decryptionKeyId: "payroll",
+    });
+  });
+
   it("streams attachment uploads and downloads over the bridge port", async () => {
     let writeChunk: Uint8Array | null = null;
     let readRequests = 0;
     let removedAttachmentName: string | null = null;
+    let readStreamParams: unknown = null;
 
     const host = {
       postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
@@ -150,6 +271,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
               return;
             }
             if (message.method === "attachments.openReadStream") {
+              readStreamParams = message.params;
               port.postMessage({
                 protocol: "mindoodb-app-bridge",
                 kind: "success",
@@ -229,7 +351,12 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     await expect(database.attachments.remove("doc-1", "hello.txt")).resolves.toEqual({ ok: true });
     expect(removedAttachmentName).toBe("hello.txt");
 
-    const readable = await database.attachments.openReadStream("doc-1", "attachment-1");
+    const readable = await database.attachments.openReadStream("doc-1", "attachment-1", { revisionId: "rev-1" });
+    expect(readStreamParams).toEqual(expect.objectContaining({
+      docId: "doc-1",
+      attachmentName: "attachment-1",
+      revisionId: "rev-1",
+    }));
     await expect(readable.read()).resolves.toEqual(Uint8Array.from([1, 2, 3]));
     await expect(readable.read()).resolves.toBeNull();
   });

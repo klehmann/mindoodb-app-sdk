@@ -54,10 +54,10 @@ export type {
   MindooDBAppViewVariableExpression,
 } from "mindoodb-view-language";
 
-/** Launch target used by the Administrator when opening an app. */
+/** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
 
-/** Theme mode currently active in the Administrator host UI. */
+/** Theme mode currently active in the Haven host UI. */
 export type MindooDBAppThemeMode = "light" | "dark";
 
 /** Host theme snapshot exposed to running apps. */
@@ -240,6 +240,8 @@ export type MindooDBAppAttachmentPreviewMode =
 export interface MindooDBAppAttachmentPreviewOptions {
   /** Historical snapshot timestamp previously obtained from `documents.history.getAtTimestamp()`. */
   timestamp?: number;
+  /** Stable revision id previously obtained from `documents.listHistory()`. */
+  revisionId?: MindooDBAppDocumentRevisionId;
 }
 
 /** Resolved Haven preview session prepared for opening in a separate tab or window. */
@@ -271,13 +273,20 @@ export interface MindooDBAppDocumentSummary {
 export interface MindooDBAppDocument {
   id: string;
   data: Record<string, unknown>;
+  /** Current Automerge heads for causal text edit reconciliation. */
+  heads?: string[];
   attachments?: MindooDBAppAttachmentInfo[];
   updatedAt?: string;
 }
 
+/** Opaque persisted id for a document revision in the MindooDB DAG. */
+export type MindooDBAppDocumentRevisionId = string;
+
 /** One entry in the document history timeline. */
 export interface MindooDBAppDocumentHistoryEntry {
+  revisionId: MindooDBAppDocumentRevisionId;
   timestamp: number;
+  heads?: string[];
   publicKey: string;
   publicKeyFingerprint?: string;
   identityLabel?: string;
@@ -289,9 +298,13 @@ export interface MindooDBAppDocumentHistoryEntry {
 /** Historical snapshot returned for a document at a specific timestamp. */
 export interface MindooDBAppHistoricalDocument {
   id: string;
+  revisionId?: MindooDBAppDocumentRevisionId;
   timestamp: number;
+  heads?: string[];
   state: "missing" | "deleted" | "exists";
   data: Record<string, unknown> | null;
+  attachments?: MindooDBAppAttachmentInfo[];
+  attachmentSnapshotRevisionId?: MindooDBAppDocumentRevisionId | null;
 }
 
 /** Query options for paging through changefeed-backed document listings in a database. */
@@ -343,6 +356,35 @@ export interface MindooDBAppCreateDocumentInput {
   set: Record<string, unknown>;
   /** Optional named document key. Defaults to `"default"` when omitted. */
   decryptionKeyId?: string;
+  /**
+   * Optional caller-provided document id. When omitted, MindooDB generates a
+   * UUID7. When provided, the id must match `^[A-Za-z][A-Za-z0-9_]*$`: the
+   * first character is an ASCII letter and subsequent characters may be ASCII
+   * letters, ASCII digits, or `_`.
+   *
+   * If a document with this id already exists locally, MindooDB returns the
+   * existing document instead of creating a new one (idempotent create), and
+   * the values in `set` are NOT applied. Caller-provided ids are useful for
+   * loading a known well-known document directly without first building a
+   * view, and for migrations that want to preserve external ids.
+   *
+   * Documents created with the same caller-provided id on independent replicas
+   * share Automerge ancestry, so subsequent edits on either replica still
+   * merge correctly when the replicas sync.
+   */
+  id?: string;
+}
+
+export interface MindooDBAppTextEdit {
+  index: number;
+  deleteCount: number;
+  insert?: string;
+}
+
+export interface MindooDBAppTextPatch {
+  path: Array<string | number>;
+  baseHeads?: string[];
+  edits: MindooDBAppTextEdit[];
 }
 
 /**
@@ -357,6 +399,8 @@ export interface MindooDBAppUpdateDocumentInput {
   set?: Record<string, unknown>;
   /** Top-level fields to remove from the document entirely. */
   unset?: string[];
+  /** Granular text edits to apply at document paths. */
+  text?: MindooDBAppTextPatch[];
 }
 
 /** Query used for history lookups at a specific timestamp. */
@@ -371,17 +415,24 @@ export interface MindooDBAppBridgeConnectOptions {
   connectTimeoutMs?: number;
 }
 
-/** Initial postMessage handshake sent from the app to the Administrator. */
+/** Initial postMessage handshake sent from the app to the Haven. */
 export interface MindooDBAppBridgeConnectMessage {
   protocol: "mindoodb-app-bridge";
   type: "mindoodb-app:connect";
   launchId: string;
 }
 
-/** Handshake acknowledgement returned by the Administrator host. */
+/** Handshake acknowledgement returned by the Haven host. */
 export interface MindooDBAppBridgeConnectedMessage {
   protocol: "mindoodb-app-bridge";
   type: "mindoodb-app:connected";
+}
+
+/** Handshake error returned when the Haven host rejects a launch. */
+export interface MindooDBAppBridgeHandshakeErrorMessage {
+  protocol: "mindoodb-app-bridge";
+  type: "mindoodb-app:error";
+  error: string;
 }
 
 /** Structured error payload transported over bridge RPC or stream messages. */
@@ -489,7 +540,7 @@ export type MindooDBAppBridgeStreamMessage =
   | MindooDBAppBridgeStreamAck
   | MindooDBAppBridgeStreamError;
 
-/** Host-pushed event emitted when the Administrator theme changes. */
+/** Host-pushed event emitted when the Haven theme changes. */
 export interface MindooDBAppBridgeThemeChangedMessage {
   protocol: "mindoodb-app-bridge";
   kind: "theme-changed";
@@ -641,8 +692,10 @@ export interface MindooDBAppDocumentApi {
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
   update(docId: string, patch: MindooDBAppUpdateDocumentInput): Promise<MindooDBAppDocument>;
   delete(docId: string): Promise<{ ok: true }>;
+  undelete(docId: string): Promise<{ ok: true }>;
   listHistory(docId: string): Promise<MindooDBAppDocumentHistoryEntry[]>;
   getAtTimestamp(docId: string, timestamp: number): Promise<MindooDBAppHistoricalDocument>;
+  getAtRevision(docId: string, revisionId: MindooDBAppDocumentRevisionId): Promise<MindooDBAppHistoricalDocument>;
 }
 
 export type MindooDBAppViewEntryKind = "category" | "document";
@@ -779,9 +832,13 @@ export interface MindooDBAppViewNavigator {
 
 /** Attachment operations exposed by an opened database handle. */
 export interface MindooDBAppAttachmentApi {
-  list(docId: string): Promise<MindooDBAppAttachmentInfo[]>;
+  list(docId: string, options?: MindooDBAppAttachmentPreviewOptions): Promise<MindooDBAppAttachmentInfo[]>;
   remove(docId: string, attachmentName: string): Promise<{ ok: true }>;
-  openReadStream(docId: string, attachmentName: string): Promise<MindooDBAppReadableAttachmentStream>;
+  openReadStream(
+    docId: string,
+    attachmentName: string,
+    options?: MindooDBAppAttachmentPreviewOptions,
+  ): Promise<MindooDBAppReadableAttachmentStream>;
   openWriteStream(docId: string, attachmentName: string, contentType?: string): Promise<MindooDBAppWritableAttachmentStream>;
   preparePreviewSession(
     docId: string,
@@ -802,7 +859,7 @@ export interface MindooDBAppDatabase {
   attachments: MindooDBAppAttachmentApi;
 }
 
-/** Connected session between the running app and the Administrator host. */
+/** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
