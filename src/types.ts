@@ -207,6 +207,11 @@ export interface MindooDBAppLaunchContext {
   uiPreferences: MindooDBAppUiPreferences;
   tenantId?: string;
   preferredDatabaseId?: string;
+  /**
+   * Epoch-millisecond cutoff when the host opened app databases in time travel
+   * read-only mode. Absent/null means the app is looking at live data.
+   */
+  timeTravelDate?: number | null;
   user: {
     id: string;
     username: string;
@@ -263,6 +268,7 @@ export interface MindooDBAppDocumentSummary {
   id: string;
   data?: Record<string, unknown>;
   attachmentCount?: number;
+  createdAt?: string;
   updatedAt?: string;
   identityLabel?: string;
   publicKeyFingerprint?: string;
@@ -276,6 +282,7 @@ export interface MindooDBAppDocument {
   /** Current Automerge heads for causal text edit reconciliation. */
   heads?: string[];
   attachments?: MindooDBAppAttachmentInfo[];
+  createdAt?: string;
   updatedAt?: string;
 }
 
@@ -388,6 +395,65 @@ export interface MindooDBAppTextPatch {
 }
 
 /**
+ * Sets the value at `path` inside the document payload.
+ *
+ * Creates the field if it does not exist, or replaces the existing value.
+ * `path` addresses a property using object keys and list indices, for example
+ * `["workbook", "worksheetsById", "ws-1", "title"]`.
+ */
+export interface MindooDBAppJsonSetPatch {
+  path: Array<string | number>;
+  value: unknown;
+}
+
+/**
+ * Removes the value at `path` from the document payload.
+ *
+ * For object properties this deletes the key; for list entries the host
+ * decides whether unset is supported and may reject the patch.
+ */
+export interface MindooDBAppJsonUnsetPatch {
+  path: Array<string | number>;
+}
+
+/**
+ * Inserts one or more values into the list located at `path`.
+ *
+ * `index` is the insertion point within the current list, where `0` prepends
+ * and `list.length` appends. Existing entries at or after `index` shift right.
+ */
+export interface MindooDBAppJsonListInsertPatch {
+  path: Array<string | number>;
+  index: number;
+  values: unknown[];
+}
+
+/**
+ * Deletes a contiguous run of entries from the list located at `path`.
+ *
+ * Removes `deleteCount` entries starting at `index`. Subsequent entries shift
+ * left to fill the gap.
+ */
+export interface MindooDBAppJsonListDeletePatch {
+  path: Array<string | number>;
+  index: number;
+  deleteCount: number;
+}
+
+export interface MindooDBAppJsonPatch {
+  /**
+   * Automerge heads of the document snapshot this JSON patch was authored
+   * against. Hosts can use this to apply order-sensitive edits at the original
+   * causal version and merge them with concurrent changes.
+   */
+  baseHeads?: string[];
+  set?: MindooDBAppJsonSetPatch[];
+  unset?: MindooDBAppJsonUnsetPatch[];
+  listInsert?: MindooDBAppJsonListInsertPatch[];
+  listDelete?: MindooDBAppJsonListDeletePatch[];
+}
+
+/**
  * Sparse patch payload used when updating an existing document.
  *
  * Prefer targeted `set` / `unset` operations over whole-document rewrites so
@@ -399,6 +465,8 @@ export interface MindooDBAppUpdateDocumentInput {
   set?: Record<string, unknown>;
   /** Top-level fields to remove from the document entirely. */
   unset?: string[];
+  /** Granular JSON operations to apply at document paths. */
+  json?: MindooDBAppJsonPatch;
   /** Granular text edits to apply at document paths. */
   text?: MindooDBAppTextPatch[];
 }
@@ -740,6 +808,7 @@ export interface MindooDBAppViewNavigatorOpenOptions {
 export interface MindooDBAppCreateViewNavigatorInput {
   databaseIds: string[];
   definition: MindooDBAppViewDefinition;
+  categorizationStyle?: MindooDBAppConfiguredViewCategorizationStyle;
   options?: MindooDBAppViewNavigatorOpenOptions;
 }
 

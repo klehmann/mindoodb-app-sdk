@@ -81,10 +81,85 @@ function applyDocumentUpdatePatch(
   for (const key of patch.unset ?? []) {
     Reflect.deleteProperty(next, key);
   }
+  applyMockJsonPatch(next, patch.json);
   for (const textPatch of patch.text ?? []) {
     applyMockTextPatch(next, textPatch.path, textPatch.edits);
   }
   return next;
+}
+
+function applyMockJsonPatch(
+  target: Record<string, unknown>,
+  patch: MindooDBAppUpdateDocumentInput["json"],
+) {
+  if (!patch) {
+    return;
+  }
+  for (const operation of patch.set ?? []) {
+    setValueAtPath(target, operation.path, structuredClone(operation.value));
+  }
+  for (const operation of patch.unset ?? []) {
+    unsetValueAtPath(target, operation.path);
+  }
+  for (const operation of patch.listDelete ?? []) {
+    const list = readListAtPath(target, operation.path);
+    list.splice(operation.index, operation.deleteCount);
+  }
+  for (const operation of patch.listInsert ?? []) {
+    const list = readListAtPath(target, operation.path);
+    list.splice(operation.index, 0, ...structuredClone(operation.values));
+  }
+}
+
+function setValueAtPath(target: Record<string, unknown>, path: Array<string | number>, value: unknown) {
+  if (path.length === 0) {
+    throw new Error("JSON set path must contain at least one segment");
+  }
+  const parent = ensureParentAtPath(target, path);
+  parent[path[path.length - 1]] = value;
+}
+
+function unsetValueAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+  if (path.length === 0) {
+    throw new Error("JSON unset path must contain at least one segment");
+  }
+  const parent = readParentAtPath(target, path);
+  Reflect.deleteProperty(parent, path[path.length - 1]);
+}
+
+function readListAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+  let value: any = target;
+  for (const segment of path) {
+    value = value?.[segment];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Cannot apply list operation to non-array value at ${path.map(String).join(".")}`);
+  }
+  return value;
+}
+
+function ensureParentAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+  let parent: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index];
+    const nextSegment = path[index + 1];
+    if (parent[segment] == null) {
+      parent[segment] = typeof nextSegment === "number" ? [] : {};
+    }
+    parent = parent[segment];
+  }
+  return parent;
+}
+
+function readParentAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+  let parent: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    parent = parent?.[path[index]];
+  }
+  if (parent == null || typeof parent !== "object") {
+    throw new Error(`Cannot resolve JSON parent at ${path.map(String).join(".")}`);
+  }
+  return parent;
 }
 
 function applyMockTextPatch(
@@ -1208,6 +1283,9 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
             ? params.databaseIds.map((entry) => String(entry))
             : [],
           definition: params.definition as MindooDBAppViewDefinition,
+          categorizationStyle: params.categorizationStyle === "category_then_document"
+            ? "category_then_document"
+            : "document_then_category",
           options: params.options as MindooDBAppViewNavigatorOpenOptions | undefined,
         });
         viewSessions.set(navigatorId, navigator);

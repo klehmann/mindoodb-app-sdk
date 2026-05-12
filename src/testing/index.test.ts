@@ -118,6 +118,64 @@ describe("mindoodb-app-sdk/testing", () => {
     });
   });
 
+  it("applies granular JSON operations in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        teamgrid: {
+          workbook: {
+            worksheetOrder: ["sheet_1"],
+            worksheetsById: {
+              sheet_1: {
+                rowOrder: ["row_1"],
+                cellsById: {},
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const updated = await database.documents.update(created.id, {
+      json: {
+        baseHeads: created.heads,
+        set: [{
+          path: ["teamgrid", "workbook", "worksheetsById", "sheet_1", "cellsById", "row_1:col_1"],
+          value: { id: "row_1:col_1", value: { kind: "number", value: 7 } },
+        }],
+        listInsert: [{
+          path: ["teamgrid", "workbook", "worksheetsById", "sheet_1", "rowOrder"],
+          index: 1,
+          values: ["row_2"],
+        }],
+      },
+    });
+
+    expect(updated.data.teamgrid).toMatchObject({
+      workbook: {
+        worksheetsById: {
+          sheet_1: {
+            rowOrder: ["row_1", "row_2"],
+            cellsById: {
+              "row_1:col_1": { value: { kind: "number", value: 7 } },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("flushes buffered text edits through the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
