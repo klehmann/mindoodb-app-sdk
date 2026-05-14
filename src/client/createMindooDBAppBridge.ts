@@ -74,6 +74,7 @@ import type {
   MindooDBAppViewNavigatorPageResult,
   MindooDBAppViewNavigatorRangeQuery,
   MindooDBAppViewNavigatorSelectionState,
+  MindooDBAppScanAttachmentResult,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
 
@@ -736,6 +737,13 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         });
         return new MindooDBAppWritableAttachmentStreamImpl(this.rpc, result.streamId);
       },
+      scan: async (docId, options) => await this.rpc.call<MindooDBAppScanAttachmentResult>("attachments.scanAndWrite", {
+        databaseId: this.databaseId,
+        docId,
+        defaultFileName: options?.defaultFileName,
+        preset: options?.preset,
+        mimeType: options?.mimeType,
+      }),
       preparePreviewSession: async (docId, attachmentName, options) => await this.rpc.call("attachments.preparePreviewSession", {
         databaseId: this.databaseId,
         docId,

@@ -18,6 +18,7 @@ import type {
   MindooDBAppDocumentHistoryEntry,
   MindooDBAppDocumentListQuery,
   MindooDBAppDocumentListResult,
+  MindooDBAppDocumentScanPreset,
   MindooDBAppHistoricalDocument,
   MindooDBAppHostTheme,
   MindooDBAppLaunchContext,
@@ -48,26 +49,38 @@ const PROTOCOL = "mindoodb-app-bridge";
 
 type MaybePromise<T> = T | Promise<T>;
 type MockViewApi = {
-  create(input: MindooDBAppCreateViewNavigatorInput): MaybePromise<MindooDBAppViewNavigator>;
-  open(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): MaybePromise<MindooDBAppViewNavigator>;
+  create(
+    input: MindooDBAppCreateViewNavigatorInput,
+  ): MaybePromise<MindooDBAppViewNavigator>;
+  open(
+    viewId: string,
+    options?: MindooDBAppViewNavigatorOpenOptions,
+  ): MaybePromise<MindooDBAppViewNavigator>;
 };
 
-function createBridgeErrorPayload(error: unknown, fallbackCode = "bridge-error"): MindooDBAppBridgeErrorPayload {
+function createBridgeErrorPayload(
+  error: unknown,
+  fallbackCode = "bridge-error",
+): MindooDBAppBridgeErrorPayload {
   if (error && typeof error === "object" && "message" in error) {
     const namedError = error as { name?: unknown; message?: unknown };
-    const code = typeof namedError.name === "string" && namedError.name
-      ? namedError.name
-      : fallbackCode;
-    const message = typeof namedError.message === "string"
-      ? namedError.message
-      : String(error);
+    const code =
+      typeof namedError.name === "string" && namedError.name
+        ? namedError.name
+        : fallbackCode;
+    const message =
+      typeof namedError.message === "string"
+        ? namedError.message
+        : String(error);
     return { code, message };
   }
   return { code: fallbackCode, message: String(error) };
 }
 
 function cloneBytes(chunk: Uint8Array) {
-  return new Uint8Array(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
+  return new Uint8Array(
+    chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
+  );
 }
 
 function applyDocumentUpdatePatch(
@@ -111,7 +124,11 @@ function applyMockJsonPatch(
   }
 }
 
-function setValueAtPath(target: Record<string, unknown>, path: Array<string | number>, value: unknown) {
+function setValueAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+  value: unknown,
+) {
   if (path.length === 0) {
     throw new Error("JSON set path must contain at least one segment");
   }
@@ -119,7 +136,10 @@ function setValueAtPath(target: Record<string, unknown>, path: Array<string | nu
   parent[path[path.length - 1]] = value;
 }
 
-function unsetValueAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+function unsetValueAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+) {
   if (path.length === 0) {
     throw new Error("JSON unset path must contain at least one segment");
   }
@@ -127,18 +147,26 @@ function unsetValueAtPath(target: Record<string, unknown>, path: Array<string | 
   Reflect.deleteProperty(parent, path[path.length - 1]);
 }
 
-function readListAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+function readListAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+) {
   let value: any = target;
   for (const segment of path) {
     value = value?.[segment];
   }
   if (!Array.isArray(value)) {
-    throw new Error(`Cannot apply list operation to non-array value at ${path.map(String).join(".")}`);
+    throw new Error(
+      `Cannot apply list operation to non-array value at ${path.map(String).join(".")}`,
+    );
   }
   return value;
 }
 
-function ensureParentAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+function ensureParentAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+) {
   let parent: any = target;
   for (let index = 0; index < path.length - 1; index += 1) {
     const segment = path[index];
@@ -151,13 +179,18 @@ function ensureParentAtPath(target: Record<string, unknown>, path: Array<string 
   return parent;
 }
 
-function readParentAtPath(target: Record<string, unknown>, path: Array<string | number>) {
+function readParentAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+) {
   let parent: any = target;
   for (let index = 0; index < path.length - 1; index += 1) {
     parent = parent?.[path[index]];
   }
   if (parent == null || typeof parent !== "object") {
-    throw new Error(`Cannot resolve JSON parent at ${path.map(String).join(".")}`);
+    throw new Error(
+      `Cannot resolve JSON parent at ${path.map(String).join(".")}`,
+    );
   }
   return parent;
 }
@@ -185,10 +218,15 @@ function applyMockTextPatch(
     value = "";
   }
   if (typeof value !== "string") {
-    throw new Error(`Cannot apply text patch to non-string value at ${path.map(String).join(".")}`);
+    throw new Error(
+      `Cannot apply text patch to non-string value at ${path.map(String).join(".")}`,
+    );
   }
   for (const edit of edits) {
-    value = value.slice(0, edit.index) + (edit.insert ?? "") + value.slice(edit.index + edit.deleteCount);
+    value =
+      value.slice(0, edit.index) +
+      (edit.insert ?? "") +
+      value.slice(edit.index + edit.deleteCount);
   }
   parent[leaf] = value;
 }
@@ -214,30 +252,42 @@ function mergeLaunchContext(
         sources: view.sources.map((source) => ({ ...source })),
         columns: view.columns.map((column) => ({
           ...column,
-          expression: column.expression.mode === "field"
-            ? { ...column.expression }
-            : { mode: "formula", expression: structuredClone(column.expression.expression) },
+          expression:
+            column.expression.mode === "field"
+              ? { ...column.expression }
+              : {
+                  mode: "formula",
+                  expression: structuredClone(column.expression.expression),
+                },
         })),
-        filter: view.filter.mode === "rules"
-          ? {
-              mode: "rules",
-              match: view.filter.match,
-              rules: view.filter.rules.map((rule) => ({ ...rule })),
-            }
-          : {
-              mode: "formula",
-              expression: structuredClone(view.filter.expression),
-            },
+        filter:
+          view.filter.mode === "rules"
+            ? {
+                mode: "rules",
+                match: view.filter.match,
+                rules: view.filter.rules.map((rule) => ({ ...rule })),
+              }
+            : {
+                mode: "formula",
+                expression: structuredClone(view.filter.expression),
+              },
       })),
     };
   }
   return {
     ...current,
     ...patch,
-    theme: patch.theme ? { ...current.theme, ...patch.theme } : { ...current.theme },
-    viewport: patch.viewport === undefined
-      ? (current.viewport ? { ...current.viewport } : null)
-      : (patch.viewport ? { ...patch.viewport } : null),
+    theme: patch.theme
+      ? { ...current.theme, ...patch.theme }
+      : { ...current.theme },
+    viewport:
+      patch.viewport === undefined
+        ? current.viewport
+          ? { ...current.viewport }
+          : null
+        : patch.viewport
+          ? { ...patch.viewport }
+          : null,
     uiPreferences: patch.uiPreferences
       ? { ...current.uiPreferences, ...patch.uiPreferences }
       : { ...current.uiPreferences },
@@ -260,45 +310,57 @@ function mergeLaunchContext(
           sources: view.sources.map((source) => ({ ...source })),
           columns: view.columns.map((column) => ({
             ...column,
-            expression: column.expression.mode === "field"
-              ? { ...column.expression }
-              : { mode: "formula", expression: structuredClone(column.expression.expression) },
+            expression:
+              column.expression.mode === "field"
+                ? { ...column.expression }
+                : {
+                    mode: "formula",
+                    expression: structuredClone(column.expression.expression),
+                  },
           })),
-          filter: view.filter.mode === "rules"
-            ? {
-                mode: "rules",
-                match: view.filter.match,
-                rules: view.filter.rules.map((rule) => ({ ...rule })),
-              }
-            : {
-                mode: "formula",
-                expression: structuredClone(view.filter.expression),
-              },
+          filter:
+            view.filter.mode === "rules"
+              ? {
+                  mode: "rules",
+                  match: view.filter.match,
+                  rules: view.filter.rules.map((rule) => ({ ...rule })),
+                }
+              : {
+                  mode: "formula",
+                  expression: structuredClone(view.filter.expression),
+                },
         }))
       : current.views.map((view) => ({
           ...view,
           sources: view.sources.map((source) => ({ ...source })),
           columns: view.columns.map((column) => ({
             ...column,
-            expression: column.expression.mode === "field"
-              ? { ...column.expression }
-              : { mode: "formula", expression: structuredClone(column.expression.expression) },
+            expression:
+              column.expression.mode === "field"
+                ? { ...column.expression }
+                : {
+                    mode: "formula",
+                    expression: structuredClone(column.expression.expression),
+                  },
           })),
-          filter: view.filter.mode === "rules"
-            ? {
-                mode: "rules",
-                match: view.filter.match,
-                rules: view.filter.rules.map((rule) => ({ ...rule })),
-              }
-            : {
-                mode: "formula",
-                expression: structuredClone(view.filter.expression),
-              },
+          filter:
+            view.filter.mode === "rules"
+              ? {
+                  mode: "rules",
+                  match: view.filter.match,
+                  rules: view.filter.rules.map((rule) => ({ ...rule })),
+                }
+              : {
+                  mode: "formula",
+                  expression: structuredClone(view.filter.expression),
+                },
         })),
   };
 }
 
-function createDefaultLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): MindooDBAppLaunchContext {
+function createDefaultLaunchContext(
+  patch?: Partial<MindooDBAppLaunchContext>,
+): MindooDBAppLaunchContext {
   const base: MindooDBAppLaunchContext = {
     appId: "sample-app",
     appInstanceId: "sample-app-instance",
@@ -327,7 +389,9 @@ function createDefaultLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): 
   return mergeLaunchContext(base, patch);
 }
 
-function createDefaultReadableAttachmentStream(chunks: Uint8Array[] = []): MindooDBAppReadableAttachmentStream {
+function createDefaultReadableAttachmentStream(
+  chunks: Uint8Array[] = [],
+): MindooDBAppReadableAttachmentStream {
   const queue = chunks.map((chunk) => cloneBytes(chunk));
   let closed = false;
   return {
@@ -380,11 +444,16 @@ function getFieldValue(source: Record<string, unknown>, field: string) {
   }, source);
 }
 
-function matchesDocumentFilter(document: MockStoredDocument, filter?: Record<string, unknown>) {
+function matchesDocumentFilter(
+  document: MockStoredDocument,
+  filter?: Record<string, unknown>,
+) {
   if (!filter) {
     return true;
   }
-  return Object.entries(filter).every(([field, expected]) => getFieldValue(document.data, field) === expected);
+  return Object.entries(filter).every(
+    ([field, expected]) => getFieldValue(document.data, field) === expected,
+  );
 }
 
 function decodeMockListCursor(cursor?: string | null) {
@@ -476,7 +545,11 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
     async gotoPrevSelected() {
       return false;
     },
-    async select(origin: string, docId: string, selectParentCategories = false) {
+    async select(
+      origin: string,
+      docId: string,
+      selectParentCategories = false,
+    ) {
       const key = `${origin}:${docId}`;
       selection = {
         ...selection,
@@ -579,22 +652,43 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
     async childDocuments(_entryKey: string, _descending?: boolean) {
       return [];
     },
-    async childCategoriesByKey(_entryKey: string, _key: unknown, _exact?: boolean, _descending?: boolean) {
+    async childCategoriesByKey(
+      _entryKey: string,
+      _key: unknown,
+      _exact?: boolean,
+      _descending?: boolean,
+    ) {
       return [];
     },
-    async childDocumentsByKey(_entryKey: string, _key: unknown, _exact?: boolean, _descending?: boolean) {
+    async childDocumentsByKey(
+      _entryKey: string,
+      _key: unknown,
+      _exact?: boolean,
+      _descending?: boolean,
+    ) {
       return [];
     },
-    async childCategoriesBetween(_entryKey: string, _range: MindooDBAppViewNavigatorRangeQuery) {
+    async childCategoriesBetween(
+      _entryKey: string,
+      _range: MindooDBAppViewNavigatorRangeQuery,
+    ) {
       return [];
     },
-    async childDocumentsBetween(_entryKey: string, _range: MindooDBAppViewNavigatorRangeQuery) {
+    async childDocumentsBetween(
+      _entryKey: string,
+      _range: MindooDBAppViewNavigatorRangeQuery,
+    ) {
       return [];
     },
-    async getSortedDocIds(_descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
+    async getSortedDocIds(
+      _descending?: boolean,
+    ): Promise<MindooDBAppScopedDocId[]> {
       return [];
     },
-    async getSortedDocIdsScoped(_entryKey: string, _descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
+    async getSortedDocIdsScoped(
+      _entryKey: string,
+      _descending?: boolean,
+    ): Promise<MindooDBAppScopedDocId[]> {
       return [];
     },
     async dispose() {},
@@ -607,14 +701,18 @@ type MockDatabaseMethods = {
   attachments?: Partial<MindooDBAppAttachmentApi>;
 };
 
-function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): MindooDBAppDatabase {
+function createDatabaseHandle(
+  definition: MockMindooDBAppDatabaseDefinition,
+): MindooDBAppDatabase {
   let createCounter = 0;
   let changeCounter = 0;
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
 
   const defaultDocuments: MindooDBAppDocumentApi = {
-    async list(query?: MindooDBAppDocumentListQuery): Promise<MindooDBAppDocumentListResult> {
+    async list(
+      query?: MindooDBAppDocumentListQuery,
+    ): Promise<MindooDBAppDocumentListResult> {
       const status = query?.status ?? "existing";
       const skip = Math.max(0, query?.skip ?? 0);
       const limit = Math.max(1, query?.limit ?? 50);
@@ -622,8 +720,16 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       const metadataOnly = query?.metadataOnly ?? false;
 
       const items = Array.from(storedDocuments.values())
-        .filter((document) => status === "all" ? true : status === "deleted" ? document.isDeleted : !document.isDeleted)
-        .filter((document) => metadataOnly ? true : matchesDocumentFilter(document, query?.filter))
+        .filter((document) =>
+          status === "all"
+            ? true
+            : status === "deleted"
+              ? document.isDeleted
+              : !document.isDeleted,
+        )
+        .filter((document) =>
+          metadataOnly ? true : matchesDocumentFilter(document, query?.filter),
+        )
         .sort((left, right) => left.id.localeCompare(right.id));
       const page = items.slice(offset, offset + limit).map((document) => {
         if (metadataOnly) {
@@ -633,7 +739,12 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
           };
         }
         const projectedData = query?.fields
-          ? Object.fromEntries(query.fields.map((field) => [field, getFieldValue(document.data, field)]))
+          ? Object.fromEntries(
+              query.fields.map((field) => [
+                field,
+                getFieldValue(document.data, field),
+              ]),
+            )
           : document.data;
         return {
           id: document.id,
@@ -643,7 +754,10 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
           isDeleted: status !== "existing" ? document.isDeleted : undefined,
         };
       });
-      const nextCursor = offset + page.length < items.length ? String(offset + page.length) : null;
+      const nextCursor =
+        offset + page.length < items.length
+          ? String(offset + page.length)
+          : null;
       return {
         items: page,
         nextCursor,
@@ -663,7 +777,9 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
         id: document.id,
         data: structuredClone(document.data),
         heads: document.heads ? [...document.heads] : undefined,
-        attachments: document.attachments ? structuredClone(document.attachments) : [],
+        attachments: document.attachments
+          ? structuredClone(document.attachments)
+          : [],
         updatedAt: document.updatedAt,
       };
     },
@@ -672,7 +788,8 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       // already exists, return the existing document (mirrors MindooDB's
       // idempotent create). Otherwise create a new document with the supplied
       // id, falling back to a generated `doc-<counter>` id when none is given.
-      const callerId = typeof input.id === "string" && input.id.length > 0 ? input.id : null;
+      const callerId =
+        typeof input.id === "string" && input.id.length > 0 ? input.id : null;
       if (callerId) {
         const existing = storedDocuments.get(callerId);
         if (existing) {
@@ -685,7 +802,9 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
             id: existing.id,
             data: structuredClone(existing.data),
             heads: existing.heads ? [...existing.heads] : undefined,
-            attachments: existing.attachments ? structuredClone(existing.attachments) : [],
+            attachments: existing.attachments
+              ? structuredClone(existing.attachments)
+              : [],
             updatedAt: existing.updatedAt,
           };
         }
@@ -722,13 +841,17 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
         id: docId,
         data: applyDocumentUpdatePatch(existing?.data ?? {}, patch),
         heads: [`mock-head-${++changeCounter}`],
-        attachments: existing?.attachments ? structuredClone(existing.attachments) : [],
+        attachments: existing?.attachments
+          ? structuredClone(existing.attachments)
+          : [],
         updatedAt,
       };
       storedDocuments.set(docId, {
         ...updated,
         data: structuredClone(updated.data),
-        attachments: updated.attachments ? structuredClone(updated.attachments) : [],
+        attachments: updated.attachments
+          ? structuredClone(updated.attachments)
+          : [],
         isDeleted: false,
       });
       return updated;
@@ -756,10 +879,15 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
       }
       return { ok: true as const };
     },
-    async listHistory(_docId: string): Promise<MindooDBAppDocumentHistoryEntry[]> {
+    async listHistory(
+      _docId: string,
+    ): Promise<MindooDBAppDocumentHistoryEntry[]> {
       return [];
     },
-    async getAtTimestamp(docId: string, timestamp: number): Promise<MindooDBAppHistoricalDocument> {
+    async getAtTimestamp(
+      docId: string,
+      timestamp: number,
+    ): Promise<MindooDBAppHistoricalDocument> {
       return {
         id: docId,
         timestamp,
@@ -768,7 +896,10 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
         attachments: [],
       };
     },
-    async getAtRevision(docId: string, revisionId: string): Promise<MindooDBAppHistoricalDocument> {
+    async getAtRevision(
+      docId: string,
+      revisionId: string,
+    ): Promise<MindooDBAppHistoricalDocument> {
       return {
         id: docId,
         revisionId,
@@ -791,25 +922,55 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
   };
 
   const defaultAttachments: MindooDBAppAttachmentApi = {
-    async list(_docId: string, _options?: { timestamp?: number; revisionId?: string }) {
+    async list(
+      _docId: string,
+      _options?: { timestamp?: number; revisionId?: string },
+    ) {
       return [];
     },
     async remove(_docId: string, _attachmentName: string) {
       return { ok: true as const };
     },
-    async openReadStream(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
+    async openReadStream(
+      _docId: string,
+      _attachmentName: string,
+      _options?: { timestamp?: number; revisionId?: string },
+    ) {
       return createDefaultReadableAttachmentStream();
     },
-    async openWriteStream(_docId: string, _attachmentName: string, _contentType?: string) {
+    async openWriteStream(
+      _docId: string,
+      _attachmentName: string,
+      _contentType?: string,
+    ) {
       return createDefaultWritableAttachmentStream();
     },
-    async preparePreviewSession(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
+    async scan(_docId: string, options) {
+      return {
+        ok: true,
+        attachment: {
+          attachmentId: "scan-attachment-1",
+          fileName: options?.defaultFileName ?? "scan.jpg",
+          mimeType: options?.mimeType ?? "image/jpeg",
+          size: 0,
+        },
+      };
+    },
+    async preparePreviewSession(
+      _docId: string,
+      _attachmentName: string,
+      _options?: { timestamp?: number; revisionId?: string },
+    ) {
       return {
         sessionId: "preview-session-1",
         previewUrl: "about:blank",
       };
     },
-    async openPreview(_docId: string, _attachmentName: string, _options?: { timestamp?: number; revisionId?: string }) {
+    async openPreview(
+      _docId: string,
+      _attachmentName: string,
+      _options?: { timestamp?: number; revisionId?: string },
+    ) {
       return { ok: true as const };
     },
   };
@@ -818,7 +979,10 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
 
   return {
     async info() {
-      return { ...definition.info, capabilities: [...definition.info.capabilities] };
+      return {
+        ...definition.info,
+        capabilities: [...definition.info.capabilities],
+      };
     },
     documents: {
       ...defaultDocuments,
@@ -833,12 +997,19 @@ function createDatabaseHandle(definition: MockMindooDBAppDatabaseDefinition): Mi
 
 type MockSessionState = {
   getLaunchContext: () => MindooDBAppLaunchContext;
-  setLaunchContext: (patch?: Partial<MindooDBAppLaunchContext>) => MindooDBAppLaunchContext;
+  setLaunchContext: (
+    patch?: Partial<MindooDBAppLaunchContext>,
+  ) => MindooDBAppLaunchContext;
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
-  createViewNavigator: (input: MindooDBAppCreateViewNavigatorInput) => Promise<MindooDBAppViewNavigator>;
-  openViewNavigator: (viewId: string, options?: MindooDBAppViewNavigatorOpenOptions) => Promise<MindooDBAppViewNavigator>;
+  createViewNavigator: (
+    input: MindooDBAppCreateViewNavigatorInput,
+  ) => Promise<MindooDBAppViewNavigator>;
+  openViewNavigator: (
+    viewId: string,
+    options?: MindooDBAppViewNavigatorOpenOptions,
+  ) => Promise<MindooDBAppViewNavigator>;
   bridge: MindooDBAppBridge;
   session: MindooDBAppSession;
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
@@ -846,15 +1017,20 @@ type MockSessionState = {
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
 };
 
-function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {}): MockSessionState {
+function createMockSessionState(
+  options: CreateMockMindooDBAppSessionOptions = {},
+): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
-  const uiPreferencesListeners = new Set<(uiPreferences: MindooDBAppUiPreferences) => void>();
+  const uiPreferencesListeners = new Set<
+    (uiPreferences: MindooDBAppUiPreferences) => void
+  >();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
-  let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null = null;
+  let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
+    null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
 
   const menus: MindooDBAppMenuApi = {
@@ -897,7 +1073,9 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
         ...(definition.methods?.views ?? {}),
       });
     }
-    launchContext = mergeLaunchContext(launchContext, { databases: databaseInfos });
+    launchContext = mergeLaunchContext(launchContext, {
+      databases: databaseInfos,
+    });
   };
 
   setDatabases(options.databases ?? []);
@@ -928,11 +1106,15 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
     async createViewNavigator(input) {
       const firstDatabaseId = input.databaseIds[0];
       if (!firstDatabaseId) {
-        throw new Error("At least one test database is required for view creation.");
+        throw new Error(
+          "At least one test database is required for view creation.",
+        );
       }
       const api = databaseViewApis.get(firstDatabaseId);
       if (!api) {
-        throw new Error(`Unknown test database for view creation: ${firstDatabaseId}`);
+        throw new Error(
+          `Unknown test database for view creation: ${firstDatabaseId}`,
+        );
       }
       const view = await api.create(input);
       const viewId = input.definition.id || crypto.randomUUID();
@@ -944,13 +1126,17 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
       if (existing) {
         return existing;
       }
-      const sourceDatabaseId = launchContext.views.find((view) => view.id === viewId)?.sources[0]?.databaseId;
+      const sourceDatabaseId = launchContext.views.find(
+        (view) => view.id === viewId,
+      )?.sources[0]?.databaseId;
       if (!sourceDatabaseId) {
         throw new Error(`Unknown test view: ${viewId}`);
       }
       const api = databaseViewApis.get(sourceDatabaseId);
       if (!api) {
-        throw new Error(`Unknown test database for view ${viewId}: ${sourceDatabaseId}`);
+        throw new Error(
+          `Unknown test database for view ${viewId}: ${sourceDatabaseId}`,
+        );
       }
       const view = await api.open(viewId, options);
       sessionViews.set(viewId, view);
@@ -1014,7 +1200,9 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
     session,
     emitThemeChange(theme) {
       launchContext = mergeLaunchContext(launchContext, { theme });
-      themeListeners.forEach((listener) => listener({ ...launchContext.theme }));
+      themeListeners.forEach((listener) =>
+        listener({ ...launchContext.theme }),
+      );
     },
     emitViewportChange(viewport) {
       launchContext = mergeLaunchContext(launchContext, { viewport });
@@ -1022,7 +1210,9 @@ function createMockSessionState(options: CreateMockMindooDBAppSessionOptions = {
     },
     emitUiPreferencesChange(uiPreferences) {
       launchContext = mergeLaunchContext(launchContext, { uiPreferences });
-      uiPreferencesListeners.forEach((listener) => listener({ ...launchContext.uiPreferences }));
+      uiPreferencesListeners.forEach((listener) =>
+        listener({ ...launchContext.uiPreferences }),
+      );
     },
   };
 }
@@ -1042,7 +1232,9 @@ export interface MockMindooDBAppSessionController {
   bridge: MindooDBAppBridge;
   session: MindooDBAppSession;
   getLaunchContext(): MindooDBAppLaunchContext;
-  setLaunchContext(patch?: Partial<MindooDBAppLaunchContext>): MindooDBAppLaunchContext;
+  setLaunchContext(
+    patch?: Partial<MindooDBAppLaunchContext>,
+  ): MindooDBAppLaunchContext;
   listDatabases(): MindooDBAppDatabaseInfo[];
   setDatabases(definitions: MockMindooDBAppDatabaseDefinition[]): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
@@ -1106,14 +1298,21 @@ export interface FakeBridgeHostController {
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
-  postPortMessage(message: MindooDBAppBridgePortMessage, transfer?: Transferable[]): void;
+  postPortMessage(
+    message: MindooDBAppBridgePortMessage,
+    transfer?: Transferable[],
+  ): void;
   setRequestHandler(method: string, handler: FakeBridgeRequestHandler): void;
   clearRequestHandler(method: string): void;
 }
 
-export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}): FakeBridgeHostController {
+export function createFakeBridgeHost(
+  options: CreateFakeBridgeHostOptions = {},
+): FakeBridgeHostController {
   const state = createMockSessionState(options);
-  const customRequestHandlers = new Map(Object.entries(options.requestHandlers ?? {}));
+  const customRequestHandlers = new Map(
+    Object.entries(options.requestHandlers ?? {}),
+  );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
@@ -1121,14 +1320,26 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
   const writeStreams = new Map<string, MindooDBAppWritableAttachmentStream>();
   let viewCounter = 0;
   let streamCounter = 0;
-  let previousWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-  let previousWindowValue: unknown = typeof window === "undefined" ? undefined : window;
+  let previousWindowDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "window",
+  );
+  let previousWindowValue: unknown =
+    typeof window === "undefined" ? undefined : window;
   let installed = false;
 
   const hostWindow = {
-    postMessage(message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+    postMessage(
+      message: unknown,
+      _targetOrigin?: string,
+      transfer?: Transferable[],
+    ) {
       const payload = message as MindooDBAppBridgeConnectMessage | undefined;
-      if (!payload || payload.protocol !== PROTOCOL || payload.type !== "mindoodb-app:connect") {
+      if (
+        !payload ||
+        payload.protocol !== PROTOCOL ||
+        payload.type !== "mindoodb-app:connect"
+      ) {
         return;
       }
       if (payload.launchId !== state.getLaunchContext().launchId) {
@@ -1136,7 +1347,9 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
       }
       const port = transfer?.[0] as MessagePort | undefined;
       if (!port) {
-        throw new Error("Expected the bridge connection to transfer a MessagePort.");
+        throw new Error(
+          "Expected the bridge connection to transfer a MessagePort.",
+        );
       }
       connectedPorts.add(port);
       port.addEventListener("message", (event: MessageEvent<unknown>) => {
@@ -1181,7 +1394,10 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     if (installed) {
       return;
     }
-    previousWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    previousWindowDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "window",
+    );
     previousWindowValue = typeof window === "undefined" ? undefined : window;
     const baseWindow = typeof window === "undefined" ? {} : window;
     const nextWindow = Object.create(baseWindow as object);
@@ -1201,15 +1417,19 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         configurable: true,
       },
       setTimeout: {
-        value: typeof window !== "undefined" && typeof window.setTimeout === "function"
-          ? window.setTimeout.bind(window)
-          : setTimeout,
+        value:
+          typeof window !== "undefined" &&
+          typeof window.setTimeout === "function"
+            ? window.setTimeout.bind(window)
+            : setTimeout,
         configurable: true,
       },
       clearTimeout: {
-        value: typeof window !== "undefined" && typeof window.clearTimeout === "function"
-          ? window.clearTimeout.bind(window)
-          : clearTimeout,
+        value:
+          typeof window !== "undefined" &&
+          typeof window.clearTimeout === "function"
+            ? window.clearTimeout.bind(window)
+            : clearTimeout,
         configurable: true,
       },
     });
@@ -1231,7 +1451,11 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     return navigator;
   }
 
-  function postRpcSuccess(port: MessagePort, requestId: string, result: unknown) {
+  function postRpcSuccess(
+    port: MessagePort,
+    requestId: string,
+    result: unknown,
+  ) {
     port.postMessage({
       protocol: PROTOCOL,
       kind: "success",
@@ -1240,7 +1464,11 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     });
   }
 
-  function postRpcError(port: MessagePort, requestId: string, error: MindooDBAppBridgeErrorPayload) {
+  function postRpcError(
+    port: MessagePort,
+    requestId: string,
+    error: MindooDBAppBridgeErrorPayload,
+  ) {
     port.postMessage({
       protocol: PROTOCOL,
       kind: "error",
@@ -1257,7 +1485,11 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     });
   }
 
-  function postStreamError(port: MessagePort, streamId: string, error: MindooDBAppBridgeErrorPayload) {
+  function postStreamError(
+    port: MessagePort,
+    streamId: string,
+    error: MindooDBAppBridgeErrorPayload,
+  ) {
     port.postMessage({
       protocol: PROTOCOL,
       kind: "stream-error",
@@ -1277,22 +1509,25 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         state.getDatabase(String(params.databaseId));
         return { ok: true };
       case "session.createViewNavigator": {
-        const navigatorId = `navigator-${viewCounter += 1}`;
+        const navigatorId = `navigator-${(viewCounter += 1)}`;
         const navigator = await state.createViewNavigator({
           databaseIds: Array.isArray(params.databaseIds)
             ? params.databaseIds.map((entry) => String(entry))
             : [],
           definition: params.definition as MindooDBAppViewDefinition,
-          categorizationStyle: params.categorizationStyle === "category_then_document"
-            ? "category_then_document"
-            : "document_then_category",
-          options: params.options as MindooDBAppViewNavigatorOpenOptions | undefined,
+          categorizationStyle:
+            params.categorizationStyle === "category_then_document"
+              ? "category_then_document"
+              : "document_then_category",
+          options: params.options as
+            | MindooDBAppViewNavigatorOpenOptions
+            | undefined,
         });
         viewSessions.set(navigatorId, navigator);
         return { navigatorId };
       }
       case "session.openViewNavigator": {
-        const navigatorId = `navigator-${viewCounter += 1}`;
+        const navigatorId = `navigator-${(viewCounter += 1)}`;
         const navigator = await state.openViewNavigator(
           String(params.viewId),
           params.options as MindooDBAppViewNavigatorOpenOptions | undefined,
@@ -1301,7 +1536,9 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         return { navigatorId };
       }
       case "menus.show":
-        return await state.session.menus.show(request.params as unknown as MindooDBAppShowMenuInput);
+        return await state.session.menus.show(
+          request.params as unknown as MindooDBAppShowMenuInput,
+        );
       case "menus.hide":
         await state.session.menus.hide();
         return { ok: true };
@@ -1309,216 +1546,367 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         await state.session.disconnect();
         return { ok: true };
       case "documents.list":
-        return await state.getDatabase(String(params.databaseId)).documents.list(params.query as MindooDBAppDocumentListQuery | undefined);
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.list(
+            params.query as MindooDBAppDocumentListQuery | undefined,
+          );
       case "documents.getHeadCursor":
-        return await state.getDatabase(String(params.databaseId)).documents.getHeadCursor();
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getHeadCursor();
       case "documents.get":
-        return await state.getDatabase(String(params.databaseId)).documents.get(String(params.docId));
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.get(String(params.docId));
       case "documents.create":
-        return await state.getDatabase(String(params.databaseId)).documents.create(params.input as {
-          set: Record<string, unknown>;
-          decryptionKeyId?: string;
-          id?: string;
-        });
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.create(
+            params.input as {
+              set: Record<string, unknown>;
+              decryptionKeyId?: string;
+              id?: string;
+            },
+          );
       case "documents.update":
-        return await state.getDatabase(String(params.databaseId)).documents.update(
-          String(params.docId),
-          params.patch as MindooDBAppUpdateDocumentInput,
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.update(
+            String(params.docId),
+            params.patch as MindooDBAppUpdateDocumentInput,
+          );
       case "documents.delete":
-        return await state.getDatabase(String(params.databaseId)).documents.delete(String(params.docId));
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.delete(String(params.docId));
       case "documents.undelete":
-        return await state.getDatabase(String(params.databaseId)).documents.undelete(String(params.docId));
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.undelete(String(params.docId));
       case "documents.history.list":
-        return await state.getDatabase(String(params.databaseId)).documents.listHistory(String(params.docId));
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.listHistory(String(params.docId));
       case "documents.history.getAtTimestamp":
-        return await state.getDatabase(String(params.databaseId)).documents.getAtTimestamp(
-          String(params.docId),
-          Number(params.timestamp),
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getAtTimestamp(
+            String(params.docId),
+            Number(params.timestamp),
+          );
       case "documents.history.getAtRevision":
-        return await state.getDatabase(String(params.databaseId)).documents.getAtRevision(
-          String(params.docId),
-          String(params.revisionId),
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getAtRevision(
+            String(params.docId),
+            String(params.revisionId),
+          );
       case "attachments.list":
-        return await state.getDatabase(String(params.databaseId)).attachments.list(
-          String(params.docId),
-          typeof params.revisionId === "string"
-            ? { revisionId: params.revisionId }
-            : typeof params.timestamp === "number"
-              ? { timestamp: params.timestamp }
-              : undefined,
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.list(
+            String(params.docId),
+            typeof params.revisionId === "string"
+              ? { revisionId: params.revisionId }
+              : typeof params.timestamp === "number"
+                ? { timestamp: params.timestamp }
+                : undefined,
+          );
       case "attachments.remove":
-        return await state.getDatabase(String(params.databaseId)).attachments.remove(
-          String(params.docId),
-          String(params.attachmentName),
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.remove(
+            String(params.docId),
+            String(params.attachmentName),
+          );
       case "attachments.openReadStream": {
-        const stream = await state.getDatabase(String(params.databaseId)).attachments.openReadStream(
-          String(params.docId),
-          String(params.attachmentName),
-          typeof params.revisionId === "string"
-            ? { revisionId: params.revisionId }
-            : typeof params.timestamp === "number"
-              ? { timestamp: params.timestamp }
-              : undefined,
-        );
-        const streamId = `read-${streamCounter += 1}`;
+        const stream = await state
+          .getDatabase(String(params.databaseId))
+          .attachments.openReadStream(
+            String(params.docId),
+            String(params.attachmentName),
+            typeof params.revisionId === "string"
+              ? { revisionId: params.revisionId }
+              : typeof params.timestamp === "number"
+                ? { timestamp: params.timestamp }
+                : undefined,
+          );
+        const streamId = `read-${(streamCounter += 1)}`;
         readStreams.set(streamId, stream);
         return { streamId };
       }
       case "attachments.openWriteStream": {
-        const stream = await state.getDatabase(String(params.databaseId)).attachments.openWriteStream(
-          String(params.docId),
-          String(params.attachmentName),
-          typeof params.contentType === "string" ? params.contentType : undefined,
-        );
-        const streamId = `write-${streamCounter += 1}`;
+        const stream = await state
+          .getDatabase(String(params.databaseId))
+          .attachments.openWriteStream(
+            String(params.docId),
+            String(params.attachmentName),
+            typeof params.contentType === "string"
+              ? params.contentType
+              : undefined,
+          );
+        const streamId = `write-${(streamCounter += 1)}`;
         writeStreams.set(streamId, stream);
         return { streamId };
       }
+      case "attachments.scanAndWrite":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.scan(String(params.docId), {
+            defaultFileName:
+              typeof params.defaultFileName === "string"
+                ? params.defaultFileName
+                : undefined,
+            preset:
+              typeof params.preset === "string"
+                ? (params.preset as MindooDBAppDocumentScanPreset)
+                : undefined,
+            mimeType:
+              params.mimeType === "image/png" ||
+              params.mimeType === "image/jpeg" ||
+              params.mimeType === "application/pdf"
+                ? params.mimeType
+                : undefined,
+          });
       case "attachments.openPreview":
-        return await state.getDatabase(String(params.databaseId)).attachments.openPreview(
-          String(params.docId),
-          String(params.attachmentName),
-          typeof params.revisionId === "string"
-            ? { revisionId: params.revisionId }
-            : typeof params.timestamp === "number"
-              ? { timestamp: params.timestamp }
-              : undefined,
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.openPreview(
+            String(params.docId),
+            String(params.attachmentName),
+            typeof params.revisionId === "string"
+              ? { revisionId: params.revisionId }
+              : typeof params.timestamp === "number"
+                ? { timestamp: params.timestamp }
+                : undefined,
+          );
       case "attachments.preparePreviewSession":
-        return await state.getDatabase(String(params.databaseId)).attachments.preparePreviewSession(
-          String(params.docId),
-          String(params.attachmentName),
-          typeof params.revisionId === "string"
-            ? { revisionId: params.revisionId }
-            : typeof params.timestamp === "number"
-              ? { timestamp: params.timestamp }
-              : undefined,
-        );
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.preparePreviewSession(
+            String(params.docId),
+            String(params.attachmentName),
+            typeof params.revisionId === "string"
+              ? { revisionId: params.revisionId }
+              : typeof params.timestamp === "number"
+                ? { timestamp: params.timestamp }
+                : undefined,
+          );
       case "viewNavigators.getDefinition":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getDefinition();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getDefinition();
       case "viewNavigators.refresh":
-        return await (await resolveViewNavigator(String(params.navigatorId))).refresh();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).refresh();
       case "viewNavigators.current.get":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getCurrentEntry();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getCurrentEntry();
       case "viewNavigators.goto.first":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoFirst();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoFirst();
       case "viewNavigators.goto.last":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoLast();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoLast();
       case "viewNavigators.goto.next":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNext();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoNext();
       case "viewNavigators.goto.prev":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrev();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoPrev();
       case "viewNavigators.goto.nextSibling":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNextSibling();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoNextSibling();
       case "viewNavigators.goto.prevSibling":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrevSibling();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoPrevSibling();
       case "viewNavigators.goto.parent":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoParent();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoParent();
       case "viewNavigators.goto.firstChild":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoFirstChild();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoFirstChild();
       case "viewNavigators.goto.lastChild":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoLastChild();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoLastChild();
       case "viewNavigators.goto.pos":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPos(String(params.position));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoPos(String(params.position));
       case "viewNavigators.pos.get":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getPos(String(params.position));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getPos(String(params.position));
       case "viewNavigators.category.findByParts":
-        return await (await resolveViewNavigator(String(params.navigatorId))).findCategoryEntryByParts(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).findCategoryEntryByParts(
           Array.isArray(params.parts) ? params.parts : [],
         );
       case "viewNavigators.entries.forward":
-        return await (await resolveViewNavigator(String(params.navigatorId))).entriesForward(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).entriesForward(
           params.options as MindooDBAppViewNavigatorPageOptions | undefined,
         );
       case "viewNavigators.entries.backward":
-        return await (await resolveViewNavigator(String(params.navigatorId))).entriesBackward(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).entriesBackward(
           params.options as MindooDBAppViewNavigatorPageOptions | undefined,
         );
       case "viewNavigators.goto.nextSelected":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoNextSelected();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoNextSelected();
       case "viewNavigators.goto.prevSelected":
-        return await (await resolveViewNavigator(String(params.navigatorId))).gotoPrevSelected();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).gotoPrevSelected();
       case "viewNavigators.selection.select":
-        return await (await resolveViewNavigator(String(params.navigatorId))).select(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).select(
           String(params.origin),
           String(params.docId),
           Boolean(params.selectParentCategories),
         );
       case "viewNavigators.selection.deselect":
-        return await (await resolveViewNavigator(String(params.navigatorId))).deselect(String(params.origin), String(params.docId));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).deselect(String(params.origin), String(params.docId));
       case "viewNavigators.selection.selectAll":
-        return await (await resolveViewNavigator(String(params.navigatorId))).selectAllEntries();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).selectAllEntries();
       case "viewNavigators.selection.deselectAll":
-        return await (await resolveViewNavigator(String(params.navigatorId))).deselectAllEntries();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).deselectAllEntries();
       case "viewNavigators.selection.isSelected":
-        return await (await resolveViewNavigator(String(params.navigatorId))).isSelected(String(params.origin), String(params.docId));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).isSelected(String(params.origin), String(params.docId));
       case "viewNavigators.selection.get":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getSelectionState();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getSelectionState();
       case "viewNavigators.selection.set":
-        return await (await resolveViewNavigator(String(params.navigatorId))).setSelectionState(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).setSelectionState(
           params.state as MindooDBAppViewNavigatorSelectionState,
         );
       case "viewNavigators.expansion.expand":
-        return await (await resolveViewNavigator(String(params.navigatorId))).expand(String(params.origin), String(params.docId));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).expand(String(params.origin), String(params.docId));
       case "viewNavigators.expansion.collapse":
-        return await (await resolveViewNavigator(String(params.navigatorId))).collapse(String(params.origin), String(params.docId));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).collapse(String(params.origin), String(params.docId));
       case "viewNavigators.expansion.expandAll":
-        return await (await resolveViewNavigator(String(params.navigatorId))).expandAll();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).expandAll();
       case "viewNavigators.expansion.collapseAll":
-        return await (await resolveViewNavigator(String(params.navigatorId))).collapseAll();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).collapseAll();
       case "viewNavigators.expansion.expandToLevel":
-        return await (await resolveViewNavigator(String(params.navigatorId))).expandToLevel(Number(params.level));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).expandToLevel(Number(params.level));
       case "viewNavigators.expansion.isExpanded":
-        return await (await resolveViewNavigator(String(params.navigatorId))).isExpanded(String(params.entryKey));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).isExpanded(String(params.entryKey));
       case "viewNavigators.expansion.get":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getExpansionState();
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getExpansionState();
       case "viewNavigators.expansion.set":
-        return await (await resolveViewNavigator(String(params.navigatorId))).setExpansionState(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).setExpansionState(
           params.state as MindooDBAppViewNavigatorExpansionState,
         );
       case "viewNavigators.children.entries":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childEntries(String(params.entryKey), Boolean(params.descending));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childEntries(String(params.entryKey), Boolean(params.descending));
       case "viewNavigators.children.categories":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childCategories(String(params.entryKey), Boolean(params.descending));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childCategories(String(params.entryKey), Boolean(params.descending));
       case "viewNavigators.children.documents":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childDocuments(String(params.entryKey), Boolean(params.descending));
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childDocuments(String(params.entryKey), Boolean(params.descending));
       case "viewNavigators.children.categoriesByKey":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childCategoriesByKey(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childCategoriesByKey(
           String(params.entryKey),
           params.key,
           typeof params.exact === "boolean" ? params.exact : undefined,
-          typeof params.descending === "boolean" ? params.descending : undefined,
+          typeof params.descending === "boolean"
+            ? params.descending
+            : undefined,
         );
       case "viewNavigators.children.documentsByKey":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childDocumentsByKey(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childDocumentsByKey(
           String(params.entryKey),
           params.key,
           typeof params.exact === "boolean" ? params.exact : undefined,
-          typeof params.descending === "boolean" ? params.descending : undefined,
+          typeof params.descending === "boolean"
+            ? params.descending
+            : undefined,
         );
       case "viewNavigators.children.categoriesBetween":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childCategoriesBetween(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childCategoriesBetween(
           String(params.entryKey),
           params.range as MindooDBAppViewNavigatorRangeQuery,
         );
       case "viewNavigators.children.documentsBetween":
-        return await (await resolveViewNavigator(String(params.navigatorId))).childDocumentsBetween(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).childDocumentsBetween(
           String(params.entryKey),
           params.range as MindooDBAppViewNavigatorRangeQuery,
         );
       case "viewNavigators.sortedDocIds.get":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getSortedDocIds(
-          typeof params.descending === "boolean" ? params.descending : undefined,
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getSortedDocIds(
+          typeof params.descending === "boolean"
+            ? params.descending
+            : undefined,
         );
       case "viewNavigators.sortedDocIds.scoped":
-        return await (await resolveViewNavigator(String(params.navigatorId))).getSortedDocIdsScoped(
+        return await (
+          await resolveViewNavigator(String(params.navigatorId))
+        ).getSortedDocIdsScoped(
           String(params.entryKey),
-          typeof params.descending === "boolean" ? params.descending : undefined,
+          typeof params.descending === "boolean"
+            ? params.descending
+            : undefined,
         );
       case "viewNavigators.dispose": {
         const key = String(params.navigatorId);
@@ -1539,7 +1927,10 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     if (message.kind === "stream-read") {
       const stream = readStreams.get(message.streamId);
       if (!stream) {
-        throw Object.assign(new Error(`Unknown read stream: ${message.streamId}`), { name: "stream-not-found" });
+        throw Object.assign(
+          new Error(`Unknown read stream: ${message.streamId}`),
+          { name: "stream-not-found" },
+        );
       }
       const chunk = await stream.read();
       port.postMessage({
@@ -1557,7 +1948,10 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     if (message.kind === "stream-write") {
       const stream = writeStreams.get(message.streamId);
       if (!stream) {
-        throw Object.assign(new Error(`Unknown write stream: ${message.streamId}`), { name: "stream-not-found" });
+        throw Object.assign(
+          new Error(`Unknown write stream: ${message.streamId}`),
+          { name: "stream-not-found" },
+        );
       }
       await stream.write(new Uint8Array(message.chunk));
       postStreamAck(port, message.streamId);
@@ -1578,12 +1972,17 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
         postStreamAck(port, message.streamId);
         return true;
       }
-      throw Object.assign(new Error(`Unknown stream: ${message.streamId}`), { name: "stream-not-found" });
+      throw Object.assign(new Error(`Unknown stream: ${message.streamId}`), {
+        name: "stream-not-found",
+      });
     }
     if (message.kind === "stream-abort") {
       const stream = writeStreams.get(message.streamId);
       if (!stream) {
-        throw Object.assign(new Error(`Unknown write stream: ${message.streamId}`), { name: "stream-not-found" });
+        throw Object.assign(
+          new Error(`Unknown write stream: ${message.streamId}`),
+          { name: "stream-not-found" },
+        );
       }
       await stream.abort();
       writeStreams.delete(message.streamId);
@@ -1603,12 +2002,19 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
       try {
         const customHandler = customRequestHandlers.get(message.method);
         if (customHandler) {
-          const result = await customHandler(message.params, { host: controller, request: message, port });
+          const result = await customHandler(message.params, {
+            host: controller,
+            request: message,
+            port,
+          });
           postRpcSuccess(port, message.id, result);
           return;
         }
         const builtinResult = await handleBuiltinRequest(message);
-        if (builtinResult === undefined && message.method !== "viewNavigators.dispose") {
+        if (
+          builtinResult === undefined &&
+          message.method !== "viewNavigators.dispose"
+        ) {
           postRpcError(port, message.id, {
             code: "unsupported-method",
             message: `No fake bridge handler is configured for ${message.method}.`,
@@ -1623,18 +2029,27 @@ export function createFakeBridgeHost(options: CreateFakeBridgeHostOptions = {}):
     }
 
     try {
-      const handledByCustom = await options.onPortMessage?.(message, { host: controller, port });
+      const handledByCustom = await options.onPortMessage?.(message, {
+        host: controller,
+        port,
+      });
       if (handledByCustom) {
         return;
       }
       const handled = await handleStreamMessage(port, message);
       if (!handled) {
-        throw Object.assign(new Error(`No fake bridge port handler is configured for ${message.kind}.`), {
-          name: "unsupported-message",
-        });
+        throw Object.assign(
+          new Error(
+            `No fake bridge port handler is configured for ${message.kind}.`,
+          ),
+          {
+            name: "unsupported-message",
+          },
+        );
       }
     } catch (error) {
-      const streamId = "streamId" in message ? String(message.streamId) : "unknown";
+      const streamId =
+        "streamId" in message ? String(message.streamId) : "unknown";
       postStreamError(port, streamId, createBridgeErrorPayload(error));
     }
   }

@@ -78,13 +78,19 @@ export interface MindooDBAppUiPreferences {
 }
 
 /** Saved categorization mode for Haven-managed view mappings delivered at launch time. */
-export type MindooDBAppConfiguredViewCategorizationStyle = "document_then_category" | "category_then_document";
+export type MindooDBAppConfiguredViewCategorizationStyle =
+  | "document_then_category"
+  | "category_then_document";
 
 /** Preferred preview layout for a Haven-managed view mapping. */
 export type MindooDBAppConfiguredViewPreviewMode = "tree" | "table";
 
 /** Column role used by Haven-managed view mappings. */
-export type MindooDBAppConfiguredViewColumnRole = "category" | "sort" | "display" | "total";
+export type MindooDBAppConfiguredViewColumnRole =
+  | "category"
+  | "sort"
+  | "display"
+  | "total";
 
 /** Filter authoring mode used by Haven-managed view mappings. */
 export type MindooDBAppConfiguredViewFilterMode = "rules" | "formula";
@@ -247,6 +253,24 @@ export interface MindooDBAppAttachmentPreviewOptions {
   timestamp?: number;
   /** Stable revision id previously obtained from `documents.listHistory()`. */
   revisionId?: MindooDBAppDocumentRevisionId;
+}
+
+export type MindooDBAppDocumentScanPreset =
+  | "auto"
+  | "a4-portrait"
+  | "a4-landscape"
+  | "letter-portrait"
+  | "letter-landscape";
+
+export interface MindooDBAppScanAttachmentOptions {
+  defaultFileName?: string;
+  preset?: MindooDBAppDocumentScanPreset;
+  mimeType?: "image/jpeg" | "image/png" | "application/pdf";
+}
+
+export interface MindooDBAppScanAttachmentResult {
+  ok: boolean;
+  attachment?: MindooDBAppAttachmentInfo | null;
 }
 
 /** Resolved Haven preview session prepared for opening in a separate tab or window. */
@@ -754,16 +778,27 @@ export interface MindooDBAppWritableAttachmentStream {
 
 /** Document operations exposed by an opened database handle. */
 export interface MindooDBAppDocumentApi {
-  list(query?: MindooDBAppDocumentListQuery): Promise<MindooDBAppDocumentListResult>;
+  list(
+    query?: MindooDBAppDocumentListQuery,
+  ): Promise<MindooDBAppDocumentListResult>;
   getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult>;
   get(docId: string): Promise<MindooDBAppDocument | null>;
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
-  update(docId: string, patch: MindooDBAppUpdateDocumentInput): Promise<MindooDBAppDocument>;
+  update(
+    docId: string,
+    patch: MindooDBAppUpdateDocumentInput,
+  ): Promise<MindooDBAppDocument>;
   delete(docId: string): Promise<{ ok: true }>;
   undelete(docId: string): Promise<{ ok: true }>;
   listHistory(docId: string): Promise<MindooDBAppDocumentHistoryEntry[]>;
-  getAtTimestamp(docId: string, timestamp: number): Promise<MindooDBAppHistoricalDocument>;
-  getAtRevision(docId: string, revisionId: MindooDBAppDocumentRevisionId): Promise<MindooDBAppHistoricalDocument>;
+  getAtTimestamp(
+    docId: string,
+    timestamp: number,
+  ): Promise<MindooDBAppHistoricalDocument>;
+  getAtRevision(
+    docId: string,
+    revisionId: MindooDBAppDocumentRevisionId,
+  ): Promise<MindooDBAppHistoricalDocument>;
 }
 
 export type MindooDBAppViewEntryKind = "category" | "document";
@@ -867,18 +902,30 @@ export interface MindooDBAppViewNavigator {
   gotoLastChild(): Promise<boolean>;
   gotoPos(position: string): Promise<boolean>;
   getPos(position: string): Promise<MindooDBAppViewEntry | null>;
-  findCategoryEntryByParts(parts: unknown[]): Promise<MindooDBAppViewEntry | null>;
-  entriesForward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult>;
-  entriesBackward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult>;
+  findCategoryEntryByParts(
+    parts: unknown[],
+  ): Promise<MindooDBAppViewEntry | null>;
+  entriesForward(
+    options?: MindooDBAppViewNavigatorPageOptions,
+  ): Promise<MindooDBAppViewNavigatorPageResult>;
+  entriesBackward(
+    options?: MindooDBAppViewNavigatorPageOptions,
+  ): Promise<MindooDBAppViewNavigatorPageResult>;
   gotoNextSelected(): Promise<boolean>;
   gotoPrevSelected(): Promise<boolean>;
-  select(origin: string, docId: string, selectParentCategories?: boolean): Promise<void>;
+  select(
+    origin: string,
+    docId: string,
+    selectParentCategories?: boolean,
+  ): Promise<void>;
   deselect(origin: string, docId: string): Promise<void>;
   selectAllEntries(): Promise<void>;
   deselectAllEntries(): Promise<void>;
   isSelected(origin: string, docId: string): Promise<boolean>;
   getSelectionState(): Promise<MindooDBAppViewNavigatorSelectionState>;
-  setSelectionState(state: MindooDBAppViewNavigatorSelectionState): Promise<void>;
+  setSelectionState(
+    state: MindooDBAppViewNavigatorSelectionState,
+  ): Promise<void>;
   expand(origin: string, docId: string): Promise<void>;
   collapse(origin: string, docId: string): Promise<void>;
   expandAll(): Promise<void>;
@@ -886,29 +933,70 @@ export interface MindooDBAppViewNavigator {
   expandToLevel(level: number): Promise<void>;
   isExpanded(entryKey: string): Promise<boolean>;
   getExpansionState(): Promise<MindooDBAppViewNavigatorExpansionState>;
-  setExpansionState(state: MindooDBAppViewNavigatorExpansionState): Promise<void>;
-  childEntries(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
-  childCategories(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
-  childDocuments(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
-  childCategoriesByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
-  childDocumentsByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]>;
-  childCategoriesBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]>;
-  childDocumentsBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]>;
+  setExpansionState(
+    state: MindooDBAppViewNavigatorExpansionState,
+  ): Promise<void>;
+  childEntries(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childCategories(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childDocuments(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childCategoriesByKey(
+    entryKey: string,
+    key: unknown,
+    exact?: boolean,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childDocumentsByKey(
+    entryKey: string,
+    key: unknown,
+    exact?: boolean,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childCategoriesBetween(
+    entryKey: string,
+    range: MindooDBAppViewNavigatorRangeQuery,
+  ): Promise<MindooDBAppViewEntry[]>;
+  childDocumentsBetween(
+    entryKey: string,
+    range: MindooDBAppViewNavigatorRangeQuery,
+  ): Promise<MindooDBAppViewEntry[]>;
   getSortedDocIds(descending?: boolean): Promise<MindooDBAppScopedDocId[]>;
-  getSortedDocIdsScoped(entryKey: string, descending?: boolean): Promise<MindooDBAppScopedDocId[]>;
+  getSortedDocIdsScoped(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppScopedDocId[]>;
   dispose(): Promise<void>;
 }
 
 /** Attachment operations exposed by an opened database handle. */
 export interface MindooDBAppAttachmentApi {
-  list(docId: string, options?: MindooDBAppAttachmentPreviewOptions): Promise<MindooDBAppAttachmentInfo[]>;
+  list(
+    docId: string,
+    options?: MindooDBAppAttachmentPreviewOptions,
+  ): Promise<MindooDBAppAttachmentInfo[]>;
   remove(docId: string, attachmentName: string): Promise<{ ok: true }>;
   openReadStream(
     docId: string,
     attachmentName: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<MindooDBAppReadableAttachmentStream>;
-  openWriteStream(docId: string, attachmentName: string, contentType?: string): Promise<MindooDBAppWritableAttachmentStream>;
+  openWriteStream(
+    docId: string,
+    attachmentName: string,
+    contentType?: string,
+  ): Promise<MindooDBAppWritableAttachmentStream>;
+  scan(
+    docId: string,
+    options?: MindooDBAppScanAttachmentOptions,
+  ): Promise<MindooDBAppScanAttachmentResult>;
   preparePreviewSession(
     docId: string,
     attachmentName: string,
@@ -933,17 +1021,30 @@ export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
-  listDocumentsSinceViewCursor(cursor: string | null): Promise<MindooDBAppViewCursorDocumentListResult>;
-  createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator>;
-  openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator>;
+  listDocumentsSinceViewCursor(
+    cursor: string | null,
+  ): Promise<MindooDBAppViewCursorDocumentListResult>;
+  createViewNavigator(
+    input: MindooDBAppCreateViewNavigatorInput,
+  ): Promise<MindooDBAppViewNavigator>;
+  openViewNavigator(
+    viewId: string,
+    options?: MindooDBAppViewNavigatorOpenOptions,
+  ): Promise<MindooDBAppViewNavigator>;
   menus: MindooDBAppMenuApi;
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
-  onViewportChange(listener: (viewport: MindooDBAppViewport) => void): () => void;
-  onUiPreferencesChange(listener: (uiPreferences: MindooDBAppUiPreferences) => void): () => void;
+  onViewportChange(
+    listener: (viewport: MindooDBAppViewport) => void,
+  ): () => void;
+  onUiPreferencesChange(
+    listener: (uiPreferences: MindooDBAppUiPreferences) => void,
+  ): () => void;
   disconnect(): Promise<void>;
 }
 
 /** Root SDK bridge object used to establish a session. */
 export interface MindooDBAppBridge {
-  connect(options?: MindooDBAppBridgeConnectOptions): Promise<MindooDBAppSession>;
+  connect(
+    options?: MindooDBAppBridgeConnectOptions,
+  ): Promise<MindooDBAppSession>;
 }

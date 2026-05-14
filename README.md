@@ -49,7 +49,7 @@ The bridge carries RPC calls (documents, views, database info), binary attachmen
 ## Install
 
 ```bash
-npm install mindoodb-app-sdk
+pnpm add mindoodb-app-sdk
 ```
 
 ## Get started in 5 minutes
@@ -59,8 +59,8 @@ The fastest way to start building is to clone the **example app**, run it locall
 ```bash
 git clone https://github.com/klehmann/mindoodb-app-example.git
 cd mindoodb-app-example
-npm install
-npm run dev:local
+pnpm install
+pnpm dev:local
 ```
 
 This spins up a local Vite dev server on `http://localhost:4200` with hot module reload.
@@ -90,9 +90,12 @@ const session = await bridge.connect();
 
 // 2. Read the launch context
 const ctx = await session.getLaunchContext();
-console.log("Runtime:", ctx.runtime);   // "iframe" | "window"
-console.log("Theme:", ctx.theme.mode);  // "light" | "dark"
-console.log("Databases:", ctx.databases.map((db) => db.title));
+console.log("Runtime:", ctx.runtime); // "iframe" | "window"
+console.log("Theme:", ctx.theme.mode); // "light" | "dark"
+console.log(
+  "Databases:",
+  ctx.databases.map((db) => db.title),
+);
 
 // 3. Subscribe to live host events
 session.onThemeChange((theme) => {
@@ -230,15 +233,15 @@ Important constraints:
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
 
-| Capability | Allows |
-|---|---|
-| `read` | List and read documents |
-| `create` | Create new documents |
-| `update` | Update existing documents |
-| `delete` | Delete documents |
-| `history` | Access document revision history and historical snapshots |
+| Capability    | Allows                                                       |
+| ------------- | ------------------------------------------------------------ |
+| `read`        | List and read documents                                      |
+| `create`      | Create new documents                                         |
+| `update`      | Update existing documents                                    |
+| `delete`      | Delete documents                                             |
+| `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
-| `views` | Create app-defined virtual views for this database |
+| `views`       | Create app-defined virtual views for this database           |
 
 ```ts
 const db = ctx.databases[0]!;
@@ -298,7 +301,11 @@ console.log(result.nextCursor); // opaque changefeed checkpoint or null
 
 // Continue from the last checkpoint
 const nextPage = result.nextCursor
-  ? await db.documents.list({ cursor: result.nextCursor, limit: 50, fields: ["title"] })
+  ? await db.documents.list({
+      cursor: result.nextCursor,
+      limit: 50,
+      fields: ["title"],
+    })
   : null;
 
 // Fast metadata-only listing (IDs + deletion state only)
@@ -322,7 +329,7 @@ const doc = await db.documents.get(docId);
 // Create (MindooDB generates a UUID7 id; optionally use a named document key)
 const created = await db.documents.create({
   set: { title: "Meeting notes", content: "..." },
-  decryptionKeyId: "team-key",  // omit to use "default"
+  decryptionKeyId: "team-key", // omit to use "default"
 });
 
 // Create with a caller-provided id (e.g. a known well-known document the app
@@ -353,8 +360,8 @@ const merged = await db.documents.update(docId, {
       path: ["body"],
       baseHeads: doc!.heads,
       edits: [
-        { index: 0,  deleteCount: 0, insert: "Hello, " },
-        { index: 12, deleteCount: 5, insert: "team"     },
+        { index: 0, deleteCount: 0, insert: "Hello, " },
+        { index: 12, deleteCount: 5, insert: "team" },
       ],
     },
   ],
@@ -371,15 +378,15 @@ Every `MindooDBAppDocument` snapshot also exposes a `heads?: string[]` field. Th
 
 `documents.list()` is backed by Haven's internal changefeed, not by a positional offset. The query object supports:
 
-| Field | Meaning |
-|---|---|
-| `cursor?: string \| null` | Opaque changefeed checkpoint previously returned by `nextCursor` |
-| `limit?: number` | Maximum number of matching entries to return (default `50`) |
-| `skip?: number` | Skip matching entries after the cursor without loading full document bodies |
-| `status?: "all" \| "existing" \| "deleted"` | Filter by deletion state (default `"existing"`) |
-| `metadataOnly?: boolean` | Return only `{ id, isDeleted }` for speed |
-| `fields?: string[]` | Project specific JSON fields when `metadataOnly` is `false` |
-| `filter?: Record<string, unknown>` | Simple equality filter applied to document data when `metadataOnly` is `false` |
+| Field                                       | Meaning                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------ |
+| `cursor?: string \| null`                   | Opaque changefeed checkpoint previously returned by `nextCursor`               |
+| `limit?: number`                            | Maximum number of matching entries to return (default `50`)                    |
+| `skip?: number`                             | Skip matching entries after the cursor without loading full document bodies    |
+| `status?: "all" \| "existing" \| "deleted"` | Filter by deletion state (default `"existing"`)                                |
+| `metadataOnly?: boolean`                    | Return only `{ id, isDeleted }` for speed                                      |
+| `fields?: string[]`                         | Project specific JSON fields when `metadataOnly` is `false`                    |
+| `filter?: Record<string, unknown>`          | Simple equality filter applied to document data when `metadataOnly` is `false` |
 
 `nextCursor` is the latest checkpoint reached by the page. Persist it after each successful call when you are building your own index or sync loop. If there were no changes after the supplied cursor, `nextCursor` is `null`.
 
@@ -413,7 +420,10 @@ const history = await db.documents.listHistory(docId);
 // }
 
 // Load the document state at an exact DAG revision
-const snapshot = await db.documents.getAtRevision(docId, history[0]!.revisionId);
+const snapshot = await db.documents.getAtRevision(
+  docId,
+  history[0]!.revisionId,
+);
 // {
 //   id,
 //   revisionId,
@@ -426,7 +436,10 @@ const snapshot = await db.documents.getAtRevision(docId, history[0]!.revisionId)
 // }
 
 // Timestamp lookup is still available when all you have is a timestamp.
-const pointInTime = await db.documents.getAtTimestamp(docId, history[0]!.timestamp);
+const pointInTime = await db.documents.getAtTimestamp(
+  docId,
+  history[0]!.timestamp,
+);
 ```
 
 Historical snapshots include the document data payload as it existed at that revision. When the snapshot has attachments, `attachments` reflects the historical `_attachments` array for that same revision, including the attachment reference that Haven needs to stop at the correct historical `lastChunkId`.
@@ -465,14 +478,14 @@ The end-to-end flow is the same in both cases:
 
 ```ts
 interface MindooDBAppTextEdit {
-  index: number;        // 0-based position in the current string at baseHeads
-  deleteCount: number;  // number of characters to remove at `index`
-  insert?: string;      // text to insert at `index` after deletion
+  index: number; // 0-based position in the current string at baseHeads
+  deleteCount: number; // number of characters to remove at `index`
+  insert?: string; // text to insert at `index` after deletion
 }
 
 interface MindooDBAppTextPatch {
   path: Array<string | number>; // path inside `document.data`, e.g. ["body"]
-  baseHeads?: string[];         // document version the edits were authored against
+  baseHeads?: string[]; // document version the edits were authored against
   edits: MindooDBAppTextEdit[]; // applied in order
 }
 ```
@@ -488,11 +501,13 @@ const doc = await db.documents.get(docId);
 
 // User typed "Hello, " at the beginning of the body.
 const result = await db.documents.update(docId, {
-  text: [{
-    path: ["body"],
-    baseHeads: doc!.heads,
-    edits: [{ index: 0, deleteCount: 0, insert: "Hello, " }],
-  }],
+  text: [
+    {
+      path: ["body"],
+      baseHeads: doc!.heads,
+      edits: [{ index: 0, deleteCount: 0, insert: "Hello, " }],
+    },
+  ],
 });
 
 // `result.data.body`  -- canonical merged text
@@ -508,7 +523,7 @@ For WYSIWYG editors that emit a full markdown / plain-text string after each tra
 ```ts
 import { createMindooDBTextBuffer } from "mindoodb-app-sdk";
 
-const doc    = await db.documents.get(docId);
+const doc = await db.documents.get(docId);
 const buffer = createMindooDBTextBuffer({
   database: db,
   document: doc!,
@@ -542,14 +557,14 @@ async function refresh() {
 
 Buffer API at a glance:
 
-| Member | Description |
-|---|---|
-| `value` / `toString()` | Current local text value |
-| `dirty` / `pendingCount` | Whether/how many local splices are buffered |
-| `splice(index, deleteCount, insert?)` | Record an exact text operation |
-| `replaceText(next)` | Diff `value` against `next` and record one minimal splice |
-| `reconcile(document)` | Adopt a fresh document snapshot, drop pending edits |
-| `flush()` | Send pending edits to Haven; resolves to `{ document, value, reconciled }` |
+| Member                                | Description                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| `value` / `toString()`                | Current local text value                                                   |
+| `dirty` / `pendingCount`              | Whether/how many local splices are buffered                                |
+| `splice(index, deleteCount, insert?)` | Record an exact text operation                                             |
+| `replaceText(next)`                   | Diff `value` against `next` and record one minimal splice                  |
+| `reconcile(document)`                 | Adopt a fresh document snapshot, drop pending edits                        |
+| `flush()`                             | Send pending edits to Haven; resolves to `{ document, value, reconciled }` |
 
 `flush()` always sends the original `baseHeads` captured when the buffer was created (or last reconciled), so two windows editing the same document at the same heads will both produce a clean merge -- they will not overwrite each other.
 
@@ -646,13 +661,26 @@ while (chunk !== null) {
 await reader.close();
 
 // Upload (push-based write stream)
-const writer = await db.attachments.openWriteStream(docId, "photo.jpg", "image/jpeg");
+const writer = await db.attachments.openWriteStream(
+  docId,
+  "photo.jpg",
+  "image/jpeg",
+);
 await writer.write(fileBytes);
 await writer.close();
+
+// Host-provided document scanner
+const scan = await db.attachments.scan(docId, {
+  defaultFileName: "invoice.pdf",
+  preset: "a4-portrait",
+  mimeType: "application/pdf",
+});
 
 // Remove
 await db.attachments.remove(docId, "old-file.txt");
 ```
+
+`attachments.scan()` asks Haven to open its document scanner UI. Haven handles camera/file selection, edge detection, manual corner correction, output sizing, and filename confirmation, then writes the resulting image as a normal attachment. Hosts that do not provide scanner UI may reject this method or return `{ ok: false }`.
 
 For historical reads, pass the same `revisionId` you received from `documents.listHistory()` or from a `MindooDBAppHistoricalDocument`. This tells Haven to resolve the attachment from that revision's document payload instead of the latest document state:
 
@@ -680,17 +708,17 @@ Haven includes a **built-in file viewer** that your app can open for common atta
 
 **Supported preview formats:**
 
-| Mode | Formats |
-|---|---|
-| `image` | All common image formats (JPEG, PNG, GIF, WebP, SVG, ...) |
-| `pdf` | PDF documents |
-| `markdown` | Markdown rendered to HTML (.md, .markdown, .mdown, .mkd, .mkdn) |
-| `text` | Plain text, CSV, JSON, XML, YAML, SVG, log files |
-| `docx` | Microsoft Word (.docx) |
-| `pptx` | Microsoft PowerPoint (.pptx) |
-| `spreadsheet` | Microsoft Excel (.xls, .xlsx, .xlsm, .xlsb) |
-| `video` | Video files with embedded player, streaming + seek (.mp4, .m4v, .webm, .ogv, .ogg, plus any `video/*`) |
-| `audio` | Audio files with embedded player, streaming + seek (.mp3, .m4a, .wav, .aac, .oga, plus any `audio/*`) |
+| Mode          | Formats                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| `image`       | All common image formats (JPEG, PNG, GIF, WebP, SVG, ...)                                              |
+| `pdf`         | PDF documents                                                                                          |
+| `markdown`    | Markdown rendered to HTML (.md, .markdown, .mdown, .mkd, .mkdn)                                        |
+| `text`        | Plain text, CSV, JSON, XML, YAML, SVG, log files                                                       |
+| `docx`        | Microsoft Word (.docx)                                                                                 |
+| `pptx`        | Microsoft PowerPoint (.pptx)                                                                           |
+| `spreadsheet` | Microsoft Excel (.xls, .xlsx, .xlsm, .xlsb)                                                            |
+| `video`       | Video files with embedded player, streaming + seek (.mp4, .m4v, .webm, .ogv, .ogg, plus any `video/*`) |
+| `audio`       | Audio files with embedded player, streaming + seek (.mp3, .m4a, .wav, .aac, .oga, plus any `audio/*`)  |
 
 **Open the Haven preview dialog:**
 
@@ -716,7 +744,10 @@ import { canPreviewAttachment } from "mindoodb-app-sdk";
 const mode = canPreviewAttachment("slides.pptx", "application/octet-stream");
 // Returns "pptx" -- Haven can preview this file
 
-const unsupported = canPreviewAttachment("data.bin", "application/octet-stream");
+const unsupported = canPreviewAttachment(
+  "data.bin",
+  "application/octet-stream",
+);
 // Returns null -- no built-in preview available
 ```
 
@@ -804,7 +835,10 @@ do {
 ```ts
 const page1 = await navigator.entriesForward({ limit: 50 });
 const page2 = page1.nextPosition
-  ? await navigator.entriesForward({ limit: 50, startPosition: page1.nextPosition })
+  ? await navigator.entriesForward({
+      limit: 50,
+      startPosition: page1.nextPosition,
+    })
   : null;
 ```
 
@@ -823,7 +857,11 @@ if (category) {
 ```ts
 const category = await navigator.findCategoryEntryByParts(["Ada"]);
 if (category) {
-  const exact = await navigator.childDocumentsByKey(category.key, "2026-04-14", true);
+  const exact = await navigator.childDocumentsByKey(
+    category.key,
+    "2026-04-14",
+    true,
+  );
   const range = await navigator.childDocumentsBetween(category.key, {
     startKey: "2026-04-01",
     endKey: "2026-04-30",
@@ -886,7 +924,7 @@ MindooDB Apps are standard web applications -- deploy them anywhere you can serv
 **Cloudflare Pages / Workers** is one of the easiest options. The [example app](https://github.com/klehmann/mindoodb-app-example) is deployed this way at https://app-example.mindoodb.com using a simple `wrangler.jsonc` configuration:
 
 ```bash
-npm run build
+pnpm build
 wrangler deploy
 ```
 
@@ -899,7 +937,7 @@ Other static hosting options work just as well: Netlify, Vercel, any web server 
 For interactive development with the full Haven host bridge:
 
 1. Run Haven locally.
-2. Run your app on its own dev server (e.g. `npm run dev` with Vite).
+2. Run your app on its own dev server (e.g. `pnpm dev` with Vite).
 3. Register the dev server URL in Haven's Application settings.
 4. Map databases and optionally views to the app.
 5. Launch from Haven -- you get hot reload, real bridge communication, and live theme/viewport events.
@@ -910,48 +948,48 @@ This is separate from the automated testing workflow above. Running Haven is use
 
 ### MindooDBAppBridge
 
-| Method | Returns |
-|---|---|
+| Method              | Returns                       |
+| ------------------- | ----------------------------- |
 | `connect(options?)` | `Promise<MindooDBAppSession>` |
 
 Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 ### MindooDBAppSession
 
-| Method | Returns |
-|---|---|
-| `getLaunchContext()` | `Promise<MindooDBAppLaunchContext>` |
-| `listDatabases()` | `Promise<MindooDBAppDatabaseInfo[]>` |
-| `openDatabase(databaseId)` | `Promise<MindooDBAppDatabase>` |
-| `createViewNavigator(input)` | `Promise<MindooDBAppViewNavigator>` |
-| `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>` |
-| `menus.show(input)` | `Promise<MindooDBAppShowMenuResult>` |
-| `menus.hide()` | `Promise<void>` |
-| `onThemeChange(listener)` | `() => void` (unsubscribe) |
-| `onViewportChange(listener)` | `() => void` (unsubscribe) |
-| `disconnect()` | `Promise<void>` |
+| Method                                | Returns                              |
+| ------------------------------------- | ------------------------------------ |
+| `getLaunchContext()`                  | `Promise<MindooDBAppLaunchContext>`  |
+| `listDatabases()`                     | `Promise<MindooDBAppDatabaseInfo[]>` |
+| `openDatabase(databaseId)`            | `Promise<MindooDBAppDatabase>`       |
+| `createViewNavigator(input)`          | `Promise<MindooDBAppViewNavigator>`  |
+| `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>`  |
+| `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
+| `menus.hide()`                        | `Promise<void>`                      |
+| `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
+| `onViewportChange(listener)`          | `() => void` (unsubscribe)           |
+| `disconnect()`                        | `Promise<void>`                      |
 
 ### MindooDBAppDatabase
 
-| Property / Method | Returns |
-|---|---|
-| `info()` | `Promise<MindooDBAppDatabaseInfo>` |
-| `documents` | `MindooDBAppDocumentApi` |
-| `attachments` | `MindooDBAppAttachmentApi` |
+| Property / Method | Returns                            |
+| ----------------- | ---------------------------------- |
+| `info()`          | `Promise<MindooDBAppDatabaseInfo>` |
+| `documents`       | `MindooDBAppDocumentApi`           |
+| `attachments`     | `MindooDBAppAttachmentApi`         |
 
 ### MindooDBAppDocumentApi
 
-| Method | Returns |
-|---|---|
-| `list(query?)` | `Promise<MindooDBAppDocumentListResult>` |
-| `get(docId)` | `Promise<MindooDBAppDocument \| null>` |
-| `create(input)` | `Promise<MindooDBAppDocument>` |
-| `update(docId, patch)` | `Promise<MindooDBAppDocument>` |
-| `delete(docId)` | `Promise<{ ok: true }>` |
-| `undelete(docId)` | `Promise<{ ok: true }>` |
-| `listHistory(docId)` | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
-| `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>` |
-| `getAtRevision(docId, revisionId)` | `Promise<MindooDBAppHistoricalDocument>` |
+| Method                             | Returns                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
+| `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |
+| `create(input)`                    | `Promise<MindooDBAppDocument>`               |
+| `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
+| `delete(docId)`                    | `Promise<{ ok: true }>`                      |
+| `undelete(docId)`                  | `Promise<{ ok: true }>`                      |
+| `listHistory(docId)`               | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
+| `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>`     |
+| `getAtRevision(docId, revisionId)` | `Promise<MindooDBAppHistoricalDocument>`     |
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
@@ -963,9 +1001,9 @@ For `update(docId, patch)`, use `MindooDBAppUpdateDocumentInput`:
 
 ```ts
 interface MindooDBAppUpdateDocumentInput {
-  set?: Record<string, unknown>;     // shallow assign top-level fields
-  unset?: string[];                  // remove top-level fields entirely
-  text?: MindooDBAppTextPatch[];     // granular collaborative text edits
+  set?: Record<string, unknown>; // shallow assign top-level fields
+  unset?: string[]; // remove top-level fields entirely
+  text?: MindooDBAppTextPatch[]; // granular collaborative text edits
 }
 ```
 
@@ -973,68 +1011,69 @@ interface MindooDBAppUpdateDocumentInput {
 
 ### MindooDBAppAttachmentApi
 
-| Method | Returns |
-|---|---|
-| `list(docId, options?)` | `Promise<MindooDBAppAttachmentInfo[]>` |
-| `remove(docId, attachmentName)` | `Promise<{ ok: true }>` |
-| `openReadStream(docId, attachmentName, options?)` | `Promise<MindooDBAppReadableAttachmentStream>` |
-| `openWriteStream(docId, attachmentName, contentType?)` | `Promise<MindooDBAppWritableAttachmentStream>` |
+| Method                                                   | Returns                                        |
+| -------------------------------------------------------- | ---------------------------------------------- |
+| `list(docId, options?)`                                  | `Promise<MindooDBAppAttachmentInfo[]>`         |
+| `remove(docId, attachmentName)`                          | `Promise<{ ok: true }>`                        |
+| `openReadStream(docId, attachmentName, options?)`        | `Promise<MindooDBAppReadableAttachmentStream>` |
+| `openWriteStream(docId, attachmentName, contentType?)`   | `Promise<MindooDBAppWritableAttachmentStream>` |
+| `scan(docId, options?)`                                  | `Promise<MindooDBAppScanAttachmentResult>`     |
 | `preparePreviewSession(docId, attachmentName, options?)` | `Promise<MindooDBAppAttachmentPreviewSession>` |
-| `openPreview(docId, attachmentName, options?)` | `Promise<{ ok: true }>` |
+| `openPreview(docId, attachmentName, options?)`           | `Promise<{ ok: true }>`                        |
 
 `options` accepts `{ timestamp?: number; revisionId?: string }` for read-only historical attachment access. Mutation methods (`openWriteStream`, `remove`) always target the current document.
 
 ### MindooDBAppViewNavigator
 
-| Method | Returns |
-|---|---|
-| `getDefinition()` | `Promise<MindooDBAppViewDefinition>` |
-| `refresh()` | `Promise<void>` |
-| `getCurrentEntry()` | `Promise<MindooDBAppViewEntry \| null>` |
-| `gotoFirst()` / `gotoLast()` | `Promise<boolean>` |
-| `gotoNext()` / `gotoPrev()` | `Promise<boolean>` |
-| `gotoNextSibling()` / `gotoPrevSibling()` | `Promise<boolean>` |
-| `gotoParent()` | `Promise<boolean>` |
-| `gotoFirstChild()` / `gotoLastChild()` | `Promise<boolean>` |
-| `gotoPos(position)` | `Promise<boolean>` |
-| `getPos(position)` | `Promise<MindooDBAppViewEntry \| null>` |
-| `findCategoryEntryByParts(parts)` | `Promise<MindooDBAppViewEntry \| null>` |
-| `entriesForward(options?)` | `Promise<MindooDBAppViewNavigatorPageResult>` |
-| `entriesBackward(options?)` | `Promise<MindooDBAppViewNavigatorPageResult>` |
-| `gotoNextSelected()` / `gotoPrevSelected()` | `Promise<boolean>` |
-| `select(origin, docId, selectParentCategories?)` | `Promise<void>` |
-| `deselect(origin, docId)` | `Promise<void>` |
-| `selectAllEntries()` / `deselectAllEntries()` | `Promise<void>` |
-| `isSelected(origin, docId)` | `Promise<boolean>` |
-| `getSelectionState()` | `Promise<MindooDBAppViewNavigatorSelectionState>` |
-| `setSelectionState(state)` | `Promise<void>` |
-| `expand(origin, docId)` / `collapse(origin, docId)` | `Promise<void>` |
-| `expandAll()` / `collapseAll()` | `Promise<void>` |
-| `expandToLevel(level)` | `Promise<void>` |
-| `isExpanded(entryKey)` | `Promise<boolean>` |
-| `getExpansionState()` | `Promise<MindooDBAppViewNavigatorExpansionState>` |
-| `setExpansionState(state)` | `Promise<void>` |
-| `childEntries(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childCategories(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childDocuments(entryKey, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childCategoriesByKey(entryKey, key, exact?, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childDocumentsByKey(entryKey, key, exact?, descending?)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childCategoriesBetween(entryKey, range)` | `Promise<MindooDBAppViewEntry[]>` |
-| `childDocumentsBetween(entryKey, range)` | `Promise<MindooDBAppViewEntry[]>` |
-| `getSortedDocIds(descending?)` | `Promise<MindooDBAppScopedDocId[]>` |
-| `getSortedDocIdsScoped(entryKey, descending?)` | `Promise<MindooDBAppScopedDocId[]>` |
-| `dispose()` | `Promise<void>` |
+| Method                                                     | Returns                                           |
+| ---------------------------------------------------------- | ------------------------------------------------- |
+| `getDefinition()`                                          | `Promise<MindooDBAppViewDefinition>`              |
+| `refresh()`                                                | `Promise<void>`                                   |
+| `getCurrentEntry()`                                        | `Promise<MindooDBAppViewEntry \| null>`           |
+| `gotoFirst()` / `gotoLast()`                               | `Promise<boolean>`                                |
+| `gotoNext()` / `gotoPrev()`                                | `Promise<boolean>`                                |
+| `gotoNextSibling()` / `gotoPrevSibling()`                  | `Promise<boolean>`                                |
+| `gotoParent()`                                             | `Promise<boolean>`                                |
+| `gotoFirstChild()` / `gotoLastChild()`                     | `Promise<boolean>`                                |
+| `gotoPos(position)`                                        | `Promise<boolean>`                                |
+| `getPos(position)`                                         | `Promise<MindooDBAppViewEntry \| null>`           |
+| `findCategoryEntryByParts(parts)`                          | `Promise<MindooDBAppViewEntry \| null>`           |
+| `entriesForward(options?)`                                 | `Promise<MindooDBAppViewNavigatorPageResult>`     |
+| `entriesBackward(options?)`                                | `Promise<MindooDBAppViewNavigatorPageResult>`     |
+| `gotoNextSelected()` / `gotoPrevSelected()`                | `Promise<boolean>`                                |
+| `select(origin, docId, selectParentCategories?)`           | `Promise<void>`                                   |
+| `deselect(origin, docId)`                                  | `Promise<void>`                                   |
+| `selectAllEntries()` / `deselectAllEntries()`              | `Promise<void>`                                   |
+| `isSelected(origin, docId)`                                | `Promise<boolean>`                                |
+| `getSelectionState()`                                      | `Promise<MindooDBAppViewNavigatorSelectionState>` |
+| `setSelectionState(state)`                                 | `Promise<void>`                                   |
+| `expand(origin, docId)` / `collapse(origin, docId)`        | `Promise<void>`                                   |
+| `expandAll()` / `collapseAll()`                            | `Promise<void>`                                   |
+| `expandToLevel(level)`                                     | `Promise<void>`                                   |
+| `isExpanded(entryKey)`                                     | `Promise<boolean>`                                |
+| `getExpansionState()`                                      | `Promise<MindooDBAppViewNavigatorExpansionState>` |
+| `setExpansionState(state)`                                 | `Promise<void>`                                   |
+| `childEntries(entryKey, descending?)`                      | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childCategories(entryKey, descending?)`                   | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childDocuments(entryKey, descending?)`                    | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childCategoriesByKey(entryKey, key, exact?, descending?)` | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childDocumentsByKey(entryKey, key, exact?, descending?)`  | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childCategoriesBetween(entryKey, range)`                  | `Promise<MindooDBAppViewEntry[]>`                 |
+| `childDocumentsBetween(entryKey, range)`                   | `Promise<MindooDBAppViewEntry[]>`                 |
+| `getSortedDocIds(descending?)`                             | `Promise<MindooDBAppScopedDocId[]>`               |
+| `getSortedDocIdsScoped(entryKey, descending?)`             | `Promise<MindooDBAppScopedDocId[]>`               |
+| `dispose()`                                                | `Promise<void>`                                   |
 
 ### Exported functions
 
-| Function | Description |
-|---|---|
-| `createMindooDBAppBridge()` | Create the bridge object used to connect to Haven |
-| `createMindooDBTextBuffer(options)` | Create an editor-friendly buffer for granular collaborative text edits on a document field |
-| `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`) |
-| `createViewLanguage<T>()` | Create a typed expression builder for view definitions |
-| `abbreviateCanonicalName(value)` | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo` |
-| `expandAbbreviatedName(value)` | Convert an abbreviated Notes-style name like `Jane/Dev/Mindoo` to `cn=Jane/ou=Dev/o=Mindoo` |
+| Function                                   | Description                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `createMindooDBAppBridge()`                | Create the bridge object used to connect to Haven                                           |
+| `createMindooDBTextBuffer(options)`        | Create an editor-friendly buffer for granular collaborative text edits on a document field  |
+| `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`)                                  |
+| `createViewLanguage<T>()`                  | Create a typed expression builder for view definitions                                      |
+| `abbreviateCanonicalName(value)`           | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo`    |
+| `expandAbbreviatedName(value)`             | Convert an abbreviated Notes-style name like `Jane/Dev/Mindoo` to `cn=Jane/ou=Dev/o=Mindoo` |
 
 ## Permissions and mappings
 
