@@ -1,6 +1,6 @@
 {
   "name": "mindoodb-app-sdk",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "packageManager": "pnpm@11.1.1",
   "engines": {
     "node": ">=22.13.0"
@@ -44,7 +44,7 @@
     "prepublishOnly": "npm run build && npm run test"
   },
   "dependencies": {
-    "mindoodb-view-language": "0.0.11"
+    "mindoodb-view-language": "0.0.12"
   },
   "devDependencies": {
     "@types/node": "25.5.0",
