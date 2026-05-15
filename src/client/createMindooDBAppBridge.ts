@@ -86,36 +86,54 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 
 /** Copies a `Uint8Array` into a transferable `ArrayBuffer` for stream writes. */
 function toTransferableArrayBuffer(chunk: Uint8Array) {
-  return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+  return chunk.buffer.slice(
+    chunk.byteOffset,
+    chunk.byteOffset + chunk.byteLength,
+  ) as ArrayBuffer;
 }
 
 /** Narrows a port message to a chunk event for one specific stream id. */
-function isStreamChunkFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppAttachmentChunk {
+function isStreamChunkFor(
+  streamId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppAttachmentChunk {
   return message.kind === "stream-chunk" && message.streamId === streamId;
 }
 
 /** Narrows a port message to an acknowledgement for one specific stream id. */
-function isStreamAckFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeStreamAck {
+function isStreamAckFor(
+  streamId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeStreamAck {
   return message.kind === "stream-ack" && message.streamId === streamId;
 }
 
 /** Narrows a port message to an error event for one specific stream id. */
-function isStreamErrorFor(streamId: string, message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeStreamError {
+function isStreamErrorFor(
+  streamId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeStreamError {
   return message.kind === "stream-error" && message.streamId === streamId;
 }
 
 /** Narrows a port message to a host theme change event. */
-function isThemeChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeThemeChangedMessage {
+function isThemeChangedMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeThemeChangedMessage {
   return message.kind === "theme-changed";
 }
 
 /** Narrows a port message to a host viewport change event. */
-function isViewportChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeViewportChangedMessage {
+function isViewportChangedMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeViewportChangedMessage {
   return message.kind === "viewport-changed";
 }
 
 /** Narrows a port message to a host UI preferences change event. */
-function isUiPreferencesChangedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeUiPreferencesChangedMessage {
+function isUiPreferencesChangedMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeUiPreferencesChangedMessage {
   return message.kind === "ui-preferences-changed";
 }
 
@@ -132,7 +150,9 @@ function resolveLaunchId(options: MindooDBAppBridgeConnectOptions | undefined) {
     return options.launchId;
   }
   if (typeof window === "undefined") {
-    throw new Error("A launchId must be provided when connecting outside the browser.");
+    throw new Error(
+      "A launchId must be provided when connecting outside the browser.",
+    );
   }
   const search = new URLSearchParams(window.location.search);
   const launchId = search.get("mindoodbAppLaunchId");
@@ -142,10 +162,19 @@ function resolveLaunchId(options: MindooDBAppBridgeConnectOptions | undefined) {
   return launchId;
 }
 
+function shouldUseWindowedHostTab() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.parent === window && Boolean(window.opener);
+}
+
 /** Finds the Haven window hosting the current app runtime. */
 function resolveTargetWindow() {
   if (typeof window === "undefined") {
-    throw new Error("The MindooDB app bridge is only available in the browser.");
+    throw new Error(
+      "The MindooDB app bridge is only available in the browser.",
+    );
   }
   if (window.parent && window.parent !== window) {
     return window.parent;
@@ -164,7 +193,10 @@ function resolveTargetWindow() {
  * host-side handshake error. Rejects if the host does not respond within
  * `connectTimeoutMs`.
  */
-function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefined, launchId: string) {
+function waitForConnectedPort(
+  options: MindooDBAppBridgeConnectOptions | undefined,
+  launchId: string,
+) {
   const targetWindow = resolveTargetWindow();
   const targetOrigin = options?.targetOrigin ?? "*";
   const channel = new MessageChannel();
@@ -177,11 +209,19 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
       if (timeoutId !== null) {
         window.clearTimeout(timeoutId);
       }
-      channel.port1.removeEventListener("message", handleMessage as EventListener);
+      channel.port1.removeEventListener(
+        "message",
+        handleMessage as EventListener,
+      );
     };
 
     const handleMessage = (event: MessageEvent<unknown>) => {
-      const payload = event.data as Partial<MindooDBAppBridgeConnectedMessage | MindooDBAppBridgeHandshakeErrorMessage> | undefined;
+      const payload = event.data as
+        | Partial<
+            | MindooDBAppBridgeConnectedMessage
+            | MindooDBAppBridgeHandshakeErrorMessage
+          >
+        | undefined;
       if (!payload || payload.protocol !== PROTOCOL) {
         return;
       }
@@ -193,9 +233,10 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
       if (payload.type === "mindoodb-app:error") {
         cleanup();
         channel.port1.close();
-        const message = typeof payload.error === "string" && payload.error.trim()
-          ? payload.error
-          : "MindooDB Haven bridge connection failed.";
+        const message =
+          typeof payload.error === "string" && payload.error.trim()
+            ? payload.error
+            : "MindooDB Haven bridge connection failed.";
         reject(new Error(message));
       }
     };
@@ -203,7 +244,11 @@ function waitForConnectedPort(options: MindooDBAppBridgeConnectOptions | undefin
     timeoutId = window.setTimeout(() => {
       cleanup();
       channel.port1.close();
-      reject(new Error(`Timed out while connecting to the MindooDB Haven bridge for launch ${launchId}.`));
+      reject(
+        new Error(
+          `Timed out while connecting to the MindooDB Haven bridge for launch ${launchId}.`,
+        ),
+      );
     }, timeoutMs);
 
     channel.port1.addEventListener("message", handleMessage as EventListener);
@@ -249,7 +294,10 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
   ) {}
 
   /** Shorthand: call an RPC method with the navigator ID automatically injected. */
-  private async call<TResult>(method: string, params: Record<string, unknown> = {}) {
+  private async call<TResult>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ) {
     return await this.rpc.call<TResult>(method, {
       navigatorId: this.navigatorId,
       ...params,
@@ -265,7 +313,9 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
   }
 
   async refresh(): Promise<string | null> {
-    const result = await this.call<{ viewCursor: string | null }>("viewNavigators.refresh");
+    const result = await this.call<{ viewCursor: string | null }>(
+      "viewNavigators.refresh",
+    );
     this.viewCursor = result.viewCursor;
     return this.viewCursor;
   }
@@ -318,16 +368,26 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     return await this.call("viewNavigators.pos.get", { position });
   }
 
-  async findCategoryEntryByParts(parts: unknown[]): Promise<MindooDBAppViewEntry | null> {
+  async findCategoryEntryByParts(
+    parts: unknown[],
+  ): Promise<MindooDBAppViewEntry | null> {
     return await this.call("viewNavigators.category.findByParts", { parts });
   }
 
-  async entriesForward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult> {
-    return await this.call("viewNavigators.entries.forward", { options: options ?? {} });
+  async entriesForward(
+    options?: MindooDBAppViewNavigatorPageOptions,
+  ): Promise<MindooDBAppViewNavigatorPageResult> {
+    return await this.call("viewNavigators.entries.forward", {
+      options: options ?? {},
+    });
   }
 
-  async entriesBackward(options?: MindooDBAppViewNavigatorPageOptions): Promise<MindooDBAppViewNavigatorPageResult> {
-    return await this.call("viewNavigators.entries.backward", { options: options ?? {} });
+  async entriesBackward(
+    options?: MindooDBAppViewNavigatorPageOptions,
+  ): Promise<MindooDBAppViewNavigatorPageResult> {
+    return await this.call("viewNavigators.entries.backward", {
+      options: options ?? {},
+    });
   }
 
   async gotoNextSelected(): Promise<boolean> {
@@ -338,7 +398,11 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     return await this.call("viewNavigators.goto.prevSelected");
   }
 
-  async select(origin: string, docId: string, selectParentCategories?: boolean): Promise<void> {
+  async select(
+    origin: string,
+    docId: string,
+    selectParentCategories?: boolean,
+  ): Promise<void> {
     await this.call("viewNavigators.selection.select", {
       origin,
       docId,
@@ -359,14 +423,19 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
   }
 
   async isSelected(origin: string, docId: string): Promise<boolean> {
-    return await this.call("viewNavigators.selection.isSelected", { origin, docId });
+    return await this.call("viewNavigators.selection.isSelected", {
+      origin,
+      docId,
+    });
   }
 
   async getSelectionState(): Promise<MindooDBAppViewNavigatorSelectionState> {
     return await this.call("viewNavigators.selection.get");
   }
 
-  async setSelectionState(state: MindooDBAppViewNavigatorSelectionState): Promise<void> {
+  async setSelectionState(
+    state: MindooDBAppViewNavigatorSelectionState,
+  ): Promise<void> {
     await this.call("viewNavigators.selection.set", { state });
   }
 
@@ -398,23 +467,48 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     return await this.call("viewNavigators.expansion.get");
   }
 
-  async setExpansionState(state: MindooDBAppViewNavigatorExpansionState): Promise<void> {
+  async setExpansionState(
+    state: MindooDBAppViewNavigatorExpansionState,
+  ): Promise<void> {
     await this.call("viewNavigators.expansion.set", { state });
   }
 
-  async childEntries(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
-    return await this.call("viewNavigators.children.entries", { entryKey, descending });
+  async childEntries(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.entries", {
+      entryKey,
+      descending,
+    });
   }
 
-  async childCategories(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
-    return await this.call("viewNavigators.children.categories", { entryKey, descending });
+  async childCategories(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.categories", {
+      entryKey,
+      descending,
+    });
   }
 
-  async childDocuments(entryKey: string, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
-    return await this.call("viewNavigators.children.documents", { entryKey, descending });
+  async childDocuments(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.documents", {
+      entryKey,
+      descending,
+    });
   }
 
-  async childCategoriesByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+  async childCategoriesByKey(
+    entryKey: string,
+    key: unknown,
+    exact?: boolean,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]> {
     return await this.call("viewNavigators.children.categoriesByKey", {
       entryKey,
       key,
@@ -423,7 +517,12 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     });
   }
 
-  async childDocumentsByKey(entryKey: string, key: unknown, exact?: boolean, descending?: boolean): Promise<MindooDBAppViewEntry[]> {
+  async childDocumentsByKey(
+    entryKey: string,
+    key: unknown,
+    exact?: boolean,
+    descending?: boolean,
+  ): Promise<MindooDBAppViewEntry[]> {
     return await this.call("viewNavigators.children.documentsByKey", {
       entryKey,
       key,
@@ -432,20 +531,43 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     });
   }
 
-  async childCategoriesBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]> {
-    return await this.call("viewNavigators.children.categoriesBetween", { entryKey, range });
+  async childCategoriesBetween(
+    entryKey: string,
+    range: MindooDBAppViewNavigatorRangeQuery,
+  ): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.categoriesBetween", {
+      entryKey,
+      range,
+    });
   }
 
-  async childDocumentsBetween(entryKey: string, range: MindooDBAppViewNavigatorRangeQuery): Promise<MindooDBAppViewEntry[]> {
-    return await this.call("viewNavigators.children.documentsBetween", { entryKey, range });
+  async childDocumentsBetween(
+    entryKey: string,
+    range: MindooDBAppViewNavigatorRangeQuery,
+  ): Promise<MindooDBAppViewEntry[]> {
+    return await this.call("viewNavigators.children.documentsBetween", {
+      entryKey,
+      range,
+    });
   }
 
-  async getSortedDocIds(descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
-    return await this.call<MindooDBAppScopedDocId[]>("viewNavigators.sortedDocIds.get", { descending });
+  async getSortedDocIds(
+    descending?: boolean,
+  ): Promise<MindooDBAppScopedDocId[]> {
+    return await this.call<MindooDBAppScopedDocId[]>(
+      "viewNavigators.sortedDocIds.get",
+      { descending },
+    );
   }
 
-  async getSortedDocIdsScoped(entryKey: string, descending?: boolean): Promise<MindooDBAppScopedDocId[]> {
-    return await this.call<MindooDBAppScopedDocId[]>("viewNavigators.sortedDocIds.scoped", { entryKey, descending });
+  async getSortedDocIdsScoped(
+    entryKey: string,
+    descending?: boolean,
+  ): Promise<MindooDBAppScopedDocId[]> {
+    return await this.call<MindooDBAppScopedDocId[]>(
+      "viewNavigators.sortedDocIds.scoped",
+      { entryKey, descending },
+    );
   }
 
   async dispose(): Promise<void> {
@@ -472,7 +594,10 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
     reject: (error: Error) => void;
   } | null = null;
 
-  constructor(private readonly rpc: PortRpcClient, private readonly streamId: string) {
+  constructor(
+    private readonly rpc: PortRpcClient,
+    private readonly streamId: string,
+  ) {
     this.unsubscribe = this.rpc.addMessageListener((message) => {
       if (isStreamChunkFor(this.streamId, message)) {
         const pending = this.pendingRead;
@@ -480,7 +605,11 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
         if (!pending) {
           return;
         }
-        pending.resolve(message.done ? null : new Uint8Array(message.chunk ?? new ArrayBuffer(0)));
+        pending.resolve(
+          message.done
+            ? null
+            : new Uint8Array(message.chunk ?? new ArrayBuffer(0)),
+        );
         if (message.done) {
           this.closed = true;
           this.unsubscribe();
@@ -504,7 +633,9 @@ class MindooDBAppReadableAttachmentStreamImpl implements MindooDBAppReadableAtta
       return null;
     }
     if (this.pendingRead) {
-      throw new Error("A read() call is already in progress for this attachment stream.");
+      throw new Error(
+        "A read() call is already in progress for this attachment stream.",
+      );
     }
 
     return await new Promise<Uint8Array | null>((resolve, reject) => {
@@ -555,7 +686,10 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
   } | null = null;
   private queue = Promise.resolve();
 
-  constructor(private readonly rpc: PortRpcClient, private readonly streamId: string) {
+  constructor(
+    private readonly rpc: PortRpcClient,
+    private readonly streamId: string,
+  ) {
     this.unsubscribe = this.rpc.addMessageListener((message) => {
       if (isStreamAckFor(this.streamId, message)) {
         const inflight = this.inflight;
@@ -597,12 +731,15 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
     return await this.enqueue(async () => {
       const buffer = toTransferableArrayBuffer(chunk);
       await this.waitForAck(() => {
-        this.rpc.postMessage({
-          protocol: PROTOCOL,
-          kind: "stream-write",
-          streamId: this.streamId,
-          chunk: buffer,
-        }, [buffer]);
+        this.rpc.postMessage(
+          {
+            protocol: PROTOCOL,
+            kind: "stream-write",
+            streamId: this.streamId,
+            chunk: buffer,
+          },
+          [buffer],
+        );
       });
     });
   }
@@ -660,104 +797,193 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly documents: MindooDBAppDocumentApi;
   public readonly attachments: MindooDBAppAttachmentApi;
 
-  constructor(private readonly rpc: PortRpcClient, private readonly databaseId: string) {
+  constructor(
+    private readonly rpc: PortRpcClient,
+    private readonly databaseId: string,
+  ) {
     this.documents = {
-      list: async (query) => await this.rpc.call("documents.list", {
-        databaseId: this.databaseId,
-        query: query ?? {},
-      }),
-      getHeadCursor: async () => await this.rpc.call("documents.getHeadCursor", {
-        databaseId: this.databaseId,
-      }),
-      get: async (docId) => await this.rpc.call("documents.get", {
-        databaseId: this.databaseId,
-        docId,
-      }),
-      create: async (input) => await this.rpc.call("documents.create", {
-        databaseId: this.databaseId,
-        input,
-      }),
-      update: async (docId, patch) => await this.rpc.call("documents.update", {
-        databaseId: this.databaseId,
-        docId,
-        patch,
-      }),
-      delete: async (docId) => await this.rpc.call("documents.delete", {
-        databaseId: this.databaseId,
-        docId,
-      }),
-      undelete: async (docId) => await this.rpc.call("documents.undelete", {
-        databaseId: this.databaseId,
-        docId,
-      }),
-      listHistory: async (docId) => await this.rpc.call("documents.history.list", {
-        databaseId: this.databaseId,
-        docId,
-      }),
-      getAtTimestamp: async (docId, timestamp) => await this.rpc.call("documents.history.getAtTimestamp", {
-        databaseId: this.databaseId,
-        docId,
-        timestamp,
-      }),
-      getAtRevision: async (docId, revisionId) => await this.rpc.call("documents.history.getAtRevision", {
-        databaseId: this.databaseId,
-        docId,
-        revisionId,
-      }),
+      list: async (query) =>
+        await this.rpc.call("documents.list", {
+          databaseId: this.databaseId,
+          query: query ?? {},
+        }),
+      getHeadCursor: async () =>
+        await this.rpc.call("documents.getHeadCursor", {
+          databaseId: this.databaseId,
+        }),
+      get: async (docId) =>
+        await this.rpc.call("documents.get", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      create: async (input) =>
+        await this.rpc.call("documents.create", {
+          databaseId: this.databaseId,
+          input,
+        }),
+      update: async (docId, patch) =>
+        await this.rpc.call("documents.update", {
+          databaseId: this.databaseId,
+          docId,
+          patch,
+        }),
+      delete: async (docId) =>
+        await this.rpc.call("documents.delete", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      undelete: async (docId) =>
+        await this.rpc.call("documents.undelete", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      listHistory: async (docId) =>
+        await this.rpc.call("documents.history.list", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      getAtTimestamp: async (docId, timestamp) =>
+        await this.rpc.call("documents.history.getAtTimestamp", {
+          databaseId: this.databaseId,
+          docId,
+          timestamp,
+        }),
+      getAtRevision: async (docId, revisionId) =>
+        await this.rpc.call("documents.history.getAtRevision", {
+          databaseId: this.databaseId,
+          docId,
+          revisionId,
+        }),
     };
 
     this.attachments = {
-      list: async (docId, options) => await this.rpc.call("attachments.list", {
-        databaseId: this.databaseId,
-        docId,
-        timestamp: options?.timestamp,
-        revisionId: options?.revisionId,
-      }),
-      remove: async (docId, attachmentName) => await this.rpc.call("attachments.remove", {
-        databaseId: this.databaseId,
-        docId,
-        attachmentName,
-      }),
+      list: async (docId, options) =>
+        await this.rpc.call("attachments.list", {
+          databaseId: this.databaseId,
+          docId,
+          timestamp: options?.timestamp,
+          revisionId: options?.revisionId,
+        }),
+      remove: async (docId, attachmentName) =>
+        await this.rpc.call("attachments.remove", {
+          databaseId: this.databaseId,
+          docId,
+          attachmentName,
+        }),
       openReadStream: async (docId, attachmentName, options) => {
-        const result = await this.rpc.call<MindooDBAppBridgeStreamOpenResult>("attachments.openReadStream", {
+        const result = await this.rpc.call<MindooDBAppBridgeStreamOpenResult>(
+          "attachments.openReadStream",
+          {
+            databaseId: this.databaseId,
+            docId,
+            attachmentName,
+            timestamp: options?.timestamp,
+            revisionId: options?.revisionId,
+          },
+        );
+        return new MindooDBAppReadableAttachmentStreamImpl(
+          this.rpc,
+          result.streamId,
+        );
+      },
+      openWriteStream: async (docId, attachmentName, contentType) => {
+        const result = await this.rpc.call<MindooDBAppBridgeStreamOpenResult>(
+          "attachments.openWriteStream",
+          {
+            databaseId: this.databaseId,
+            docId,
+            attachmentName,
+            contentType,
+          },
+        );
+        return new MindooDBAppWritableAttachmentStreamImpl(
+          this.rpc,
+          result.streamId,
+        );
+      },
+      scan: async (docId, options) => {
+        const scannerTab = shouldUseWindowedHostTab()
+          ? window.open("", "_blank")
+          : null;
+        if (scannerTab) {
+          try {
+            scannerTab.document.title = "Opening document scanner...";
+            const preparedSession = await this.rpc.call<{
+              sessionId: string;
+              scanUrl: string;
+            }>("attachments.prepareScanSession", {
+              databaseId: this.databaseId,
+              docId,
+              defaultFileName: options?.defaultFileName,
+              preset: options?.preset,
+              mimeType: options?.mimeType,
+            });
+            scannerTab.location.href = preparedSession.scanUrl;
+            return await this.rpc.call<MindooDBAppScanAttachmentResult>(
+              "attachments.awaitScanSession",
+              {
+                databaseId: this.databaseId,
+                sessionId: preparedSession.sessionId,
+              },
+            );
+          } catch (error) {
+            scannerTab.close();
+            throw error;
+          }
+        }
+
+        return await this.rpc.call<MindooDBAppScanAttachmentResult>(
+          "attachments.scanAndWrite",
+          {
+            databaseId: this.databaseId,
+            docId,
+            defaultFileName: options?.defaultFileName,
+            preset: options?.preset,
+            mimeType: options?.mimeType,
+          },
+        );
+      },
+      preparePreviewSession: async (docId, attachmentName, options) =>
+        await this.rpc.call("attachments.preparePreviewSession", {
+          databaseId: this.databaseId,
+          docId,
+          attachmentName,
+          timestamp: options?.timestamp,
+          revisionId: options?.revisionId,
+        }),
+      openPreview: async (docId, attachmentName, options) => {
+        const previewTab = shouldUseWindowedHostTab()
+          ? window.open("", "_blank")
+          : null;
+        if (previewTab) {
+          try {
+            previewTab.document.title = "Opening attachment preview...";
+            const previewSession = await this.rpc.call<{
+              sessionId: string;
+              previewUrl: string;
+            }>("attachments.preparePreviewSession", {
+              databaseId: this.databaseId,
+              docId,
+              attachmentName,
+              timestamp: options?.timestamp,
+              revisionId: options?.revisionId,
+            });
+            previewTab.location.href = previewSession.previewUrl;
+            return { ok: true };
+          } catch (error) {
+            previewTab.close();
+            throw error;
+          }
+        }
+
+        return await this.rpc.call("attachments.openPreview", {
           databaseId: this.databaseId,
           docId,
           attachmentName,
           timestamp: options?.timestamp,
           revisionId: options?.revisionId,
         });
-        return new MindooDBAppReadableAttachmentStreamImpl(this.rpc, result.streamId);
       },
-      openWriteStream: async (docId, attachmentName, contentType) => {
-        const result = await this.rpc.call<MindooDBAppBridgeStreamOpenResult>("attachments.openWriteStream", {
-          databaseId: this.databaseId,
-          docId,
-          attachmentName,
-          contentType,
-        });
-        return new MindooDBAppWritableAttachmentStreamImpl(this.rpc, result.streamId);
-      },
-      scan: async (docId, options) => await this.rpc.call<MindooDBAppScanAttachmentResult>("attachments.scanAndWrite", {
-        databaseId: this.databaseId,
-        docId,
-        defaultFileName: options?.defaultFileName,
-        preset: options?.preset,
-        mimeType: options?.mimeType,
-      }),
-      preparePreviewSession: async (docId, attachmentName, options) => await this.rpc.call("attachments.preparePreviewSession", {
-        databaseId: this.databaseId,
-        docId,
-        attachmentName,
-        timestamp: options?.timestamp,
-        revisionId: options?.revisionId,
-      }),
-      openPreview: async (docId, attachmentName, options) => await this.rpc.call("attachments.openPreview", {
-        databaseId: this.databaseId,
-        docId,
-        attachmentName,
-        timestamp: options?.timestamp,
-        revisionId: options?.revisionId,
-      }),
     };
   }
 
@@ -813,8 +1039,12 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
   }
 
-  async listDocumentsSinceViewCursor(cursor: string | null): Promise<MindooDBAppViewCursorDocumentListResult> {
-    return await this.rpc.call("session.listDocumentsSinceViewCursor", { cursor });
+  async listDocumentsSinceViewCursor(
+    cursor: string | null,
+  ): Promise<MindooDBAppViewCursorDocumentListResult> {
+    return await this.rpc.call("session.listDocumentsSinceViewCursor", {
+      cursor,
+    });
   }
 
   /**
@@ -824,9 +1054,18 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
    * open options (root scoping, category filtering), and returns a `navigatorId`
    * that all subsequent navigator RPCs reference.
    */
-  async createViewNavigator(input: MindooDBAppCreateViewNavigatorInput): Promise<MindooDBAppViewNavigator> {
-    const result = await this.rpc.call<{ navigatorId: string; viewCursor: string | null }>("session.createViewNavigator", input);
-    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId, result.viewCursor);
+  async createViewNavigator(
+    input: MindooDBAppCreateViewNavigatorInput,
+  ): Promise<MindooDBAppViewNavigator> {
+    const result = await this.rpc.call<{
+      navigatorId: string;
+      viewCursor: string | null;
+    }>("session.createViewNavigator", input);
+    return new MindooDBAppViewNavigatorImpl(
+      this.rpc,
+      result.navigatorId,
+      result.viewCursor,
+    );
   }
 
   /**
@@ -835,9 +1074,19 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
    * `viewId` must match one of the views declared in the launch context. The
    * host resolves the full view definition and database bindings automatically.
    */
-  async openViewNavigator(viewId: string, options?: MindooDBAppViewNavigatorOpenOptions): Promise<MindooDBAppViewNavigator> {
-    const result = await this.rpc.call<{ navigatorId: string; viewCursor: string | null }>("session.openViewNavigator", { viewId, options: options ?? {} });
-    return new MindooDBAppViewNavigatorImpl(this.rpc, result.navigatorId, result.viewCursor);
+  async openViewNavigator(
+    viewId: string,
+    options?: MindooDBAppViewNavigatorOpenOptions,
+  ): Promise<MindooDBAppViewNavigator> {
+    const result = await this.rpc.call<{
+      navigatorId: string;
+      viewCursor: string | null;
+    }>("session.openViewNavigator", { viewId, options: options ?? {} });
+    return new MindooDBAppViewNavigatorImpl(
+      this.rpc,
+      result.navigatorId,
+      result.viewCursor,
+    );
   }
 
   /** Subscribe to host-pushed theme changes (dark/light mode, color tokens). */
@@ -850,7 +1099,11 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   }
 
   /** Subscribe to host-pushed viewport dimension changes (resize, orientation). */
-  onViewportChange(listener: (viewport: NonNullable<MindooDBAppLaunchContext["viewport"]>) => void) {
+  onViewportChange(
+    listener: (
+      viewport: NonNullable<MindooDBAppLaunchContext["viewport"]>,
+    ) => void,
+  ) {
     return this.rpc.addMessageListener((message) => {
       if (isViewportChangedMessage(message)) {
         listener(message.viewport);
@@ -859,7 +1112,11 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   }
 
   /** Subscribe to host-pushed embedded UI preference changes. */
-  onUiPreferencesChange(listener: (uiPreferences: MindooDBAppLaunchContext["uiPreferences"]) => void) {
+  onUiPreferencesChange(
+    listener: (
+      uiPreferences: MindooDBAppLaunchContext["uiPreferences"],
+    ) => void,
+  ) {
     return this.rpc.addMessageListener((message) => {
       if (isUiPreferencesChangedMessage(message)) {
         listener(message.uiPreferences);
@@ -886,7 +1143,9 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
  */
 export function createMindooDBAppBridge(): MindooDBAppBridge {
   return {
-    async connect(options?: MindooDBAppBridgeConnectOptions): Promise<MindooDBAppSession> {
+    async connect(
+      options?: MindooDBAppBridgeConnectOptions,
+    ): Promise<MindooDBAppSession> {
       const launchId = resolveLaunchId(options);
       const port = await waitForConnectedPort(options, launchId);
       const rpc = new PortRpcClient(port);
