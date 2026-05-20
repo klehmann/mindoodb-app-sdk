@@ -819,10 +819,15 @@ export interface MindooDBAppViewEntry {
   level: number;
   parentKey: string | null;
   categoryPath: unknown[];
+  categoryValue: unknown | null;
   columnValues: Record<string, unknown>;
-  descendantDocumentCount: number;
-  childCategoryCount: number;
-  childDocumentCount: number;
+  childCount?: number;
+  descendantDocumentCount?: number;
+  descendantCount?: number;
+  descendantCategoryCount?: number;
+  childCategoryCount?: number;
+  childDocumentCount?: number;
+  siblingCount?: number;
   /** Stable continuation token for the current occurrence. */
   position: string | null;
   expanded: boolean;

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       mindoodb-view-language:
-        specifier: 0.0.12
-        version: 0.0.12
+        specifier: 0.0.13
+        version: 0.0.13
     devDependencies:
       '@types/node':
         specifier: 25.5.0
@@ -658,8 +658,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  mindoodb-view-language@0.0.12:
-    resolution: {integrity: sha512-hM1OUKWCGHgtO+hRZS+HT06NysifZJuZb532AhcN1GkUkpTzs9Qd07vKpRw0N78SMcQKRjJ/SmtJzRaidkVvww==}
+  mindoodb-view-language@0.0.13:
+    resolution: {integrity: sha512-JmJVL9I8dx9wCEVX532dQf7DgakX0prLxG26e5ZbKlFzbEZXzeWfYn72BT7DHuOxqSZR7g1HUOseELnSV5Uxag==}
     engines: {node: '>=22.13.0'}
 
   mlly@1.8.2:
@@ -1368,7 +1368,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  mindoodb-view-language@0.0.12: {}
+  mindoodb-view-language@0.0.13: {}
 
   mlly@1.8.2:
     dependencies:
