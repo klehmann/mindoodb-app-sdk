@@ -418,6 +418,60 @@ export interface MindooDBAppTextPatch {
   edits: MindooDBAppTextEdit[];
 }
 
+export type MindooDBAppRichTextScalar =
+  | string
+  | number
+  | boolean
+  | null;
+
+export interface MindooDBAppRichTextImmutableString {
+  type: "immutableString";
+  value: string;
+}
+
+export type MindooDBAppRichTextMaterializeValue =
+  | MindooDBAppRichTextScalar
+  | MindooDBAppRichTextImmutableString
+  | MindooDBAppRichTextMaterializeValue[]
+  | { [key: string]: MindooDBAppRichTextMaterializeValue };
+
+export interface MindooDBAppRichTextTextSpan {
+  type: "text";
+  value: string;
+  marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+export interface MindooDBAppRichTextBlockSpan {
+  type: "block";
+  value: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+export type MindooDBAppRichTextSpan =
+  | MindooDBAppRichTextTextSpan
+  | MindooDBAppRichTextBlockSpan;
+
+export interface MindooDBAppRichTextPatch {
+  /** Path to the Automerge rich-text field inside the document payload. */
+  path: Array<string | number>;
+  /** Automerge heads of the document state this rich-text snapshot was based on. */
+  baseHeads?: string[];
+  /** Full JSON-safe span snapshot to apply with Automerge `updateSpans`. */
+  spans: MindooDBAppRichTextSpan[];
+  /** Optional Automerge `updateSpans` configuration, kept JSON-safe over the bridge. */
+  updateSpansConfig?: Record<string, unknown>;
+}
+
+export interface MindooDBAppRichTextSnapshot {
+  path: Array<string | number>;
+  heads?: string[];
+  spans: MindooDBAppRichTextSpan[];
+}
+
+export interface MindooDBAppRichTextGetOptions {
+  /** Stable revision id previously obtained from `documents.listHistory()`. */
+  revisionId?: MindooDBAppDocumentRevisionId;
+}
+
 /**
  * Sets the value at `path` inside the document payload.
  *
@@ -493,6 +547,8 @@ export interface MindooDBAppUpdateDocumentInput {
   json?: MindooDBAppJsonPatch;
   /** Granular text edits to apply at document paths. */
   text?: MindooDBAppTextPatch[];
+  /** Rich-text span snapshots to apply at document paths. */
+  richText?: MindooDBAppRichTextPatch[];
 }
 
 /** Query used for history lookups at a specific timestamp. */
@@ -783,6 +839,11 @@ export interface MindooDBAppDocumentApi {
   ): Promise<MindooDBAppDocumentListResult>;
   getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult>;
   get(docId: string): Promise<MindooDBAppDocument | null>;
+  getRichText(
+    docId: string,
+    path: Array<string | number>,
+    options?: MindooDBAppRichTextGetOptions,
+  ): Promise<MindooDBAppRichTextSnapshot>;
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
   update(
     docId: string,

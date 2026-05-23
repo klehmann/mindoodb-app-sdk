@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMindooDBAppBridge } from "../client/createMindooDBAppBridge";
+import { createMindooDBRichTextHandle } from "../richTextHandle";
 import { createMindooDBTextBuffer } from "../textBuffer";
 import {
   createFakeBridgeHost,
@@ -212,6 +213,59 @@ describe("mindoodb-app-sdk/testing", () => {
       data: {
         body: "Hello collaborative world",
       },
+      heads: expect.any(Array),
+    });
+  });
+
+  it("flushes rich-text spans through the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        type: "word",
+        body: [],
+      },
+    });
+    const handle = createMindooDBRichTextHandle({
+      database,
+      document: created,
+      path: ["body"],
+    });
+
+    handle.replaceSpans([
+      {
+        type: "block",
+        value: {
+          type: { type: "immutableString", value: "paragraph" },
+          parents: [],
+          attrs: {},
+          isEmbed: false,
+        },
+      },
+      {
+        type: "text",
+        value: "Hello rich text",
+        marks: {
+          strong: true,
+        },
+      },
+    ]);
+
+    const result = await handle.flush();
+    expect(result.reconciled).toBe(false);
+    expect(result.snapshot.spans).toHaveLength(2);
+    await expect(database.documents.getRichText(created.id, ["body"])).resolves.toMatchObject({
+      spans: result.snapshot.spans,
       heads: expect.any(Array),
     });
   });

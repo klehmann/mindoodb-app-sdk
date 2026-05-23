@@ -390,11 +390,13 @@ Every `MindooDBAppDocument` snapshot also exposes a `heads?: string[]` field. Th
 
 `nextCursor` is the latest checkpoint reached by the page. Persist it after each successful call when you are building your own index or sync loop. If there were no changes after the supplied cursor, `nextCursor` is `null`.
 
-`documents.update()` accepts three independent operations on the same call:
+`documents.update()` accepts five independent kinds of operations on the same call, applied atomically to one new document revision:
 
 - `set` -- assign top-level fields (shallow JSON merge).
 - `unset` -- remove top-level fields entirely.
-- `text` -- one or more **granular text patches** applied to specific JSON paths. Each patch carries the `baseHeads` version it was authored against and is merged on the Haven side with any concurrent changes that arrived since. This is the recommended way to edit collaborative text fields like a markdown body. See [Collaborative text editing](#collaborative-text-editing) below.
+- `json` -- a **granular JSON patch** of `set` / `unset` / `listInsert` / `listDelete` operations applied at specific paths inside `document.data`, against a `baseHeads` version. See [Granular JSON edits](#granular-json-edits) below.
+- `text` -- one or more **granular text patches** applied to specific string paths. Each patch carries the `baseHeads` version it was authored against and is merged on the Haven side with any concurrent changes that arrived since. This is the recommended way to edit collaborative text fields like a markdown body. See [Collaborative text editing](#collaborative-text-editing) below.
+- `richText` -- one or more **rich-text span snapshots** for formatted-document fields (Word/.docx style). See [Collaborative rich-text editing](#collaborative-rich-text-editing) below.
 
 Prefer sending small, intentional field-level changes instead of rewriting whole documents when only a few fields changed. This keeps MindooDB change tracking more meaningful and helps Automerge produce cleaner merge results.
 
@@ -443,6 +445,85 @@ const pointInTime = await db.documents.getAtTimestamp(
 ```
 
 Historical snapshots include the document data payload as it existed at that revision. When the snapshot has attachments, `attachments` reflects the historical `_attachments` array for that same revision, including the attachment reference that Haven needs to stop at the correct historical `lastChunkId`.
+
+### Granular JSON edits
+
+When you need to edit nested objects or lists inside a document — not just top-level fields — describe the change as a **granular JSON patch** rather than rewriting the whole document. This is the model behind structured collaborative editing in apps like [`mindoodb-app-teamgrid`](https://github.com/klehmann/mindoodb-app-teamgrid), where two users can insert different rows into the same worksheet on different devices and the merge keeps both sides cleanly.
+
+A JSON patch is a bag of four operation kinds applied at specific JSON paths inside `document.data`, all carried with the document version (`baseHeads`) the app was looking at when it composed them:
+
+- `set` — assign or replace a value at a path
+- `unset` — remove a key (or list entry, when the host accepts it) at a path
+- `listInsert` — splice values into a list at a position
+- `listDelete` — remove a contiguous run of entries from a list
+
+```ts
+interface MindooDBAppJsonSetPatch {
+  path: Array<string | number>;
+  value: unknown;
+}
+
+interface MindooDBAppJsonUnsetPatch {
+  path: Array<string | number>;
+}
+
+interface MindooDBAppJsonListInsertPatch {
+  path: Array<string | number>;
+  index: number;
+  values: unknown[];
+}
+
+interface MindooDBAppJsonListDeletePatch {
+  path: Array<string | number>;
+  index: number;
+  deleteCount: number;
+}
+
+interface MindooDBAppJsonPatch {
+  baseHeads?: string[];
+  set?: MindooDBAppJsonSetPatch[];
+  unset?: MindooDBAppJsonUnsetPatch[];
+  listInsert?: MindooDBAppJsonListInsertPatch[];
+  listDelete?: MindooDBAppJsonListDeletePatch[];
+}
+```
+
+Send the patch through `documents.update({ json })`:
+
+```ts
+const doc = await db.documents.get(docId);
+
+await db.documents.update(docId, {
+  json: {
+    baseHeads: doc!.heads,
+    set: [
+      { path: ["worksheets", "ws-1", "title"], value: "Q1 numbers" },
+      {
+        path: ["worksheets", "ws-1", "cellsByRowCol", "row-3:col-2", "value"],
+        value: 42,
+      },
+    ],
+    listInsert: [
+      {
+        path: ["worksheets", "ws-1", "rowOrder"],
+        index: 5,
+        values: ["row-new"],
+      },
+    ],
+    listDelete: [
+      {
+        path: ["worksheets", "ws-1", "tombstoneRows"],
+        index: 0,
+        deleteCount: 1,
+      },
+    ],
+  },
+});
+```
+
+Haven applies the patch causally at `baseHeads` and merges it with any concurrent changes that arrived since, the same way the text and rich-text APIs do. List inserts authored against the same `baseHeads` interleave cleanly via Automerge's list CRDT instead of overwriting each other — which is exactly what makes two users inserting different rows on the same worksheet at the same time merge into a consistent grid rather than a last-writer-wins.
+
+Patch flavors compose. `set`/`unset` (top-level fields), `json`, `text`, and `richText` can all appear in the same `documents.update()` call and are applied atomically to one new document revision. Prefer small, intentional operations over whole-document rewrites so MindooDB change tracking stays meaningful and Automerge produces cleaner merges.
 
 ### Collaborative text editing
 
@@ -579,6 +660,120 @@ Buffer API at a glance:
 
 The [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) sample wires `MindooDBTextBuffer` to a Milkdown markdown editor with Save / Refresh / preview pane, and is the recommended starting point for building your own collaborative text app.
 
+### Collaborative rich-text editing
+
+For structured documents that need formatting — headings, bold/italic runs, lists, tables, fonts, colors — use the **rich-text patch API**. This is the surface behind the Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit), where two users can edit the same document at the same time and Haven merges both formatting and structure on its side via Automerge's rich-text CRDT.
+
+Rich-text fields are stored internally as Automerge rich-text, but apps never see Automerge directly. The bridge speaks JSON and represents a rich-text field as an ordered list of **spans** — text runs with marks for inline formatting, plus block markers for paragraphs, headings, lists, and tables:
+
+```ts
+interface MindooDBAppRichTextTextSpan {
+  type: "text";
+  value: string;
+  // Inline marks: bold, italic, underline, font, color, link, ...
+  marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+interface MindooDBAppRichTextBlockSpan {
+  type: "block";
+  // Block markers: paragraph, heading, list item, table cell, ...
+  value: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+type MindooDBAppRichTextSpan =
+  | MindooDBAppRichTextTextSpan
+  | MindooDBAppRichTextBlockSpan;
+```
+
+#### Reading the current spans
+
+```ts
+const snapshot = await db.documents.getRichText(docId, ["body"]);
+// snapshot = { path: ["body"], heads: ["<commit>"], spans: [...] }
+
+editor.loadFromSpans(snapshot.spans);
+```
+
+`getRichText(docId, path, options?)` also accepts `{ revisionId }` so you can load the rich-text spans of an exact historical document revision (handy for read-only revision pickers).
+
+#### Writing back a span snapshot
+
+The simplest write is a full snapshot — replace the field's spans with the editor's current state:
+
+```ts
+await db.documents.update(docId, {
+  richText: [
+    {
+      path: ["body"],
+      baseHeads: snapshot.heads,
+      spans: editor.toSpans(),
+    },
+  ],
+});
+```
+
+Haven applies the snapshot via Automerge's `updateSpans` and merges it with any concurrent rich-text changes that arrived since `baseHeads`. The optional `updateSpansConfig` field is forwarded to Automerge for editors that need to tune merge behavior at the span level.
+
+#### High-level: `createMindooDBRichTextHandle`
+
+For editors that emit a complete spans array after each transaction, the SDK ships a buffer helper that mirrors `MindooDBTextBuffer`:
+
+```ts
+import { createMindooDBRichTextHandle } from "mindoodb-app-sdk";
+
+const doc = await db.documents.get(docId);
+const initial = await db.documents.getRichText(doc!.id, ["body"]);
+
+const handle = createMindooDBRichTextHandle({
+  database: db,
+  document: doc!,
+  path: ["body"],
+  spans: initial.spans,
+});
+
+editor.loadFromSpans(handle.spans);
+
+// Editor reports a fresh spans array after every change.
+editor.on("change", (spans) => {
+  handle.replaceSpans(spans);
+});
+
+// On save (e.g. Cmd+S) flush the local snapshot to Haven.
+async function save() {
+  const result = await handle.flush();
+  if (result.reconciled) {
+    // Haven merged in concurrent rich-text edits; show the canonical merged spans.
+    editor.loadFromSpans(result.snapshot.spans);
+  }
+}
+
+// Optional: poll for remote changes while the editor is idle.
+handle.startPolling(2000);
+handle.on("change", (snapshot) => {
+  if (!handle.dirty) editor.loadFromSpans(snapshot.spans);
+});
+```
+
+Handle API at a glance:
+
+| Member                               | Description                                                                   |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `spans`                              | Current local span snapshot                                                   |
+| `dirty`                              | Whether local edits are buffered                                              |
+| `baseHeads`                          | Heads the local snapshot was authored against                                 |
+| `replaceSpans(spans)`                | Replace the local spans buffer with a fresh snapshot                          |
+| `refresh()`                          | Re-read `getRichText` and return the canonical snapshot                       |
+| `pollOnce()`                         | Re-read and reconcile if the document advanced and there are no local edits  |
+| `startPolling(ms)` / `stopPolling()` | Poll `pollOnce` on a timer                                                    |
+| `flush(updateSpansConfig?)`          | Send pending spans to Haven; resolves to `{ document, snapshot, reconciled }` |
+| `on/off("change", listener)`         | Subscribe to local or reconciled-change events                                |
+
+Like the text buffer, the rich-text handle always sends the original `baseHeads` captured when it was created or last reconciled, so two windows editing the same document at the same heads merge correctly without overwriting each other.
+
+#### End-to-end sample
+
+The Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) wires `MindooDBRichTextHandle` to an `@eigenpal/docx-editor-vue` editor and is the recommended starting point for building your own collaborative rich-text app.
+
 ### Incremental sync
 
 The changefeed-backed `documents.list()` API is also the right primitive for app-side indexes, search, and other derived caches.
@@ -675,12 +870,41 @@ const scan = await db.attachments.scan(docId, {
   preset: "a4-portrait",
   mimeType: "application/pdf",
 });
+// scan = { ok: true, attachment: { attachmentId, fileName, mimeType, size } }
+//   or { ok: false }                    if the user cancelled the scanner
+//   or rejected with an error           if the host has no scanner UI
 
 // Remove
 await db.attachments.remove(docId, "old-file.txt");
 ```
 
-`attachments.scan()` asks Haven to open its document scanner UI. Haven handles camera/file selection, edge detection, manual corner correction, output sizing, and filename confirmation, then writes the resulting image as a normal attachment. Hosts that do not provide scanner UI may reject this method or return `{ ok: false }`.
+`attachments.scan()` asks Haven to open its document scanner UI on top of your app. Haven handles camera or file selection, runs edge detection through a slim on-device OpenCV WebAssembly pipeline, lets the user fine-tune the corners, applies the perspective correction to the chosen output size, and writes the resulting bytes as a normal MindooDoc attachment via the same path `openWriteStream` would have taken. The scanner runs entirely locally — the picked image and the perspective-corrected result never leave the browser tab.
+
+Options shape:
+
+```ts
+type MindooDBAppDocumentScanPreset =
+  | "auto"            // free-form, keep the detected aspect ratio
+  | "a4-portrait"
+  | "a4-landscape"
+  | "letter-portrait"
+  | "letter-landscape";
+
+interface MindooDBAppScanAttachmentOptions {
+  defaultFileName?: string;                                  // suggested filename in the dialog
+  preset?: MindooDBAppDocumentScanPreset;                    // output page geometry
+  mimeType?: "image/jpeg" | "image/png" | "application/pdf"; // output format
+}
+
+interface MindooDBAppScanAttachmentResult {
+  ok: boolean;
+  attachment?: MindooDBAppAttachmentInfo | null;
+}
+```
+
+Apps need both the `attachments` and `update` capabilities for this method, because the scanner writes the resulting bytes back to the document. Hosts that do not provide scanner UI may reject this method or return `{ ok: false }`.
+
+The same scanner is also reachable as a top-level **Quick Scan** entry in Haven's sidebar. There it runs detached from any document — the user can download the resulting file or hand it to the operating system's share sheet, but the "Add to document" action is hidden because there is no document context. Apps do not need to do anything to support this; it is part of Haven, not the SDK.
 
 For historical reads, pass the same `revisionId` you received from `documents.listHistory()` or from a `MindooDBAppHistoricalDocument`. This tells Haven to resolve the attachment from that revision's document payload instead of the latest document state:
 
@@ -983,6 +1207,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | ---------------------------------- | -------------------------------------------- |
 | `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
 | `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |
+| `getRichText(docId, path, opts?)`  | `Promise<MindooDBAppRichTextSnapshot>`       |
 | `create(input)`                    | `Promise<MindooDBAppDocument>`               |
 | `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
 | `delete(docId)`                    | `Promise<{ ok: true }>`                      |
@@ -1003,11 +1228,13 @@ For `update(docId, patch)`, use `MindooDBAppUpdateDocumentInput`:
 interface MindooDBAppUpdateDocumentInput {
   set?: Record<string, unknown>; // shallow assign top-level fields
   unset?: string[]; // remove top-level fields entirely
+  json?: MindooDBAppJsonPatch; // granular structured edits at JSON paths
   text?: MindooDBAppTextPatch[]; // granular collaborative text edits
+  richText?: MindooDBAppRichTextPatch[]; // collaborative rich-text span snapshots
 }
 ```
 
-`set` and `unset` apply to top-level fields only. `text` patches operate on string fields at any JSON path inside `document.data` and are merged on the Haven side using the document's Automerge heads. See [Collaborative text editing](#collaborative-text-editing).
+`set` and `unset` apply to top-level fields only. `json`, `text`, and `richText` patches operate at any JSON path inside `document.data` and are merged on the Haven side using the document's Automerge heads. See [Granular JSON edits](#granular-json-edits), [Collaborative text editing](#collaborative-text-editing), and [Collaborative rich-text editing](#collaborative-rich-text-editing).
 
 ### MindooDBAppAttachmentApi
 
@@ -1070,6 +1297,7 @@ interface MindooDBAppUpdateDocumentInput {
 | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
 | `createMindooDBAppBridge()`                | Create the bridge object used to connect to Haven                                           |
 | `createMindooDBTextBuffer(options)`        | Create an editor-friendly buffer for granular collaborative text edits on a document field  |
+| `createMindooDBRichTextHandle(options)`    | Create an editor-friendly handle for collaborative rich-text span snapshots on a document field |
 | `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`)                                  |
 | `createViewLanguage<T>()`                  | Create a typed expression builder for view definitions                                      |
 | `abbreviateCanonicalName(value)`           | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo`    |

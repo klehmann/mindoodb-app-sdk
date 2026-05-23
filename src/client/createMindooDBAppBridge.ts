@@ -816,6 +816,13 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           docId,
         }),
+      getRichText: async (docId, path, options) =>
+        await this.rpc.call("documents.richText.get", {
+          databaseId: this.databaseId,
+          docId,
+          path,
+          revisionId: options?.revisionId,
+        }),
       create: async (input) =>
         await this.rpc.call("documents.create", {
           databaseId: this.databaseId,

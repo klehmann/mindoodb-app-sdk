@@ -98,6 +98,9 @@ function applyDocumentUpdatePatch(
   for (const textPatch of patch.text ?? []) {
     applyMockTextPatch(next, textPatch.path, textPatch.edits);
   }
+  for (const richTextPatch of patch.richText ?? []) {
+    setValueAtPath(next, richTextPatch.path, structuredClone(richTextPatch.spans));
+  }
   return next;
 }
 
@@ -229,6 +232,20 @@ function applyMockTextPatch(
       value.slice(edit.index + edit.deleteCount);
   }
   parent[leaf] = value;
+}
+
+function readRichTextSpansAtPath(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+) {
+  let value: unknown = target;
+  for (const segment of path) {
+    if (value == null || typeof value !== "object") {
+      return [];
+    }
+    value = (value as Record<string | number, unknown>)[segment];
+  }
+  return Array.isArray(value) ? value : [];
 }
 
 function mergeLaunchContext(
@@ -781,6 +798,17 @@ function createDatabaseHandle(
           ? structuredClone(document.attachments)
           : [],
         updatedAt: document.updatedAt,
+      };
+    },
+    async getRichText(docId, path, _options) {
+      const document = storedDocuments.get(docId);
+      if (!document || document.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      return {
+        path: [...path],
+        heads: document.heads ? [...document.heads] : undefined,
+        spans: structuredClone(readRichTextSpansAtPath(document.data, path)),
       };
     },
     async create(input) {
@@ -1559,6 +1587,13 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.get(String(params.docId));
+      case "documents.richText.get":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getRichText(
+            String(params.docId),
+            params.path as Array<string | number>,
+          );
       case "documents.create":
         return await state
           .getDatabase(String(params.databaseId))
