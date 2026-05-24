@@ -47,6 +47,7 @@
     "mindoodb-view-language": "0.0.13"
   },
   "devDependencies": {
+    "@automerge/automerge": "^3.2.1",
     "@types/node": "25.5.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.2",

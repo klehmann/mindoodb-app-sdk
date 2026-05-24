@@ -823,6 +823,18 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           path,
           revisionId: options?.revisionId,
         }),
+      getAutomergeSnapshot: async (docId, options) =>
+        await this.rpc.call("documents.automerge.getSnapshot", {
+          databaseId: this.databaseId,
+          docId,
+          revisionId: options?.revisionId,
+        }),
+      applyAutomergeChanges: async (docId, patch) =>
+        await this.rpc.call("documents.automerge.applyChanges", {
+          databaseId: this.databaseId,
+          docId,
+          patch,
+        }),
       create: async (input) =>
         await this.rpc.call("documents.create", {
           databaseId: this.databaseId,

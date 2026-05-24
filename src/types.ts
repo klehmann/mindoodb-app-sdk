@@ -450,15 +450,85 @@ export type MindooDBAppRichTextSpan =
   | MindooDBAppRichTextTextSpan
   | MindooDBAppRichTextBlockSpan;
 
+export interface MindooDBAppRichTextMarkRange {
+  index: number;
+  length: number;
+  marks: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+export interface MindooDBAppRichTextSpliceStep {
+  type: "splice";
+  index: number;
+  deleteCount: number;
+  insert?: string;
+  marks?: MindooDBAppRichTextMarkRange[];
+}
+
+export type MindooDBAppRichTextStep = MindooDBAppRichTextSpliceStep;
+
+export interface MindooDBAppRichTextStepPatch {
+  /** Path to the Automerge rich-text field inside the document payload. */
+  path: Array<string | number>;
+  /** Automerge heads of the document state these positional steps were based on. */
+  baseHeads?: string[];
+  /** Ordered rich-text positional operations to apply with Automerge splice/mark. */
+  steps: MindooDBAppRichTextStep[];
+}
+
 export interface MindooDBAppRichTextPatch {
   /** Path to the Automerge rich-text field inside the document payload. */
   path: Array<string | number>;
   /** Automerge heads of the document state this rich-text snapshot was based on. */
   baseHeads?: string[];
   /** Full JSON-safe span snapshot to apply with Automerge `updateSpans`. */
-  spans: MindooDBAppRichTextSpan[];
+  spans?: MindooDBAppRichTextSpan[];
+  /** Ordered snapshots to apply one-by-one so each `updateSpans` diff stays transaction-sized. */
+  spansSequence?: MindooDBAppRichTextSpan[][];
   /** Optional Automerge `updateSpans` configuration, kept JSON-safe over the bridge. */
   updateSpansConfig?: Record<string, unknown>;
+}
+
+export interface MindooDBAppStructuredRichTextBlock {
+  id: string;
+  type: string;
+  attrs?: Record<string, MindooDBAppRichTextMaterializeValue>;
+  parentId?: string | null;
+  children?: string[];
+  isEmbed?: boolean;
+  text?: string;
+  marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
+  runs?: Array<{
+    text: string;
+    marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
+  }>;
+}
+
+export interface MindooDBAppStructuredRichTextBody {
+  version: 1 | 2;
+  blocks: MindooDBAppStructuredRichTextBlock[];
+  blockOrder?: string[];
+  blocksById?: Record<string, MindooDBAppStructuredRichTextBlock>;
+}
+
+export type MindooDBAppStructuredRichTextOperation =
+  | { type: "setDocument"; body: MindooDBAppStructuredRichTextBody }
+  | { type: "insertText"; blockId: string; offset: number; text: string; marks?: Record<string, MindooDBAppRichTextMaterializeValue> }
+  | { type: "deleteText"; blockId: string; offset: number; length: number }
+  | { type: "splitBlock"; blockId: string; offset: number; newBlock: MindooDBAppStructuredRichTextBlock }
+  | { type: "joinBlocks"; leftBlockId: string; rightBlockId: string }
+  | { type: "insertBlock"; index: number; block: MindooDBAppStructuredRichTextBlock }
+  | { type: "deleteBlock"; blockId: string }
+  | { type: "setBlockAttrs"; blockId: string; attrs: Record<string, MindooDBAppRichTextMaterializeValue> }
+  | { type: "replaceBlock"; blockId: string; block: MindooDBAppStructuredRichTextBlock; index?: number }
+  | { type: "replaceSubtree"; rootBlockId: string; blocks: MindooDBAppStructuredRichTextBlock[]; index?: number };
+
+export interface MindooDBAppStructuredRichTextPatch {
+  /** Path to the structured rich-text body inside the document payload. */
+  path: Array<string | number>;
+  /** Automerge heads of the document state these semantic operations were based on. */
+  baseHeads?: string[];
+  /** Ordered structured rich-text operations using stable block IDs and block-local offsets. */
+  operations: MindooDBAppStructuredRichTextOperation[];
 }
 
 export interface MindooDBAppRichTextSnapshot {
@@ -470,6 +540,30 @@ export interface MindooDBAppRichTextSnapshot {
 export interface MindooDBAppRichTextGetOptions {
   /** Stable revision id previously obtained from `documents.listHistory()`. */
   revisionId?: MindooDBAppDocumentRevisionId;
+}
+
+/** Binary Automerge snapshot of the full internal document. */
+export interface MindooDBAppAutomergeSnapshot {
+  binary: Uint8Array;
+  heads: string[];
+}
+
+export interface MindooDBAppAutomergeGetOptions {
+  /** Stable revision id previously obtained from `documents.listHistory()`. */
+  revisionId?: MindooDBAppDocumentRevisionId;
+}
+
+/** Raw Automerge change bytes produced by a local replica. */
+export interface MindooDBAppAutomergeChangesPatch {
+  /** Heads the client had when authoring `changes`; optional, for correlation only. */
+  baseHeads?: string[];
+  /** Change bytes from `Automerge.getChangesSince`; merged into Haven's current doc. */
+  changes: Uint8Array[];
+}
+
+export interface MindooDBAppAutomergePatchResult {
+  document: MindooDBAppDocument;
+  heads: string[];
 }
 
 /**
@@ -518,6 +612,36 @@ export interface MindooDBAppJsonListDeletePatch {
   deleteCount: number;
 }
 
+/**
+ * Splices text at `path` using Automerge text semantics.
+ */
+export interface MindooDBAppJsonTextSplicePatch {
+  path: Array<string | number>;
+  index: number;
+  deleteCount: number;
+  insert?: string;
+}
+
+/**
+ * Applies one or more marks to a text range at `path`.
+ */
+export interface MindooDBAppJsonTextMarkPatch {
+  path: Array<string | number>;
+  index: number;
+  length: number;
+  marks: Record<string, MindooDBAppRichTextMaterializeValue>;
+}
+
+/**
+ * Removes marks from a text range at `path`.
+ */
+export interface MindooDBAppJsonTextUnmarkPatch {
+  path: Array<string | number>;
+  index: number;
+  length: number;
+  names: string[];
+}
+
 export interface MindooDBAppJsonPatch {
   /**
    * Automerge heads of the document snapshot this JSON patch was authored
@@ -529,6 +653,9 @@ export interface MindooDBAppJsonPatch {
   unset?: MindooDBAppJsonUnsetPatch[];
   listInsert?: MindooDBAppJsonListInsertPatch[];
   listDelete?: MindooDBAppJsonListDeletePatch[];
+  textSplice?: MindooDBAppJsonTextSplicePatch[];
+  textMark?: MindooDBAppJsonTextMarkPatch[];
+  textUnmark?: MindooDBAppJsonTextUnmarkPatch[];
 }
 
 /**
@@ -549,6 +676,10 @@ export interface MindooDBAppUpdateDocumentInput {
   text?: MindooDBAppTextPatch[];
   /** Rich-text span snapshots to apply at document paths. */
   richText?: MindooDBAppRichTextPatch[];
+  /** Rich-text positional steps to apply at document paths. */
+  richTextSteps?: MindooDBAppRichTextStepPatch[];
+  /** Structured rich-text operations to apply at document paths. */
+  structuredRichText?: MindooDBAppStructuredRichTextPatch[];
 }
 
 /** Query used for history lookups at a specific timestamp. */
@@ -844,6 +975,14 @@ export interface MindooDBAppDocumentApi {
     path: Array<string | number>,
     options?: MindooDBAppRichTextGetOptions,
   ): Promise<MindooDBAppRichTextSnapshot>;
+  getAutomergeSnapshot(
+    docId: string,
+    options?: MindooDBAppAutomergeGetOptions,
+  ): Promise<MindooDBAppAutomergeSnapshot>;
+  applyAutomergeChanges(
+    docId: string,
+    patch: MindooDBAppAutomergeChangesPatch,
+  ): Promise<MindooDBAppAutomergePatchResult>;
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
   update(
     docId: string,

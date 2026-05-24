@@ -3,6 +3,7 @@ import type {
   MindooDBAppDocument,
   MindooDBAppRichTextSnapshot,
   MindooDBAppRichTextSpan,
+  MindooDBAppTextEdit,
 } from "./types";
 
 export interface CreateMindooDBRichTextHandleOptions {
@@ -26,19 +27,27 @@ export type MindooDBRichTextHandleChangeListener = (
 /**
  * Local rich-text span buffer for SDK apps.
  *
- * The helper deliberately mirrors the causal shape of `MindooDBTextBuffer`:
- * local editor code replaces the current span snapshot, then `flush()` sends a
- * separate `richText` patch with the document heads the snapshot was based on.
+ * Mirrors `MindooDBTextBuffer`: track edits against a base snapshot, then flush
+ * with causal `baseHeads`. Text edits prefer positional `richTextSteps` so
+ * concurrent saves merge like plain-text splices; formatting-only or structural
+ * changes fall back to full `richText` span snapshots.
  */
 export class MindooDBRichTextHandle {
   private spansInternal: MindooDBAppRichTextSpan[];
+  private baseMaterializedText: string;
   private heads: string[];
   private dirtyInternal = false;
   private listeners = new Set<MindooDBRichTextHandleChangeListener>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: CreateMindooDBRichTextHandleOptions) {
-    this.spansInternal = cloneSpans(options.spans ?? []);
+    const initialSpans = cloneSpans(options.spans ?? []);
+    this.spansInternal = initialSpans;
+    this.baseMaterializedText = readMaterializedRichTextText(
+      options.document.data,
+      options.path,
+      initialSpans,
+    );
     this.heads = options.document.heads ? [...options.document.heads] : [];
   }
 
@@ -85,6 +94,7 @@ export class MindooDBRichTextHandle {
   reconcile(document: MindooDBAppDocument, snapshot: MindooDBAppRichTextSnapshot) {
     const previous = JSON.stringify(this.spansInternal);
     this.spansInternal = cloneSpans(snapshot.spans);
+    this.baseMaterializedText = spansToPlainText(snapshot.spans);
     this.heads = snapshot.heads ?? document.heads ?? [];
     this.dirtyInternal = false;
     const changed = JSON.stringify(this.spansInternal) !== previous;
@@ -131,24 +141,31 @@ export class MindooDBRichTextHandle {
       };
     }
 
-    const localSpansAtFlush = JSON.stringify(this.spansInternal);
-    const document = await this.options.database.documents.update(
-      this.options.document.id,
-      {
-        richText: [{
-          path: this.options.path,
-          baseHeads: this.heads,
-          spans: cloneSpans(this.spansInternal),
-          updateSpansConfig,
-        }],
-      },
-    );
+    const localSpansAtFlush = cloneSpans(this.spansInternal);
+    const localTextAtFlush = spansToPlainText(localSpansAtFlush);
+    const textChanged = localTextAtFlush !== this.baseMaterializedText;
+
+    const document = textChanged
+      ? await this.flushTextSteps(localTextAtFlush)
+      : await this.options.database.documents.update(
+        this.options.document.id,
+        {
+          richText: [{
+            path: this.options.path,
+            baseHeads: this.heads,
+            spans: localSpansAtFlush,
+            updateSpansConfig,
+          }],
+        },
+      );
+
     const snapshot = await this.options.database.documents.getRichText(
       this.options.document.id,
       this.options.path,
     );
-    const reconciled = JSON.stringify(snapshot.spans) !== localSpansAtFlush;
+    const reconciled = JSON.stringify(snapshot.spans) !== JSON.stringify(localSpansAtFlush);
     this.spansInternal = cloneSpans(snapshot.spans);
+    this.baseMaterializedText = spansToPlainText(snapshot.spans);
     this.heads = snapshot.heads ?? document.heads ?? [];
     this.dirtyInternal = false;
     if (reconciled) {
@@ -159,6 +176,22 @@ export class MindooDBRichTextHandle {
       snapshot,
       reconciled,
     };
+  }
+
+  private async flushTextSteps(localTextAtFlush: string) {
+    const edit = computeSingleSplice(this.baseMaterializedText, localTextAtFlush);
+    return this.options.database.documents.update(this.options.document.id, {
+      richTextSteps: [{
+        path: this.options.path,
+        baseHeads: this.heads,
+        steps: [{
+          type: "splice",
+          index: edit.index,
+          deleteCount: edit.deleteCount,
+          insert: edit.insert ?? "",
+        }],
+      }],
+    });
   }
 
   private emitChange() {
@@ -181,4 +214,57 @@ export function createMindooDBRichTextHandle(
 
 function cloneSpans(spans: MindooDBAppRichTextSpan[]) {
   return structuredClone(spans);
+}
+
+function spansToPlainText(spans: MindooDBAppRichTextSpan[]) {
+  return spans
+    .filter((span) => span.type === "text")
+    .map((span) => (span.type === "text" ? span.value : ""))
+    .join("");
+}
+
+function readMaterializedRichTextText(
+  data: Record<string, unknown>,
+  path: Array<string | number>,
+  fallbackSpans: MindooDBAppRichTextSpan[],
+) {
+  let value: unknown = data;
+  for (const segment of path) {
+    if (value == null || typeof value !== "object") {
+      return spansToPlainText(fallbackSpans);
+    }
+    value = (value as Record<string | number, unknown>)[segment];
+  }
+  if (typeof value === "string") {
+    return value.replace(/\uFFFC/g, "");
+  }
+  if (Array.isArray(value)) {
+    return spansToPlainText(value as MindooDBAppRichTextSpan[]);
+  }
+  return spansToPlainText(fallbackSpans);
+}
+
+function computeSingleSplice(previous: string, next: string): MindooDBAppTextEdit {
+  let prefixLength = 0;
+  const maxPrefix = Math.min(previous.length, next.length);
+  while (prefixLength < maxPrefix && previous[prefixLength] === next[prefixLength]) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  const previousRemaining = previous.length - prefixLength;
+  const nextRemaining = next.length - prefixLength;
+  const maxSuffix = Math.min(previousRemaining, nextRemaining);
+  while (
+    suffixLength < maxSuffix
+    && previous[previous.length - 1 - suffixLength] === next[next.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  return {
+    index: prefixLength,
+    deleteCount: previous.length - prefixLength - suffixLength,
+    insert: next.slice(prefixLength, next.length - suffixLength),
+  };
 }

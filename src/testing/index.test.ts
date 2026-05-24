@@ -177,6 +177,47 @@ describe("mindoodb-app-sdk/testing", () => {
     });
   });
 
+  it("applies granular JSON text splices in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        bodyDoc: {
+          version: 2,
+          blocksById: {
+            p1: { id: "p1", type: "paragraph", text: "Hello" },
+          },
+          blockOrder: ["p1"],
+          blocks: [{ id: "p1", type: "paragraph", text: "Hello" }],
+        },
+      },
+    });
+
+    const updated = await database.documents.update(created.id, {
+      json: {
+        baseHeads: created.heads,
+        textSplice: [{
+          path: ["bodyDoc", "blocksById", "p1", "text"],
+          index: 5,
+          deleteCount: 0,
+          insert: " world",
+        }],
+      },
+    });
+
+    expect((updated.data.bodyDoc as any).blocksById.p1.text).toBe("Hello world");
+  });
+
   it("flushes buffered text edits through the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
@@ -262,11 +303,48 @@ describe("mindoodb-app-sdk/testing", () => {
     ]);
 
     const result = await handle.flush();
-    expect(result.reconciled).toBe(false);
-    expect(result.snapshot.spans).toHaveLength(2);
+    expect(result.reconciled).toBe(true);
+    expect(result.snapshot.spans).toEqual([{ type: "text", value: "Hello rich text" }]);
     await expect(database.documents.getRichText(created.id, ["body"])).resolves.toMatchObject({
       spans: result.snapshot.spans,
       heads: expect.any(Array),
+    });
+  });
+
+  it("flushes text edits as rich-text steps for merge-friendly saves", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        type: "word",
+        body: [{ type: "text", value: "Hello" }],
+      },
+    });
+    const handle = createMindooDBRichTextHandle({
+      database,
+      document: created,
+      path: ["body"],
+      spans: [{ type: "text", value: "Hello" }],
+    });
+
+    handle.replaceSpans([{ type: "text", value: "Hello world" }]);
+    const result = await handle.flush();
+
+    expect(result.snapshot.spans).toEqual([{ type: "text", value: "Hello world" }]);
+    await expect(database.documents.get(created.id)).resolves.toMatchObject({
+      data: {
+        body: "Hello world",
+      },
     });
   });
 

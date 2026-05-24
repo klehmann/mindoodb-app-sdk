@@ -1,3 +1,4 @@
+import * as Automerge from "@automerge/automerge";
 import type {
   MindooDBAppAttachmentApi,
   MindooDBAppBridge,
@@ -99,7 +100,18 @@ function applyDocumentUpdatePatch(
     applyMockTextPatch(next, textPatch.path, textPatch.edits);
   }
   for (const richTextPatch of patch.richText ?? []) {
-    setValueAtPath(next, richTextPatch.path, structuredClone(richTextPatch.spans));
+    const spans = richTextPatch.spansSequence?.at(-1) ?? richTextPatch.spans ?? [];
+    setValueAtPath(next, richTextPatch.path, structuredClone(spans));
+  }
+  for (const richTextStepPatch of patch.richTextSteps ?? []) {
+    applyMockRichTextSteps(next, richTextStepPatch.path, richTextStepPatch.steps);
+  }
+  for (const structuredRichTextPatch of patch.structuredRichText ?? []) {
+    applyMockStructuredRichTextPatch(
+      next,
+      structuredRichTextPatch.path,
+      structuredRichTextPatch.operations,
+    );
   }
   return next;
 }
@@ -124,6 +136,19 @@ function applyMockJsonPatch(
   for (const operation of patch.listInsert ?? []) {
     const list = readListAtPath(target, operation.path);
     list.splice(operation.index, 0, ...structuredClone(operation.values));
+  }
+  for (const operation of patch.textSplice ?? []) {
+    applyMockTextPatch(target, operation.path, [{
+      index: operation.index,
+      deleteCount: operation.deleteCount,
+      ...(operation.insert !== undefined ? { insert: operation.insert } : {}),
+    }]);
+  }
+  for (const operation of patch.textMark ?? []) {
+    applyMockTextMarks(target, operation.path, operation.index, operation.length, operation.marks, false);
+  }
+  for (const operation of patch.textUnmark ?? []) {
+    applyMockTextMarks(target, operation.path, operation.index, operation.length, Object.fromEntries(operation.names.map((name) => [name, null])), true);
   }
 }
 
@@ -234,6 +259,31 @@ function applyMockTextPatch(
   parent[leaf] = value;
 }
 
+function applyMockTextMarks(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+  index: number,
+  length: number,
+  marks: Record<string, unknown>,
+  remove: boolean,
+) {
+  const parent = ensureParentAtPath(target, path);
+  const leaf = path[path.length - 1];
+  const marksKey = `${String(leaf)}__marks`;
+  const existing = Array.isArray(parent[marksKey])
+    ? parent[marksKey] as unknown[]
+    : [];
+  parent[marksKey] = [
+    ...existing,
+    {
+      index,
+      length,
+      marks: structuredClone(marks),
+      remove,
+    },
+  ];
+}
+
 function readRichTextSpansAtPath(
   target: Record<string, unknown>,
   path: Array<string | number>,
@@ -245,7 +295,147 @@ function readRichTextSpansAtPath(
     }
     value = (value as Record<string | number, unknown>)[segment];
   }
+  if (typeof value === "string") {
+    return value.length > 0
+      ? [{ type: "text" as const, value }]
+      : [];
+  }
   return Array.isArray(value) ? value : [];
+}
+
+function applyMockRichTextSteps(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+  steps: NonNullable<MindooDBAppUpdateDocumentInput["richTextSteps"]>[number]["steps"],
+) {
+  if (path.length === 0) {
+    throw new Error("Rich-text steps path must contain at least one segment");
+  }
+  const parent = ensureParentAtPath(target, path);
+  const leaf = path[path.length - 1];
+  let text = materializeMockRichTextValue(parent[leaf]);
+  for (const step of steps) {
+    text =
+      text.slice(0, step.index) +
+      (step.insert ?? "") +
+      text.slice(step.index + step.deleteCount);
+  }
+  parent[leaf] = text;
+}
+
+function materializeMockRichTextValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((span) => {
+      if (!span || typeof span !== "object") {
+        return "";
+      }
+      const record = span as { type?: unknown; value?: unknown };
+      return record.type === "text" && typeof record.value === "string"
+        ? record.value
+        : "";
+    })
+    .join("");
+}
+
+function applyMockStructuredRichTextPatch(
+  target: Record<string, unknown>,
+  path: Array<string | number>,
+  operations: NonNullable<MindooDBAppUpdateDocumentInput["structuredRichText"]>[number]["operations"],
+) {
+  const parent = ensureParentAtPath(target, path);
+  const leaf = path[path.length - 1];
+  if (parent[leaf] == null) {
+    parent[leaf] = { version: 1, blocks: [] };
+  }
+  for (const operation of operations) {
+    if (operation.type === "setDocument") {
+      parent[leaf] = structuredClone(operation.body);
+      continue;
+    }
+    const body = parent[leaf] as { blocks?: unknown };
+    if (!body || typeof body !== "object" || !Array.isArray(body.blocks)) {
+      throw new Error(`Cannot apply structured rich-text operation to non-structured-rich-text body at ${path.map(String).join(".")}`);
+    }
+    const blocks = body.blocks as Array<{ id?: unknown; text?: unknown; attrs?: unknown }>;
+    const indexOf = (blockId: string) => blocks.findIndex((block) => block?.id === blockId);
+    if (operation.type === "insertBlock") {
+      if (indexOf(operation.block.id) < 0) {
+        blocks.splice(clampMockIndex(operation.index, blocks.length), 0, structuredClone(operation.block));
+      }
+    } else if (operation.type === "deleteBlock") {
+      const index = indexOf(operation.blockId);
+      if (index >= 0) {
+        blocks.splice(index, 1);
+      }
+    } else if (operation.type === "insertText") {
+      const block = blocks[indexOf(operation.blockId)];
+      if (block) {
+        const text = typeof block.text === "string" ? block.text : "";
+        const offset = clampMockIndex(operation.offset, text.length);
+        block.text = text.slice(0, offset) + operation.text + text.slice(offset);
+      }
+    } else if (operation.type === "deleteText") {
+      const block = blocks[indexOf(operation.blockId)];
+      if (block) {
+        const text = typeof block.text === "string" ? block.text : "";
+        const offset = clampMockIndex(operation.offset, text.length);
+        block.text = text.slice(0, offset) + text.slice(offset + operation.length);
+      }
+    } else if (operation.type === "splitBlock") {
+      const index = indexOf(operation.blockId);
+      const block = blocks[index];
+      if (block) {
+        const text = typeof block.text === "string" ? block.text : "";
+        const offset = clampMockIndex(operation.offset, text.length);
+        block.text = text.slice(0, offset);
+        blocks.splice(index + 1, 0, {
+          ...structuredClone(operation.newBlock),
+          text: operation.newBlock.text ?? text.slice(offset),
+        });
+      }
+    } else if (operation.type === "joinBlocks") {
+      const leftIndex = indexOf(operation.leftBlockId);
+      const rightIndex = indexOf(operation.rightBlockId);
+      if (leftIndex >= 0 && rightIndex >= 0) {
+        const left = blocks[leftIndex];
+        const right = blocks[rightIndex];
+        left.text = `${typeof left.text === "string" ? left.text : ""}${typeof right.text === "string" ? right.text : ""}`;
+        blocks.splice(rightIndex, 1);
+      }
+    } else if (operation.type === "setBlockAttrs") {
+      const block = blocks[indexOf(operation.blockId)];
+      if (block) {
+        block.attrs = structuredClone(operation.attrs);
+      }
+    } else if (operation.type === "replaceBlock") {
+      const index = indexOf(operation.blockId);
+      if (index >= 0) {
+        blocks.splice(index, 1, structuredClone(operation.block));
+      } else {
+        blocks.splice(clampMockIndex(operation.index ?? blocks.length, blocks.length), 0, structuredClone(operation.block));
+      }
+    } else if (operation.type === "replaceSubtree") {
+      const index = indexOf(operation.rootBlockId);
+      if (index >= 0) {
+        blocks.splice(index, 1, ...structuredClone(operation.blocks));
+      } else {
+        blocks.splice(clampMockIndex(operation.index ?? blocks.length, blocks.length), 0, ...structuredClone(operation.blocks));
+      }
+    }
+  }
+}
+
+function clampMockIndex(index: number, length: number) {
+  if (!Number.isFinite(index)) {
+    return length;
+  }
+  return Math.max(0, Math.min(Math.trunc(index), length));
 }
 
 function mergeLaunchContext(
@@ -450,7 +640,29 @@ function createDefaultWritableAttachmentStream(): MindooDBAppWritableAttachmentS
 type MockStoredDocument = MindooDBAppDocument & {
   isDeleted: boolean;
   updatedAt?: string;
+  automergeBinary?: Uint8Array;
 };
+
+function loadMockAutomergeDocument(document: MockStoredDocument): Automerge.Doc<Record<string, unknown>> {
+  if (document.automergeBinary) {
+    return Automerge.load<Record<string, unknown>>(document.automergeBinary);
+  }
+  const initialDoc = Automerge.from<Record<string, unknown>>({
+    ...structuredClone(document.data),
+    body: typeof document.data.body === "string" ? document.data.body : "",
+  });
+  document.automergeBinary = Automerge.save(initialDoc);
+  return initialDoc;
+}
+
+function persistMockAutomergeDocument(
+  document: MockStoredDocument,
+  automergeDoc: Automerge.Doc<Record<string, unknown>>,
+) {
+  document.automergeBinary = Automerge.save(automergeDoc);
+  document.data = structuredClone(Automerge.materialize(automergeDoc)) as Record<string, unknown>;
+  document.heads = Automerge.getHeads(automergeDoc);
+}
 
 function getFieldValue(source: Record<string, unknown>, field: string) {
   return field.split(".").reduce<unknown>((current, part) => {
@@ -811,6 +1023,42 @@ function createDatabaseHandle(
         spans: structuredClone(readRichTextSpansAtPath(document.data, path)),
       };
     },
+    async getAutomergeSnapshot(docId, _options) {
+      const document = storedDocuments.get(docId);
+      if (!document || document.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      const automergeDoc = loadMockAutomergeDocument(document);
+      return {
+        binary: Automerge.save(automergeDoc),
+        heads: Automerge.getHeads(automergeDoc),
+      };
+    },
+    async applyAutomergeChanges(docId, patch) {
+      const document = storedDocuments.get(docId);
+      if (!document || document.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      const currentDoc = loadMockAutomergeDocument(document);
+      const [mergedDoc] = Automerge.applyChanges(
+        currentDoc,
+        patch.changes.map((change) => new Uint8Array(change)),
+      );
+      persistMockAutomergeDocument(document, mergedDoc);
+      document.updatedAt = new Date().toISOString();
+      return {
+        document: {
+          id: document.id,
+          data: structuredClone(document.data),
+          heads: document.heads ? [...document.heads] : undefined,
+          attachments: document.attachments
+            ? structuredClone(document.attachments)
+            : [],
+          updatedAt: document.updatedAt,
+        },
+        heads: document.heads ? [...document.heads] : [],
+      };
+    },
     async create(input) {
       // Honor caller-provided ids: when `input.id` is present and a document
       // already exists, return the existing document (mirrors MindooDB's
@@ -881,6 +1129,7 @@ function createDatabaseHandle(
           ? structuredClone(updated.attachments)
           : [],
         isDeleted: false,
+        automergeBinary: undefined,
       });
       return updated;
     },
@@ -1593,6 +1842,23 @@ export function createFakeBridgeHost(
           .documents.getRichText(
             String(params.docId),
             params.path as Array<string | number>,
+          );
+      case "documents.automerge.getSnapshot":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getAutomergeSnapshot(
+            String(params.docId),
+            { revisionId: params.revisionId as string | undefined },
+          );
+      case "documents.automerge.applyChanges":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.applyAutomergeChanges(
+            String(params.docId),
+            params.patch as {
+              baseHeads?: string[];
+              changes: Uint8Array[];
+            },
           );
       case "documents.create":
         return await state
