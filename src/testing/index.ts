@@ -558,7 +558,7 @@ function persistMockAutomergeDocument(
   automergeDoc: Automerge.Doc<Record<string, unknown>>,
 ) {
   document.automergeBinary = Automerge.save(automergeDoc);
-  document.data = structuredClone(Automerge.materialize(automergeDoc)) as Record<string, unknown>;
+  document.data = structuredClone(automergeDoc as unknown as Record<string, unknown>);
   document.heads = Automerge.getHeads(automergeDoc);
 }
 
