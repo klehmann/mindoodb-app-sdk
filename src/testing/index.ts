@@ -106,13 +106,6 @@ function applyDocumentUpdatePatch(
   for (const richTextStepPatch of patch.richTextSteps ?? []) {
     applyMockRichTextSteps(next, richTextStepPatch.path, richTextStepPatch.steps);
   }
-  for (const structuredRichTextPatch of patch.structuredRichText ?? []) {
-    applyMockStructuredRichTextPatch(
-      next,
-      structuredRichTextPatch.path,
-      structuredRichTextPatch.operations,
-    );
-  }
   return next;
 }
 
@@ -341,101 +334,6 @@ function materializeMockRichTextValue(value: unknown) {
         : "";
     })
     .join("");
-}
-
-function applyMockStructuredRichTextPatch(
-  target: Record<string, unknown>,
-  path: Array<string | number>,
-  operations: NonNullable<MindooDBAppUpdateDocumentInput["structuredRichText"]>[number]["operations"],
-) {
-  const parent = ensureParentAtPath(target, path);
-  const leaf = path[path.length - 1];
-  if (parent[leaf] == null) {
-    parent[leaf] = { version: 1, blocks: [] };
-  }
-  for (const operation of operations) {
-    if (operation.type === "setDocument") {
-      parent[leaf] = structuredClone(operation.body);
-      continue;
-    }
-    const body = parent[leaf] as { blocks?: unknown };
-    if (!body || typeof body !== "object" || !Array.isArray(body.blocks)) {
-      throw new Error(`Cannot apply structured rich-text operation to non-structured-rich-text body at ${path.map(String).join(".")}`);
-    }
-    const blocks = body.blocks as Array<{ id?: unknown; text?: unknown; attrs?: unknown }>;
-    const indexOf = (blockId: string) => blocks.findIndex((block) => block?.id === blockId);
-    if (operation.type === "insertBlock") {
-      if (indexOf(operation.block.id) < 0) {
-        blocks.splice(clampMockIndex(operation.index, blocks.length), 0, structuredClone(operation.block));
-      }
-    } else if (operation.type === "deleteBlock") {
-      const index = indexOf(operation.blockId);
-      if (index >= 0) {
-        blocks.splice(index, 1);
-      }
-    } else if (operation.type === "insertText") {
-      const block = blocks[indexOf(operation.blockId)];
-      if (block) {
-        const text = typeof block.text === "string" ? block.text : "";
-        const offset = clampMockIndex(operation.offset, text.length);
-        block.text = text.slice(0, offset) + operation.text + text.slice(offset);
-      }
-    } else if (operation.type === "deleteText") {
-      const block = blocks[indexOf(operation.blockId)];
-      if (block) {
-        const text = typeof block.text === "string" ? block.text : "";
-        const offset = clampMockIndex(operation.offset, text.length);
-        block.text = text.slice(0, offset) + text.slice(offset + operation.length);
-      }
-    } else if (operation.type === "splitBlock") {
-      const index = indexOf(operation.blockId);
-      const block = blocks[index];
-      if (block) {
-        const text = typeof block.text === "string" ? block.text : "";
-        const offset = clampMockIndex(operation.offset, text.length);
-        block.text = text.slice(0, offset);
-        blocks.splice(index + 1, 0, {
-          ...structuredClone(operation.newBlock),
-          text: operation.newBlock.text ?? text.slice(offset),
-        });
-      }
-    } else if (operation.type === "joinBlocks") {
-      const leftIndex = indexOf(operation.leftBlockId);
-      const rightIndex = indexOf(operation.rightBlockId);
-      if (leftIndex >= 0 && rightIndex >= 0) {
-        const left = blocks[leftIndex];
-        const right = blocks[rightIndex];
-        left.text = `${typeof left.text === "string" ? left.text : ""}${typeof right.text === "string" ? right.text : ""}`;
-        blocks.splice(rightIndex, 1);
-      }
-    } else if (operation.type === "setBlockAttrs") {
-      const block = blocks[indexOf(operation.blockId)];
-      if (block) {
-        block.attrs = structuredClone(operation.attrs);
-      }
-    } else if (operation.type === "replaceBlock") {
-      const index = indexOf(operation.blockId);
-      if (index >= 0) {
-        blocks.splice(index, 1, structuredClone(operation.block));
-      } else {
-        blocks.splice(clampMockIndex(operation.index ?? blocks.length, blocks.length), 0, structuredClone(operation.block));
-      }
-    } else if (operation.type === "replaceSubtree") {
-      const index = indexOf(operation.rootBlockId);
-      if (index >= 0) {
-        blocks.splice(index, 1, ...structuredClone(operation.blocks));
-      } else {
-        blocks.splice(clampMockIndex(operation.index ?? blocks.length, blocks.length), 0, ...structuredClone(operation.blocks));
-      }
-    }
-  }
-}
-
-function clampMockIndex(index: number, length: number) {
-  if (!Number.isFinite(index)) {
-    return length;
-  }
-  return Math.max(0, Math.min(Math.trunc(index), length));
 }
 
 function mergeLaunchContext(
@@ -1046,17 +944,35 @@ function createDatabaseHandle(
       );
       persistMockAutomergeDocument(document, mergedDoc);
       document.updatedAt = new Date().toISOString();
+      const mergedHeads = document.heads ? [...document.heads] : [];
+      let changesSince:
+        | {
+            sinceHeads: string[];
+            changes: Uint8Array[];
+          }
+        | undefined;
+      if (patch.replicaHeads?.length) {
+        const missingChanges = Automerge.getChangesSince(
+          mergedDoc,
+          patch.replicaHeads as Automerge.Heads,
+        );
+        changesSince = {
+          sinceHeads: [...patch.replicaHeads],
+          changes: missingChanges.map((change) => cloneBytes(new Uint8Array(change))),
+        };
+      }
       return {
         document: {
           id: document.id,
           data: structuredClone(document.data),
-          heads: document.heads ? [...document.heads] : undefined,
+          heads: mergedHeads,
           attachments: document.attachments
             ? structuredClone(document.attachments)
             : [],
           updatedAt: document.updatedAt,
         },
-        heads: document.heads ? [...document.heads] : [],
+        heads: mergedHeads,
+        changesSince,
       };
     },
     async create(input) {

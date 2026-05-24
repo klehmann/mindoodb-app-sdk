@@ -488,49 +488,6 @@ export interface MindooDBAppRichTextPatch {
   updateSpansConfig?: Record<string, unknown>;
 }
 
-export interface MindooDBAppStructuredRichTextBlock {
-  id: string;
-  type: string;
-  attrs?: Record<string, MindooDBAppRichTextMaterializeValue>;
-  parentId?: string | null;
-  children?: string[];
-  isEmbed?: boolean;
-  text?: string;
-  marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
-  runs?: Array<{
-    text: string;
-    marks?: Record<string, MindooDBAppRichTextMaterializeValue>;
-  }>;
-}
-
-export interface MindooDBAppStructuredRichTextBody {
-  version: 1 | 2;
-  blocks: MindooDBAppStructuredRichTextBlock[];
-  blockOrder?: string[];
-  blocksById?: Record<string, MindooDBAppStructuredRichTextBlock>;
-}
-
-export type MindooDBAppStructuredRichTextOperation =
-  | { type: "setDocument"; body: MindooDBAppStructuredRichTextBody }
-  | { type: "insertText"; blockId: string; offset: number; text: string; marks?: Record<string, MindooDBAppRichTextMaterializeValue> }
-  | { type: "deleteText"; blockId: string; offset: number; length: number }
-  | { type: "splitBlock"; blockId: string; offset: number; newBlock: MindooDBAppStructuredRichTextBlock }
-  | { type: "joinBlocks"; leftBlockId: string; rightBlockId: string }
-  | { type: "insertBlock"; index: number; block: MindooDBAppStructuredRichTextBlock }
-  | { type: "deleteBlock"; blockId: string }
-  | { type: "setBlockAttrs"; blockId: string; attrs: Record<string, MindooDBAppRichTextMaterializeValue> }
-  | { type: "replaceBlock"; blockId: string; block: MindooDBAppStructuredRichTextBlock; index?: number }
-  | { type: "replaceSubtree"; rootBlockId: string; blocks: MindooDBAppStructuredRichTextBlock[]; index?: number };
-
-export interface MindooDBAppStructuredRichTextPatch {
-  /** Path to the structured rich-text body inside the document payload. */
-  path: Array<string | number>;
-  /** Automerge heads of the document state these semantic operations were based on. */
-  baseHeads?: string[];
-  /** Ordered structured rich-text operations using stable block IDs and block-local offsets. */
-  operations: MindooDBAppStructuredRichTextOperation[];
-}
-
 export interface MindooDBAppRichTextSnapshot {
   path: Array<string | number>;
   heads?: string[];
@@ -557,13 +514,31 @@ export interface MindooDBAppAutomergeGetOptions {
 export interface MindooDBAppAutomergeChangesPatch {
   /** Heads the client had when authoring `changes`; optional, for correlation only. */
   baseHeads?: string[];
+  /**
+   * Heads of the local replica after authoring `changes`. When provided, the
+   * apply response includes `changesSince` for incremental reconciliation.
+   */
+  replicaHeads?: string[];
   /** Change bytes from `Automerge.getChangesSince`; merged into Haven's current doc. */
+  changes: Uint8Array[];
+}
+
+/** Incremental catch-up bytes for a local replica after an apply merge. */
+export interface MindooDBAppAutomergeChangesSince {
+  /** Echo of `replicaHeads` from the request. */
+  sinceHeads: string[];
+  /** Changes on the merged canonical doc that the replica is missing. */
   changes: Uint8Array[];
 }
 
 export interface MindooDBAppAutomergePatchResult {
   document: MindooDBAppDocument;
   heads: string[];
+  /**
+   * Present when the request included `replicaHeads`. Apply locally with
+   * `Automerge.applyChanges` instead of reloading a full snapshot.
+   */
+  changesSince?: MindooDBAppAutomergeChangesSince;
 }
 
 /**
@@ -678,8 +653,6 @@ export interface MindooDBAppUpdateDocumentInput {
   richText?: MindooDBAppRichTextPatch[];
   /** Rich-text positional steps to apply at document paths. */
   richTextSteps?: MindooDBAppRichTextStepPatch[];
-  /** Structured rich-text operations to apply at document paths. */
-  structuredRichText?: MindooDBAppStructuredRichTextPatch[];
 }
 
 /** Query used for history lookups at a specific timestamp. */
@@ -975,10 +948,24 @@ export interface MindooDBAppDocumentApi {
     path: Array<string | number>,
     options?: MindooDBAppRichTextGetOptions,
   ): Promise<MindooDBAppRichTextSnapshot>;
+  /**
+   * Export the full internal Automerge document as binary.
+   *
+   * **Discouraged** — prefer `getRichText`, `get`, and `documents.update` (`set`,
+   * `unset`, `text`, `richText`, `json`) unless those APIs cannot express your
+   * edits. Added for TeamEdit Word/.docx (local Automerge replica + binary flush).
+   */
   getAutomergeSnapshot(
     docId: string,
     options?: MindooDBAppAutomergeGetOptions,
   ): Promise<MindooDBAppAutomergeSnapshot>;
+  /**
+   * Merge raw Automerge change bytes into the canonical document on Haven.
+   *
+   * **Discouraged** — prefer `documents.update` patch operations. Escape hatch
+   * for apps that host a local Automerge replica when JSON patches are insufficient.
+   * Include `replicaHeads` to receive incremental `changesSince` in the response.
+   */
   applyAutomergeChanges(
     docId: string,
     patch: MindooDBAppAutomergeChangesPatch,

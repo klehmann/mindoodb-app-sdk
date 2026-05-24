@@ -772,7 +772,126 @@ Like the text buffer, the rich-text handle always sends the original `baseHeads`
 
 #### End-to-end sample
 
-The Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) wires `MindooDBRichTextHandle` to an `@eigenpal/docx-editor-vue` editor and is the recommended starting point for building your own collaborative rich-text app.
+The Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) is the **only supported in-repo use case** for the Automerge binary sync API below — it needs a local replica and binary flush because `set`/`unset` and the JSON patch APIs are not sufficient for that editor. For span-only rich-text apps, use `createMindooDBRichTextHandle` instead.
+
+### Automerge binary sync (advanced)
+
+> **Avoid these APIs unless you have no alternative.** For normal app editing, use `documents.update({ set })`, `documents.update({ unset })`, and the JSON patch operations (`text`, `richText`, `json`) documented above. `getAutomergeSnapshot` and `applyAutomergeChanges` were added as an **escape hatch** for the one case where those APIs are not enough: TeamEdit's Word/.docx mode, which hosts a local `@automerge/automerge` replica and flushes raw change bytes on save. Do not adopt binary sync for new features unless you have the same constraint — you take on an Automerge dependency, manual replica lifecycle, and a much harder integration path.
+
+If you must use binary sync, Haven decrypts the canonical document, merges incoming change batches with `Automerge.applyChanges`, and persists the result. Your app never sends encrypted blobs or sync metadata; it only sends the same binary change format Automerge produces locally.
+
+Typical flow:
+
+```
+            ┌────────────────────────────────────────────────────┐
+  open  ──► │ getAutomergeSnapshot → load local replica          │
+            └─────────────────────────┬──────────────────────────┘
+                                      │
+  edit  ──► │ Local Automerge doc (or span edits applied locally)  │
+            └─────────────────────────┬──────────────────────────┘
+                                      │ getChangesSince(baseHeads)
+                                      ▼
+            ┌────────────────────────────────────────────────────┐
+  save  ──► │ applyAutomergeChanges({ baseHeads, replicaHeads,   │
+            │                       changes })                   │
+            └─────────────────────────┬──────────────────────────┘
+                                      │ Haven merges + persists
+                                      ▼
+            ┌────────────────────────────────────────────────────┐
+            │ Apply result.changesSince locally (or skip if empty) │
+            └────────────────────────────────────────────────────┘
+```
+
+Bridge RPCs: `documents.automerge.getSnapshot` and `documents.automerge.applyChanges`.
+
+#### `getAutomergeSnapshot`
+
+Export the full internal Automerge document as a binary snapshot plus the current document heads:
+
+```ts
+const snapshot = await db.documents.getAutomergeSnapshot(docId);
+// snapshot = { binary: Uint8Array, heads: string[] }
+
+const localDoc = Automerge.load(snapshot.binary);
+const baseHeads = [...snapshot.heads];
+```
+
+Options:
+
+```ts
+interface MindooDBAppAutomergeGetOptions {
+  revisionId?: MindooDBAppDocumentRevisionId; // historical read via documents.listHistory()
+}
+```
+
+Only call this when binary sync is unavoidable — e.g. opening a local replica, refreshing after `applyAutomergeChanges`, or read-only historical preview at a `revisionId`. For normal reads, use `getRichText` or `documents.get`.
+
+#### `applyAutomergeChanges`
+
+Merge a batch of raw Automerge change bytes into the canonical document on Haven:
+
+```ts
+const changes = Automerge.getChangesSince(localDoc, baseHeads as Automerge.Heads);
+const replicaHeads = Automerge.getHeads(localDoc);
+
+const result = await db.documents.applyAutomergeChanges(docId, {
+  baseHeads, // optional metadata: heads when the local batch was authored
+  replicaHeads, // local heads after authoring; enables incremental catch-up in the response
+  changes: changes.map((change) => new Uint8Array(change)),
+});
+
+// result.document — updated MindooDBAppDocument snapshot (includes merged data + heads)
+// result.heads     — new Automerge heads after the merge
+// result.changesSince — incremental bytes to reconcile the local replica (when replicaHeads was sent)
+if (result.changesSince?.changes.length) {
+  [localDoc] = Automerge.applyChanges(
+    localDoc,
+    result.changesSince.changes.map((change) => new Uint8Array(change)),
+  );
+}
+baseHeads = [...result.heads];
+```
+
+Patch and result types:
+
+```ts
+interface MindooDBAppAutomergeChangesPatch {
+  baseHeads?: string[];   // correlation only; merge is not rejected when Haven moved on
+  replicaHeads?: string[]; // local heads after authoring `changes`; enables `changesSince` in the response
+  changes: Uint8Array[];  // from Automerge.getChangesSince (or equivalent)
+}
+
+interface MindooDBAppAutomergeChangesSince {
+  sinceHeads: string[];   // echo of `replicaHeads`
+  changes: Uint8Array[];  // apply locally with Automerge.applyChanges
+}
+
+interface MindooDBAppAutomergePatchResult {
+  document: MindooDBAppDocument;
+  heads: string[];
+  changesSince?: MindooDBAppAutomergeChangesSince;
+}
+```
+
+Haven applies `changes` with `Automerge.applyChanges` against its **current** document, so concurrent edits from other clients are merged by Automerge's CRDT logic rather than rejected. `baseHeads` is optional logging metadata — it does not gate the merge.
+
+When you include `replicaHeads` (the local replica's heads after authoring your batch), the response includes `changesSince`: the incremental change bytes your replica still needs after the merge. Apply them locally with `Automerge.applyChanges` and set `baseHeads = result.heads`. When there was no concurrent edit, `changesSince.changes` is empty and your local doc is already up to date — no full snapshot download needed. Omit `replicaHeads` only if you plan to reload via `getAutomergeSnapshot` instead.
+
+#### When to use binary sync vs JSON patches
+
+| Approach | App sends | When to use |
+| -------- | --------- | ----------- |
+| `documents.update({ set })` / `{ unset }` | Field paths | **Default** for structured document data |
+| `documents.update({ richText })` | JSON span snapshots | **Default** for rich-text fields |
+| `documents.update({ text })` | Text splices | Plain markdown / string fields |
+| `documents.update({ json })` | JSON Patch (RFC 6902) | Arbitrary nested JSON paths |
+| `applyAutomergeChanges` | Binary change bytes | **Last resort only** — TeamEdit Word/.docx with a local Automerge replica |
+
+Requires the `update` capability (same as other write operations). For historical reads, prefer `getRichText(..., { revisionId })`; only use `getAutomergeSnapshot(..., { revisionId })` when you truly need the full binary at a revision.
+
+#### Reference implementation (not a template)
+
+TeamEdit's Word/.docx mode is why these RPCs exist — see `wordAutomergeHandle.ts` in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit). Treat it as a reference for an unsupported edge case, not as a pattern to copy into new apps.
 
 ### Incremental sync
 
@@ -1208,6 +1327,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
 | `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |
 | `getRichText(docId, path, opts?)`  | `Promise<MindooDBAppRichTextSnapshot>`       |
+| `getAutomergeSnapshot(docId, opts?)` | `Promise<MindooDBAppAutomergeSnapshot>`   |
+| `applyAutomergeChanges(docId, patch)` | `Promise<MindooDBAppAutomergePatchResult>` |
 | `create(input)`                    | `Promise<MindooDBAppDocument>`               |
 | `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
 | `delete(docId)`                    | `Promise<{ ok: true }>`                      |
@@ -1215,6 +1336,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `listHistory(docId)`               | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>`     |
 | `getAtRevision(docId, revisionId)` | `Promise<MindooDBAppHistoricalDocument>`     |
+
+`getAutomergeSnapshot` and `applyAutomergeChanges` are **discouraged** escape-hatch APIs for binary Automerge sync. Prefer `set`/`unset` and JSON patches (`text`, `richText`, `json`) instead. See [Automerge binary sync (advanced)](#automerge-binary-sync-advanced).
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
