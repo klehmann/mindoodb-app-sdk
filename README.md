@@ -1,12 +1,12 @@
 # mindoodb-app-sdk
 
-Build apps that run inside **MindooDB Haven** -- the browser-based workspace for end-to-end encrypted, offline-first data.
+Build apps that run inside **MindooDB Haven** -- the browser-based workspace for end-to-end encrypted, local-first data.
 
 `mindoodb-app-sdk` is the TypeScript SDK that connects your web application to Haven through a secure message bridge. Your app runs in a sandboxed iframe (or a separate browser window) and gains access to databases, documents, attachments, virtual views, and live host events -- all without ever touching encryption keys or raw sync state.
 
 ## What is a MindooDB App?
 
-[MindooDB](https://mindoodb.com) is an **end-to-end encrypted, offline-first sync database**. Data is encrypted on the client before it ever leaves the device. Under the hood it uses [Automerge](https://automerge.org/) CRDTs so multiple users can edit concurrently and conflicts resolve automatically.
+[MindooDB](https://mindoodb.com) is an **end-to-end encrypted, local-first sync database**. Data is encrypted on the client before it ever leaves the device. Under the hood it uses [Automerge](https://automerge.org/) CRDTs so multiple users can edit concurrently and conflicts resolve automatically.
 
 **Haven** is the browser-based workspace that sits on top of MindooDB. Users organize databases, applications, notes, and media on a visual grid -- think of it as a customizable home screen for encrypted data that works offline and syncs in the background.
 
