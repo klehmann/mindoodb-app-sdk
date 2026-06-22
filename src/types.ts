@@ -378,6 +378,27 @@ export interface MindooDBAppViewCursorDocumentListResult {
 }
 
 /**
+ * Tier of an access-control decision. `tier1` decisions are fully determined by
+ * the signer/policy; `tier2` decisions depend on document content rules.
+ */
+export type MindooDBAppAccessTier = "tier1" | "tier2";
+
+/**
+ * Result of a non-throwing write-access prediction (`documents.canCreate`,
+ * `canChange`, `canDelete`, `canUndelete`). `allowed === true` means the host
+ * predicts the operation would succeed for the current app and identity,
+ * accounting for the app's granted capabilities, time-travel read-only mode,
+ * and the database's MindooDB write access policy. `reason` is a human-readable
+ * explanation suitable for tooltips/audit logs.
+ */
+export interface MindooDBAppAccessDecision {
+  allowed: boolean;
+  reason: string;
+  tier: MindooDBAppAccessTier;
+  matchedRuleId?: string;
+}
+
+/**
  * Payload used when creating a new document.
  *
  * `set` becomes the initial top-level document state, mirroring the update
@@ -977,6 +998,30 @@ export interface MindooDBAppDocumentApi {
   ): Promise<MindooDBAppDocument>;
   delete(docId: string): Promise<{ ok: true }>;
   undelete(docId: string): Promise<{ ok: true }>;
+  /**
+   * Predict whether `create` would be allowed, without writing anything. Useful
+   * for disabling a "New" action and surfacing `decision.reason` up front.
+   */
+  canCreate(input?: {
+    decryptionKeyId?: string;
+  }): Promise<MindooDBAppAccessDecision>;
+  /**
+   * Predict whether `update` would be allowed for the given document, without
+   * writing. The current document state is used as the candidate edit, so this
+   * gates baseline (Tier 1) policy; content-dependent (Tier 2) rules are still
+   * enforced on the actual `update`.
+   */
+  canChange(docId: string): Promise<MindooDBAppAccessDecision>;
+  /** Predict whether `delete` would be allowed for the given document. */
+  canDelete(docId: string): Promise<MindooDBAppAccessDecision>;
+  /** Predict whether `undelete` would be allowed for the given document. */
+  canUndelete(docId: string): Promise<MindooDBAppAccessDecision>;
+  /**
+   * The effective default document key id used when `create` is called without
+   * an explicit `decryptionKeyId`. Resolves the database/tenant policy default
+   * and falls back to `"default"`.
+   */
+  getDefaultCreateKeyId(): Promise<string>;
   listHistory(docId: string): Promise<MindooDBAppDocumentHistoryEntry[]>;
   getAtTimestamp(
     docId: string,

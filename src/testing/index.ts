@@ -7,6 +7,7 @@ import type {
   MindooDBAppBridgeErrorPayload,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeRpcRequest,
+  MindooDBAppAccessDecision,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
@@ -1072,6 +1073,21 @@ function createDatabaseHandle(
       }
       return { ok: true as const };
     },
+    async canCreate(): Promise<MindooDBAppAccessDecision> {
+      return { allowed: true, reason: "allowed (test host)", tier: "tier1" };
+    },
+    async canChange(_docId: string): Promise<MindooDBAppAccessDecision> {
+      return { allowed: true, reason: "allowed (test host)", tier: "tier1" };
+    },
+    async canDelete(_docId: string): Promise<MindooDBAppAccessDecision> {
+      return { allowed: true, reason: "allowed (test host)", tier: "tier1" };
+    },
+    async canUndelete(_docId: string): Promise<MindooDBAppAccessDecision> {
+      return { allowed: true, reason: "allowed (test host)", tier: "tier1" };
+    },
+    async getDefaultCreateKeyId(): Promise<string> {
+      return "default";
+    },
     async listHistory(
       _docId: string,
     ): Promise<MindooDBAppDocumentHistoryEntry[]> {
@@ -1801,6 +1817,28 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.undelete(String(params.docId));
+      case "documents.canCreate":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.canCreate(
+            params.input as { decryptionKeyId?: string } | undefined,
+          );
+      case "documents.canChange":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.canChange(String(params.docId));
+      case "documents.canDelete":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.canDelete(String(params.docId));
+      case "documents.canUndelete":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.canUndelete(String(params.docId));
+      case "documents.getDefaultCreateKeyId":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getDefaultCreateKeyId();
       case "documents.history.list":
         return await state
           .getDatabase(String(params.databaseId))

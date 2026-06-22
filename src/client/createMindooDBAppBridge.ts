@@ -856,6 +856,30 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           docId,
         }),
+      canCreate: async (input) =>
+        await this.rpc.call("documents.canCreate", {
+          databaseId: this.databaseId,
+          input: input ?? {},
+        }),
+      canChange: async (docId) =>
+        await this.rpc.call("documents.canChange", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      canDelete: async (docId) =>
+        await this.rpc.call("documents.canDelete", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      canUndelete: async (docId) =>
+        await this.rpc.call("documents.canUndelete", {
+          databaseId: this.databaseId,
+          docId,
+        }),
+      getDefaultCreateKeyId: async () =>
+        await this.rpc.call("documents.getDefaultCreateKeyId", {
+          databaseId: this.databaseId,
+        }),
       listHistory: async (docId) =>
         await this.rpc.call("documents.history.list", {
           databaseId: this.databaseId,
