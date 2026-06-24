@@ -1071,6 +1071,11 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return await this.rpc.call("session.getLaunchContext", {});
   }
 
+  /** Returns the product names currently licensed in the Haven host. */
+  async getLicensedProducts(): Promise<string[]> {
+    return await this.rpc.call("session.getLicensedProducts", {});
+  }
+
   /** Lists the databases that the host has made available for this app session. */
   async listDatabases(): Promise<MindooDBAppDatabaseInfo[]> {
     return await this.rpc.call("session.listDatabases", {});

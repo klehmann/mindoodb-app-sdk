@@ -33,6 +33,7 @@ describe("mindoodb-app-sdk/testing", () => {
     const session = await mock.bridge.connect();
     await expect(session.getLaunchContext()).resolves.toMatchObject({
       appId: "timerecords",
+      licensedProducts: [],
       launchParameters: {
         decryptionKeyId: "payroll",
       },
@@ -42,6 +43,20 @@ describe("mindoodb-app-sdk/testing", () => {
       title: "Main",
       capabilities: ["read", "create"],
     }]);
+  });
+
+  it("exposes licensed products from mock sessions and fake hosts", async () => {
+    const mock = createFakeBridgeHost({
+      launchContext: {
+        licensedProducts: ["Haven Enterprise", "Custom Product"],
+      },
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+
+    await expect(session.getLicensedProducts()).resolves.toEqual(["Haven Enterprise", "Custom Product"]);
+    expect(mock.requests.some((request) => request.method === "session.getLicensedProducts")).toBe(true);
+    mock.dispose();
   });
 
   it("honors caller-provided document ids and is idempotent in the mock bridge", async () => {

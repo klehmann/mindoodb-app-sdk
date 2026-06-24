@@ -488,6 +488,7 @@ function createDefaultLaunchContext(
       id: "user-1",
       username: "Test User",
     },
+    licensedProducts: [],
     launchParameters: {},
     databases: [],
     views: [],
@@ -1212,6 +1213,7 @@ type MockSessionState = {
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
+  getLicensedProducts: () => string[];
   createViewNavigator: (
     input: MindooDBAppCreateViewNavigatorInput,
   ) => Promise<MindooDBAppViewNavigator>;
@@ -1292,6 +1294,9 @@ function createMockSessionState(
   const session: MindooDBAppSession = {
     async getLaunchContext() {
       return mergeLaunchContext(launchContext);
+    },
+    async getLicensedProducts() {
+      return [...(launchContext.licensedProducts ?? [])];
     },
     async listDatabases() {
       return databaseInfos.map((entry) => ({
@@ -1403,6 +1408,9 @@ function createMockSessionState(
       }
       return database;
     },
+    getLicensedProducts() {
+      return [...(launchContext.licensedProducts ?? [])];
+    },
     createViewNavigator: session.createViewNavigator,
     openViewNavigator: session.openViewNavigator,
     bridge,
@@ -1444,6 +1452,7 @@ export interface MockMindooDBAppSessionController {
   setLaunchContext(
     patch?: Partial<MindooDBAppLaunchContext>,
   ): MindooDBAppLaunchContext;
+  getLicensedProducts(): string[];
   listDatabases(): MindooDBAppDatabaseInfo[];
   setDatabases(definitions: MockMindooDBAppDatabaseDefinition[]): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
@@ -1460,6 +1469,7 @@ export function createMockMindooDBAppSession(
     session: state.session,
     getLaunchContext: state.getLaunchContext,
     setLaunchContext: state.setLaunchContext,
+    getLicensedProducts: state.getLicensedProducts,
     listDatabases: state.listDatabaseInfos,
     setDatabases: state.setDatabases,
     emitThemeChange: state.emitThemeChange,
@@ -1712,6 +1722,8 @@ export function createFakeBridgeHost(
     switch (request.method) {
       case "session.getLaunchContext":
         return state.getLaunchContext();
+      case "session.getLicensedProducts":
+        return state.getLicensedProducts();
       case "session.listDatabases":
         return state.listDatabaseInfos();
       case "session.openDatabase":

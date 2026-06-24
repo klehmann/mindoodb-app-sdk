@@ -222,6 +222,7 @@ export interface MindooDBAppLaunchContext {
     id: string;
     username: string;
   };
+  licensedProducts?: string[];
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
@@ -1256,6 +1257,7 @@ export interface MindooDBAppDatabase {
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
+  getLicensedProducts(): Promise<string[]>;
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
   listDocumentsSinceViewCursor(
