@@ -8,6 +8,7 @@ import type {
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeRpcRequest,
   MindooDBAppAccessDecision,
+  MindooDBAppBridgeLocaleChangedMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
@@ -484,6 +485,7 @@ function createDefaultLaunchContext(
     uiPreferences: {
       iosMultitaskingOptimized: false,
     },
+    locale: "en",
     user: {
       id: "user-1",
       username: "Test User",
@@ -1028,6 +1030,16 @@ function createDatabaseHandle(
         ...created,
       };
     },
+    async createMany(inputs) {
+      // Mirrors the host's bulk semantics: sequential creates over the same
+      // idempotent logic, returning only the ids in input order.
+      const ids: string[] = [];
+      for (const input of inputs) {
+        const created = await defaultDocuments.create(input);
+        ids.push(created.id);
+      }
+      return { ids };
+    },
     async update(docId, patch) {
       const updatedAt = new Date().toISOString();
       const existing = storedDocuments.get(docId);
@@ -1059,6 +1071,14 @@ function createDatabaseHandle(
           isDeleted: true,
           updatedAt: new Date().toISOString(),
         });
+      }
+      return { ok: true as const };
+    },
+    async deleteMany(docIds: string[]) {
+      // Mirrors the host's idempotent bulk semantics: missing or
+      // already-deleted documents are skipped.
+      for (const docId of docIds) {
+        await defaultDocuments.delete(docId);
       }
       return { ok: true as const };
     },
@@ -1226,6 +1246,7 @@ type MockSessionState = {
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
   emitViewportChange: (viewport: MindooDBAppViewport) => void;
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
+  emitLocaleChange: (locale: string) => void;
 };
 
 function createMockSessionState(
@@ -1237,6 +1258,7 @@ function createMockSessionState(
   const uiPreferencesListeners = new Set<
     (uiPreferences: MindooDBAppUiPreferences) => void
   >();
+  const localeListeners = new Set<(locale: string) => void>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
@@ -1375,6 +1397,12 @@ function createMockSessionState(
         uiPreferencesListeners.delete(listener);
       };
     },
+    onLocaleChange(listener) {
+      localeListeners.add(listener);
+      return () => {
+        localeListeners.delete(listener);
+      };
+    },
     async disconnect() {
       await options.onDisconnect?.();
     },
@@ -1431,6 +1459,10 @@ function createMockSessionState(
         listener({ ...launchContext.uiPreferences }),
       );
     },
+    emitLocaleChange(locale) {
+      launchContext = mergeLaunchContext(launchContext, { locale });
+      localeListeners.forEach((listener) => listener(launchContext.locale));
+    },
   };
 }
 
@@ -1458,6 +1490,7 @@ export interface MockMindooDBAppSessionController {
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
+  emitLocaleChange(locale: string): void;
 }
 
 export function createMockMindooDBAppSession(
@@ -1475,6 +1508,7 @@ export function createMockMindooDBAppSession(
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
     emitUiPreferencesChange: state.emitUiPreferencesChange,
+    emitLocaleChange: state.emitLocaleChange,
   };
 }
 
@@ -1517,6 +1551,7 @@ export interface FakeBridgeHostController {
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
+  emitLocaleChange(locale: string): void;
   postPortMessage(
     message: MindooDBAppBridgePortMessage,
     transfer?: Transferable[],
@@ -2361,6 +2396,15 @@ export function createFakeBridgeHost(
         protocol: PROTOCOL,
         kind: "ui-preferences-changed",
         uiPreferences,
+      };
+      connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    emitLocaleChange(locale) {
+      state.emitLocaleChange(locale);
+      const payload: MindooDBAppBridgeLocaleChangedMessage = {
+        protocol: PROTOCOL,
+        kind: "locale-changed",
+        locale,
       };
       connectedPorts.forEach((port) => port.postMessage(payload));
     },

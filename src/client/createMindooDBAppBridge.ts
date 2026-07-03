@@ -46,6 +46,7 @@ import type {
   MindooDBAppBridgeConnectOptions,
   MindooDBAppBridgeConnectedMessage,
   MindooDBAppBridgeHandshakeErrorMessage,
+  MindooDBAppBridgeLocaleChangedMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
@@ -83,6 +84,14 @@ const PROTOCOL = "mindoodb-app-bridge";
 
 /** Default maximum wait (ms) for the host to acknowledge the handshake. */
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
+
+/**
+ * Detects the host's "unknown bridge method" error so bulk APIs can fall back
+ * to per-document calls on older Haven versions that predate the bulk RPCs.
+ */
+function isMethodNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.name === "method-not-found";
+}
 
 /** Copies a `Uint8Array` into a transferable `ArrayBuffer` for stream writes. */
 function toTransferableArrayBuffer(chunk: Uint8Array) {
@@ -135,6 +144,13 @@ function isUiPreferencesChangedMessage(
   message: MindooDBAppBridgePortMessage,
 ): message is MindooDBAppBridgeUiPreferencesChangedMessage {
   return message.kind === "ui-preferences-changed";
+}
+
+/** Narrows a port message to a host locale change event. */
+function isLocaleChangedMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeLocaleChangedMessage {
+  return message.kind === "locale-changed";
 }
 
 /** Converts a stream error payload into a normal `Error`. */
@@ -840,6 +856,31 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           input,
         }),
+      createMany: async (inputs) => {
+        if (inputs.length === 0) {
+          return { ids: [] };
+        }
+        try {
+          return await this.rpc.call<{ ids: string[] }>("documents.createMany", {
+            databaseId: this.databaseId,
+            inputs,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          // Older Haven host without the bulk RPC: sequential creates.
+          const ids: string[] = [];
+          for (const input of inputs) {
+            const document = await this.rpc.call<{ id: string }>("documents.create", {
+              databaseId: this.databaseId,
+              input,
+            });
+            ids.push(document.id);
+          }
+          return { ids };
+        }
+      },
       update: async (docId, patch) =>
         await this.rpc.call("documents.update", {
           databaseId: this.databaseId,
@@ -851,6 +892,29 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           docId,
         }),
+      deleteMany: async (docIds) => {
+        if (docIds.length === 0) {
+          return { ok: true as const };
+        }
+        try {
+          return await this.rpc.call<{ ok: true }>("documents.deleteMany", {
+            databaseId: this.databaseId,
+            docIds,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          // Older Haven host without the bulk RPC: sequential deletes.
+          for (const docId of docIds) {
+            await this.rpc.call("documents.delete", {
+              databaseId: this.databaseId,
+              docId,
+            });
+          }
+          return { ok: true as const };
+        }
+      },
       undelete: async (docId) =>
         await this.rpc.call("documents.undelete", {
           databaseId: this.databaseId,
@@ -1047,8 +1111,8 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
  *   and attachment operations.
  * - `createViewNavigator(input)` / `openViewNavigator(viewId)` -- allocate
  *   a host-side navigator and return a `MindooDBAppViewNavigatorImpl`.
- * - `onThemeChange` / `onViewportChange` / `onUiPreferencesChange` --
- *   subscribe to push events from
+ * - `onThemeChange` / `onViewportChange` / `onUiPreferencesChange` /
+ *   `onLocaleChange` -- subscribe to push events from
  *   the host.
  * - `disconnect()` -- sends a disconnect RPC, then unconditionally disposes
  *   the port client.
@@ -1168,6 +1232,15 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return this.rpc.addMessageListener((message) => {
       if (isUiPreferencesChangedMessage(message)) {
         listener(message.uiPreferences);
+      }
+    });
+  }
+
+  /** Subscribe to host-pushed UI language changes. */
+  onLocaleChange(listener: (locale: MindooDBAppLaunchContext["locale"]) => void) {
+    return this.rpc.addMessageListener((message) => {
+      if (isLocaleChangedMessage(message)) {
+        listener(message.locale);
       }
     });
   }

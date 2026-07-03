@@ -618,6 +618,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
                 uiPreferences: {
                   iosMultitaskingOptimized: false,
                 },
+                locale: "en",
                 user: {
                   id: "user-1",
                   username: "Jane Doe",
@@ -662,6 +663,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const themeChanges: Array<{ mode: string; preset: string }> = [];
     const viewportChanges: Array<{ width: number; height: number }> = [];
     const uiPreferencesChanges: Array<{ iosMultitaskingOptimized: boolean }> = [];
+    const localeChanges: string[] = [];
     const unsubscribe = session.onThemeChange((theme) => {
       themeChanges.push(theme);
     });
@@ -670,6 +672,9 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
     const unsubscribeUiPreferences = session.onUiPreferencesChange((uiPreferences) => {
       uiPreferencesChanges.push(uiPreferences);
+    });
+    const unsubscribeLocale = session.onLocaleChange((locale) => {
+      localeChanges.push(locale);
     });
 
     await expect(session.getLaunchContext()).resolves.toMatchObject({
@@ -685,6 +690,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       uiPreferences: {
         iosMultitaskingOptimized: false,
       },
+      locale: "en",
     });
 
     if (!bridgePort) {
@@ -716,6 +722,11 @@ describe("createMindooDBAppBridge attachment streaming", () => {
         iosMultitaskingOptimized: true,
       },
     });
+    hostPort.postMessage({
+      protocol: "mindoodb-app-bridge",
+      kind: "locale-changed",
+      locale: "de",
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(themeChanges).toEqual([{
@@ -729,10 +740,12 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     expect(uiPreferencesChanges).toEqual([{
       iosMultitaskingOptimized: true,
     }]);
+    expect(localeChanges).toEqual(["de"]);
 
     unsubscribe();
     unsubscribeViewport();
     unsubscribeUiPreferences();
+    unsubscribeLocale();
     await session.disconnect();
   });
 

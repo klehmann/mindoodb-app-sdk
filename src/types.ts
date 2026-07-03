@@ -211,6 +211,13 @@ export interface MindooDBAppLaunchContext {
   theme: MindooDBAppHostTheme;
   viewport: MindooDBAppViewport | null;
   uiPreferences: MindooDBAppUiPreferences;
+  /**
+   * The host's currently selected UI language as a BCP-47 language tag (e.g.
+   * `"en"`, `"de"`). Apps should map this to their own set of supported
+   * locales and fall back to their default when the tag is unknown. Subscribe
+   * to {@link MindooDBAppSession.onLocaleChange} to react to live changes.
+   */
+  locale: string;
   tenantId?: string;
   preferredDatabaseId?: string;
   /**
@@ -835,13 +842,22 @@ export interface MindooDBAppBridgeUiPreferencesChangedMessage {
   uiPreferences: MindooDBAppUiPreferences;
 }
 
+/** Host-pushed event emitted when the Haven UI language changes. */
+export interface MindooDBAppBridgeLocaleChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "locale-changed";
+  /** BCP-47 language tag of the newly selected host locale (e.g. `"de"`). */
+  locale: string;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
   | MindooDBAppBridgeStreamMessage
   | MindooDBAppBridgeThemeChangedMessage
   | MindooDBAppBridgeViewportChangedMessage
-  | MindooDBAppBridgeUiPreferencesChangedMessage;
+  | MindooDBAppBridgeUiPreferencesChangedMessage
+  | MindooDBAppBridgeLocaleChangedMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -993,11 +1009,38 @@ export interface MindooDBAppDocumentApi {
     patch: MindooDBAppAutomergeChangesPatch,
   ): Promise<MindooDBAppAutomergePatchResult>;
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
+  /**
+   * Bulk-create documents in one host round trip.
+   *
+   * The host persists the whole batch in a single append-only store write and
+   * runs one sync pass, which is dramatically faster than per-document
+   * `create()` calls for large imports. The response is deliberately lean —
+   * only the created document ids, in input order — so no per-document
+   * projection work is performed. Use `get()` afterwards when full documents
+   * are needed.
+   *
+   * On hosts that do not support the bulk RPC yet, the client transparently
+   * falls back to sequential `create()` calls.
+   */
+  createMany(
+    inputs: MindooDBAppCreateDocumentInput[],
+  ): Promise<{ ids: string[] }>;
   update(
     docId: string,
     patch: MindooDBAppUpdateDocumentInput,
   ): Promise<MindooDBAppDocument>;
   delete(docId: string): Promise<{ ok: true }>;
+  /**
+   * Bulk-delete documents in one host round trip.
+   *
+   * The host persists all delete markers in a single append-only store write
+   * and runs one sync pass. Missing or already-deleted documents are skipped
+   * (idempotent bulk semantics for destructive re-imports).
+   *
+   * On hosts that do not support the bulk RPC yet, the client transparently
+   * falls back to sequential `delete()` calls.
+   */
+  deleteMany(docIds: string[]): Promise<{ ok: true }>;
   undelete(docId: string): Promise<{ ok: true }>;
   /**
    * Predict whether `create` would be allowed, without writing anything. Useful
@@ -1278,6 +1321,11 @@ export interface MindooDBAppSession {
   onUiPreferencesChange(
     listener: (uiPreferences: MindooDBAppUiPreferences) => void,
   ): () => void;
+  /**
+   * Subscribe to host-pushed UI language changes. The listener receives the
+   * new BCP-47 language tag (e.g. `"de"`). Returns an unsubscribe function.
+   */
+  onLocaleChange(listener: (locale: string) => void): () => void;
   disconnect(): Promise<void>;
 }
 

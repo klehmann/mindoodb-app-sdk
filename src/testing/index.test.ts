@@ -45,6 +45,36 @@ describe("mindoodb-app-sdk/testing", () => {
     }]);
   });
 
+  it("delivers the host locale and pushes locale changes to subscribers", async () => {
+    const mock = createMockMindooDBAppBridge({
+      launchContext: {
+        appId: "lehrerpult",
+        locale: "de",
+      },
+    });
+
+    const session = await mock.bridge.connect();
+    await expect(session.getLaunchContext()).resolves.toMatchObject({
+      locale: "de",
+    });
+
+    const localeChanges: string[] = [];
+    const unsubscribe = session.onLocaleChange((locale) => {
+      localeChanges.push(locale);
+    });
+
+    mock.emitLocaleChange("en");
+    mock.emitLocaleChange("fr");
+    expect(localeChanges).toEqual(["en", "fr"]);
+    await expect(session.getLaunchContext()).resolves.toMatchObject({
+      locale: "fr",
+    });
+
+    unsubscribe();
+    mock.emitLocaleChange("de");
+    expect(localeChanges).toEqual(["en", "fr"]);
+  });
+
   it("exposes licensed products from mock sessions and fake hosts", async () => {
     const mock = createFakeBridgeHost({
       launchContext: {
@@ -52,6 +82,7 @@ describe("mindoodb-app-sdk/testing", () => {
       },
     });
 
+    mock.install();
     const session = await createMindooDBAppBridge().connect();
 
     await expect(session.getLicensedProducts()).resolves.toEqual(["Haven Enterprise", "Custom Product"]);
