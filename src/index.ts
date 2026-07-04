@@ -13,4 +13,4 @@ export type {
 } from "./richTextHandle";
 export { createMindooDBTextBuffer, MindooDBTextBuffer } from "./textBuffer";
 export type { CreateMindooDBTextBufferOptions, MindooDBTextBufferFlushResult } from "./textBuffer";
-export { createViewLanguage } from "./viewLanguage";
+export { createViewLanguage, queryDocuments } from "./viewLanguage";

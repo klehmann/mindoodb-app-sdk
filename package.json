@@ -44,10 +44,11 @@
     "prepublishOnly": "npm run build && npm run test"
   },
   "dependencies": {
-    "mindoodb-view-language": "0.0.13"
+    "mindoodb-view-language": "0.0.14"
   },
   "devDependencies": {
     "@automerge/automerge": "^3.2.1",
+    "mindoodb": "^0.0.29",
     "@types/node": "25.5.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.2",
