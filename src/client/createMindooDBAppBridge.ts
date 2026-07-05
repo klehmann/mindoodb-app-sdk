@@ -37,6 +37,7 @@
  *
  * @module createMindooDBAppBridge
  */
+import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
 import { PortRpcClient } from "./portRpcClient";
 import type {
   MindooDBAppAttachmentApi,
@@ -48,8 +49,10 @@ import type {
   MindooDBAppBridgeHandshakeErrorMessage,
   MindooDBAppBridgeLocaleChangedMessage,
   MindooDBAppBridgePortMessage,
+  MindooDBAppBridgeQueryResultMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
+  MindooDBAppBridgeViewChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppBridgeStreamAck,
   MindooDBAppBridgeStreamError,
@@ -58,8 +61,11 @@ import type {
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDocumentApi,
+  MindooDBAppDocumentQuery,
   MindooDBAppLaunchContext,
+  MindooDBAppLiveQuerySubscription,
   MindooDBAppMenuApi,
+  MindooDBAppQueryResult,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSession,
   MindooDBAppShowMenuInput,
@@ -75,6 +81,7 @@ import type {
   MindooDBAppViewNavigatorPageResult,
   MindooDBAppViewNavigatorRangeQuery,
   MindooDBAppViewNavigatorSelectionState,
+  MindooDBAppViewUpdateStats,
   MindooDBAppScanAttachmentResult,
   MindooDBAppWritableAttachmentStream,
 } from "../types";
@@ -123,6 +130,49 @@ function isStreamErrorFor(
   message: MindooDBAppBridgePortMessage,
 ): message is MindooDBAppBridgeStreamError {
   return message.kind === "stream-error" && message.streamId === streamId;
+}
+
+/** Narrows a port message to a live-query result push for one subscription. */
+function isQueryResultFor(
+  subscriptionId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeQueryResultMessage {
+  return (
+    message.kind === "query-result" &&
+    message.subscriptionId === subscriptionId
+  );
+}
+
+/** Narrows a port message to a view-changed push for one navigator. */
+function isViewChangedFor(
+  navigatorId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeViewChangedMessage {
+  return message.kind === "view-changed" && message.navigatorId === navigatorId;
+}
+
+/**
+ * Prepares a document query for the wire: formula-string filters are parsed
+ * locally into the expression AST, so only JSON crosses the bridge.
+ */
+function normalizeDocumentQuery(
+  query?: MindooDBAppDocumentQuery,
+): Record<string, unknown> {
+  if (!query) {
+    return {};
+  }
+  const { filter, ...rest } = query;
+  return {
+    ...rest,
+    ...(filter !== undefined
+      ? {
+          filter:
+            typeof filter === "string"
+              ? parseMindooDBFormulaBooleanExpression(filter)
+              : filter,
+        }
+      : {}),
+  };
 }
 
 /** Narrows a port message to a host theme change event. */
@@ -334,6 +384,16 @@ class MindooDBAppViewNavigatorImpl implements MindooDBAppViewNavigator {
     );
     this.viewCursor = result.viewCursor;
     return this.viewCursor;
+  }
+
+  onDidUpdate(
+    listener: (stats: MindooDBAppViewUpdateStats) => void,
+  ): () => void {
+    return this.rpc.addMessageListener((message) => {
+      if (isViewChangedFor(this.navigatorId, message)) {
+        listener(message.stats);
+      }
+    });
   }
 
   async getCurrentEntry(): Promise<MindooDBAppViewEntry | null> {
@@ -823,6 +883,52 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           query: query ?? {},
         }),
+      query: async (query) =>
+        await this.rpc.call("documents.query", {
+          databaseId: this.databaseId,
+          query: normalizeDocumentQuery(query),
+        }),
+      liveQuery: async (query, onResult) => {
+        const { subscriptionId, result } = await this.rpc.call<{
+          subscriptionId: string;
+          result: MindooDBAppQueryResult;
+        }>("documents.liveQuery.subscribe", {
+          databaseId: this.databaseId,
+          query: normalizeDocumentQuery(query),
+        });
+
+        // Register the push listener before yielding to the event loop so
+        // no follow-up result can slip past between subscribe and listen.
+        let disposed = false;
+        const unsubscribe = this.rpc.addMessageListener((message) => {
+          if (!disposed && isQueryResultFor(subscriptionId, message)) {
+            onResult(message.result);
+          }
+        });
+        onResult(result);
+
+        const subscription: MindooDBAppLiveQuerySubscription = {
+          refresh: async () => {
+            if (disposed) {
+              return;
+            }
+            await this.rpc.call("documents.liveQuery.refresh", {
+              subscriptionId,
+            });
+          },
+          dispose: async () => {
+            if (disposed) {
+              return;
+            }
+            disposed = true;
+            unsubscribe();
+            await this.rpc.call("documents.liveQuery.unsubscribe", {
+              subscriptionId,
+            });
+          },
+        };
+        return subscription;
+      },
       getHeadCursor: async () =>
         await this.rpc.call("documents.getHeadCursor", {
           databaseId: this.databaseId,

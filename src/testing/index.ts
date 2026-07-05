@@ -1,4 +1,8 @@
 import * as Automerge from "@automerge/automerge";
+import {
+  evaluateExpression,
+  parseMindooDBFormulaBooleanExpression,
+} from "mindoodb-view-language";
 import type {
   MindooDBAppAttachmentApi,
   MindooDBAppBridge,
@@ -9,8 +13,10 @@ import type {
   MindooDBAppBridgeRpcRequest,
   MindooDBAppAccessDecision,
   MindooDBAppBridgeLocaleChangedMessage,
+  MindooDBAppBridgeQueryResultMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
+  MindooDBAppBridgeViewChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
@@ -21,11 +27,15 @@ import type {
   MindooDBAppDocumentHistoryEntry,
   MindooDBAppDocumentListQuery,
   MindooDBAppDocumentListResult,
+  MindooDBAppDocumentQuery,
   MindooDBAppDocumentScanPreset,
   MindooDBAppHistoricalDocument,
   MindooDBAppHostTheme,
   MindooDBAppLaunchContext,
+  MindooDBAppLiveQuerySubscription,
   MindooDBAppMenuApi,
+  MindooDBAppQueryResult,
+  MindooDBAppQueryRow,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppScopedDocId,
   MindooDBAppScopedDocumentSummary,
@@ -41,6 +51,7 @@ import type {
   MindooDBAppViewNavigatorPageResult,
   MindooDBAppViewNavigatorRangeQuery,
   MindooDBAppViewNavigatorSelectionState,
+  MindooDBAppViewUpdateStats,
   MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewport,
   MindooDBAppUiPreferences,
@@ -595,6 +606,113 @@ function decodeMockListCursor(cursor?: string | null) {
   return Number.isFinite(offset) && offset >= 0 ? offset : 0;
 }
 
+/** Mirrors mindoodb's `expressionToBoolean` coercion for filter results. */
+function mockExpressionToBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return (
+      normalized !== "" &&
+      normalized !== "false" &&
+      normalized !== "0" &&
+      normalized !== "no"
+    );
+  }
+  return Boolean(value);
+}
+
+function compareMockQueryValues(left: unknown, right: unknown) {
+  const leftNumber = typeof left === "number" ? left : Number(left);
+  const rightNumber = typeof right === "number" ? right : Number(right);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return leftNumber - rightNumber;
+  }
+  return String(left ?? "").localeCompare(String(right ?? ""), undefined, {
+    sensitivity: "base",
+  });
+}
+
+/**
+ * Evaluates a summary-style document query against the mock document store.
+ * Filters use the real expression evaluator (formula strings are parsed the
+ * same way the SDK client does), so Level-1 tests exercise realistic
+ * semantics; `coverage` is always `"full"` in the mock.
+ */
+function runMockDocumentQuery(
+  storedDocuments: Map<string, MockStoredDocument>,
+  databaseId: string,
+  query?: MindooDBAppDocumentQuery,
+): MindooDBAppQueryResult {
+  const filter =
+    typeof query?.filter === "string"
+      ? parseMindooDBFormulaBooleanExpression(query.filter)
+      : query?.filter;
+
+  const matches: Array<{ document: MockStoredDocument; sortValues: unknown[] }> = [];
+  for (const document of storedDocuments.values()) {
+    if (document.isDeleted) {
+      continue;
+    }
+    const context = {
+      doc: document.data,
+      values: {},
+      origin: databaseId,
+      variables: {},
+    };
+    if (filter && !mockExpressionToBoolean(evaluateExpression(filter, context))) {
+      continue;
+    }
+    const sortValues = (query?.sortBy ?? []).map((key) =>
+      key.expression
+        ? evaluateExpression(key.expression, context)
+        : getFieldValue(document.data, key.field ?? ""),
+    );
+    matches.push({ document, sortValues });
+  }
+
+  const sortBy = query?.sortBy ?? [];
+  if (sortBy.length > 0) {
+    matches.sort((left, right) => {
+      for (let i = 0; i < sortBy.length; i++) {
+        const result = compareMockQueryValues(
+          left.sortValues[i],
+          right.sortValues[i],
+        );
+        if (result !== 0) {
+          return sortBy[i].direction === "descending" ? -result : result;
+        }
+      }
+      return left.document.id.localeCompare(right.document.id);
+    });
+  } else {
+    matches.sort((left, right) => left.document.id.localeCompare(right.document.id));
+  }
+
+  const offset = Math.max(0, query?.offset ?? 0);
+  const limit = Math.max(1, query?.limit ?? 200);
+  const rows: MindooDBAppQueryRow[] = matches
+    .slice(offset, offset + limit)
+    .map(({ document }) => ({
+      docId: document.id,
+      fields: query?.fields
+        ? Object.fromEntries(
+            query.fields.map((field) => [
+              field,
+              getFieldValue(document.data, field),
+            ]),
+          )
+        : structuredClone(document.data),
+      lastModified: document.updatedAt ? Date.parse(document.updatedAt) || 0 : 0,
+    }));
+
+  return { rows, total: matches.length, coverage: "full" };
+}
+
 function createDefaultViewNavigator(): MindooDBAppViewNavigator {
   const definition: MindooDBAppViewDefinition = {
     title: "Mock View",
@@ -624,6 +742,9 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
     },
     async refresh() {
       return viewCursor;
+    },
+    onDidUpdate(_listener) {
+      return () => {};
     },
     async getCurrentEntry() {
       return null;
@@ -840,7 +961,70 @@ function createDatabaseHandle(
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
 
+  type MockLiveQuerySubscription = {
+    query?: MindooDBAppDocumentQuery;
+    onResult: (result: MindooDBAppQueryResult) => void;
+    lastResultJson: string;
+  };
+  const liveQuerySubscriptions = new Set<MockLiveQuerySubscription>();
+
+  /**
+   * Re-evaluates all live queries after a mutation and pushes results whose
+   * content actually changed — mirroring the host's fingerprint coalescing.
+   */
+  const notifyLiveQueries = () => {
+    for (const subscription of liveQuerySubscriptions) {
+      const result = runMockDocumentQuery(
+        storedDocuments,
+        definition.info.id,
+        subscription.query,
+      );
+      const resultJson = JSON.stringify(result);
+      if (resultJson !== subscription.lastResultJson) {
+        subscription.lastResultJson = resultJson;
+        subscription.onResult(result);
+      }
+    }
+  };
+
   const defaultDocuments: MindooDBAppDocumentApi = {
+    async query(query?: MindooDBAppDocumentQuery) {
+      return runMockDocumentQuery(storedDocuments, definition.info.id, query);
+    },
+    async liveQuery(
+      query: MindooDBAppDocumentQuery,
+      onResult: (result: MindooDBAppQueryResult) => void,
+    ): Promise<MindooDBAppLiveQuerySubscription> {
+      const initial = runMockDocumentQuery(
+        storedDocuments,
+        definition.info.id,
+        query,
+      );
+      const subscription: MockLiveQuerySubscription = {
+        query,
+        onResult,
+        lastResultJson: JSON.stringify(initial),
+      };
+      liveQuerySubscriptions.add(subscription);
+      onResult(initial);
+      return {
+        refresh: async () => {
+          if (!liveQuerySubscriptions.has(subscription)) {
+            return;
+          }
+          const result = runMockDocumentQuery(
+            storedDocuments,
+            definition.info.id,
+            query,
+          );
+          subscription.lastResultJson = JSON.stringify(result);
+          onResult(result);
+        },
+        dispose: async () => {
+          liveQuerySubscriptions.delete(subscription);
+        },
+      };
+    },
     async list(
       query?: MindooDBAppDocumentListQuery,
     ): Promise<MindooDBAppDocumentListResult> {
@@ -993,6 +1177,7 @@ function createDatabaseHandle(
             existing.isDeleted = false;
             existing.updatedAt = new Date().toISOString();
             existing.heads = [`mock-head-${++changeCounter}`];
+            notifyLiveQueries();
           }
           return {
             id: existing.id,
@@ -1026,6 +1211,7 @@ function createDatabaseHandle(
         attachments: [],
         isDeleted: false,
       });
+      notifyLiveQueries();
       return {
         ...created,
       };
@@ -1061,6 +1247,7 @@ function createDatabaseHandle(
         isDeleted: false,
         automergeBinary: undefined,
       });
+      notifyLiveQueries();
       return updated;
     },
     async delete(_docId: string) {
@@ -1071,6 +1258,7 @@ function createDatabaseHandle(
           isDeleted: true,
           updatedAt: new Date().toISOString(),
         });
+        notifyLiveQueries();
       }
       return { ok: true as const };
     },
@@ -1091,6 +1279,7 @@ function createDatabaseHandle(
           heads: [`mock-head-${++changeCounter}`],
           updatedAt: new Date().toISOString(),
         });
+        notifyLiveQueries();
       }
       return { ok: true as const };
     },
@@ -1552,6 +1741,10 @@ export interface FakeBridgeHostController {
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   emitLocaleChange(locale: string): void;
+  /** Push a live-query result to connected apps, as the Haven host would. */
+  emitQueryResult(subscriptionId: string, result: MindooDBAppQueryResult): void;
+  /** Push a navigator view-changed event to connected apps. */
+  emitViewChanged(navigatorId: string, stats: MindooDBAppViewUpdateStats): void;
   postPortMessage(
     message: MindooDBAppBridgePortMessage,
     transfer?: Transferable[],
@@ -1572,8 +1765,10 @@ export function createFakeBridgeHost(
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
   const readStreams = new Map<string, MindooDBAppReadableAttachmentStream>();
   const writeStreams = new Map<string, MindooDBAppWritableAttachmentStream>();
+  const liveQueries = new Map<string, MindooDBAppLiveQuerySubscription>();
   let viewCounter = 0;
   let streamCounter = 0;
+  let liveQueryCounter = 0;
   let previousWindowDescriptor = Object.getOwnPropertyDescriptor(
     globalThis,
     "window",
@@ -1811,6 +2006,50 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.getHeadCursor();
+      case "documents.query":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.query(
+            params.query as MindooDBAppDocumentQuery | undefined,
+          );
+      case "documents.liveQuery.subscribe": {
+        const subscriptionId = `live-query-${(liveQueryCounter += 1)}`;
+        let initialResult: MindooDBAppQueryResult | null = null;
+        let initialDelivered = false;
+        const handle = await state
+          .getDatabase(String(params.databaseId))
+          .documents.liveQuery(
+            params.query as MindooDBAppDocumentQuery,
+            (result) => {
+              // The first delivery becomes the RPC response; later ones are
+              // pushed as `query-result` messages like the Haven host does.
+              if (!initialDelivered) {
+                initialDelivered = true;
+                initialResult = result;
+                return;
+              }
+              const payload: MindooDBAppBridgeQueryResultMessage = {
+                protocol: PROTOCOL,
+                kind: "query-result",
+                subscriptionId,
+                result,
+              };
+              connectedPorts.forEach((port) => port.postMessage(payload));
+            },
+          );
+        liveQueries.set(subscriptionId, handle);
+        return { subscriptionId, result: initialResult };
+      }
+      case "documents.liveQuery.refresh": {
+        await liveQueries.get(String(params.subscriptionId))?.refresh();
+        return { ok: true };
+      }
+      case "documents.liveQuery.unsubscribe": {
+        const key = String(params.subscriptionId);
+        await liveQueries.get(key)?.dispose();
+        liveQueries.delete(key);
+        return { ok: true };
+      }
       case "documents.get":
         return await state
           .getDatabase(String(params.databaseId))
@@ -2371,6 +2610,10 @@ export function createFakeBridgeHost(
       viewSessions.clear();
       readStreams.clear();
       writeStreams.clear();
+      liveQueries.forEach((handle) => {
+        void handle.dispose();
+      });
+      liveQueries.clear();
     },
     emitThemeChange(theme) {
       state.emitThemeChange(theme);
@@ -2405,6 +2648,24 @@ export function createFakeBridgeHost(
         protocol: PROTOCOL,
         kind: "locale-changed",
         locale,
+      };
+      connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    emitQueryResult(subscriptionId, result) {
+      const payload: MindooDBAppBridgeQueryResultMessage = {
+        protocol: PROTOCOL,
+        kind: "query-result",
+        subscriptionId,
+        result,
+      };
+      connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    emitViewChanged(navigatorId, stats) {
+      const payload: MindooDBAppBridgeViewChangedMessage = {
+        protocol: PROTOCOL,
+        kind: "view-changed",
+        navigatorId,
+        stats,
       };
       connectedPorts.forEach((port) => port.postMessage(payload));
     },

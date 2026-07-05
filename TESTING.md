@@ -94,6 +94,29 @@ Each database entry can provide:
 - `methods.views` for session-level `createView()` and `openView()` calls
 - `methods.attachments`
 
+The default in-memory document store also implements `documents.query()` and `documents.liveQuery()`: expression and formula-string filters are evaluated against the seeded documents, `sortBy`/`limit`/`offset` work as documented, and live query callbacks fire automatically after `create`/`update`/`delete`/`undelete` mutations. That means app code built on queries and live queries is testable at Level 1 without any extra setup:
+
+```ts
+const session = await mock.bridge.connect();
+const db = await session.openDatabase("main");
+
+await db.documents.create({ set: { type: "invoice", total: 120 } });
+
+const result = await db.documents.query({
+  filter: 'v.eq(v.field("type"), "invoice")',
+  sortBy: [{ field: "total", direction: "descending" }],
+});
+expect(result.rows).toHaveLength(1);
+
+const updates: number[] = [];
+const sub = await db.documents.liveQuery(
+  { filter: 'v.eq(v.field("type"), "invoice")' },
+  (r) => updates.push(r.total),
+);
+await db.documents.create({ set: { type: "invoice", total: 50 } });
+await sub.dispose();
+```
+
 ## Level 2 example
 
 This pattern keeps the real `createMindooDBAppBridge()` code path and replaces only the host side.
@@ -161,9 +184,13 @@ Useful Level 2 methods:
 - `dispose()`
 - `emitThemeChange()`
 - `emitViewportChange()`
+- `emitQueryResult()` — push a `query-result` message to live query subscribers
+- `emitViewChanged()` — push a `view-changed` message to navigator `onDidUpdate` listeners
 - `setRequestHandler()`
 - `clearRequestHandler()`
 - `postPortMessage()`
+
+The built-in request handling also covers `documents.query` and the `documents.liveQuery.*` RPCs against the seeded documents, so `db.documents.query()` / `db.documents.liveQuery()` and `navigator.onDidUpdate()` work end-to-end over the real bridge transport in Level 2 tests.
 
 ## When to use which level
 

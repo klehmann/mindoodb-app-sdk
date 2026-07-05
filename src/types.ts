@@ -348,18 +348,36 @@ export interface MindooDBAppHistoricalDocument {
 
 /** Query options for paging through changefeed-backed document listings in a database. */
 export interface MindooDBAppDocumentListQuery {
+  /**
+   * Opaque changefeed checkpoint previously returned as `nextCursor`.
+   * Omit or pass `null` to start from the beginning of the changefeed.
+   */
   cursor?: string | null;
+  /** Maximum number of matches to return (host default: 50). */
   limit?: number;
+  /** Skip this many matching entries after the cursor without loading their bodies. */
   skip?: number;
+  /**
+   * Deletion-state filter (default `"existing"`). Use `"all"` for derived
+   * indexes so deletions become visible and can be removed downstream.
+   */
   status?: "all" | "existing" | "deleted";
+  /** Return only `{ id, isDeleted }` per row — the fastest listing mode. */
   metadataOnly?: boolean;
+  /** Project specific top-level JSON fields into `data` instead of the full document. */
   fields?: string[];
+  /** Simple equality filter on top-level document data fields. */
   filter?: Record<string, unknown>;
 }
 
 /** Paged result returned by `documents.list()`. */
 export interface MindooDBAppDocumentListResult {
   items: MindooDBAppDocumentSummary[];
+  /**
+   * Checkpoint reached by this page — persist it and pass it back as
+   * `cursor` to resume. `null` when there were no changes after the
+   * supplied cursor.
+   */
   nextCursor: string | null;
 }
 
@@ -691,8 +709,17 @@ export interface MindooDBAppHistoryQuery {
 
 /** Optional parameters for establishing the app bridge connection. */
 export interface MindooDBAppBridgeConnectOptions {
+  /**
+   * Launch id issued by Haven. Defaults to the `mindoodbAppLaunchId` query
+   * parameter that Haven appends to the app URL.
+   */
   launchId?: string;
+  /**
+   * Origin the handshake `postMessage` is sent to (default `"*"`). Pin this
+   * to the Haven origin when it is known.
+   */
   targetOrigin?: string;
+  /** How long to wait for the host to answer the handshake before rejecting (default 10000 ms). */
   connectTimeoutMs?: number;
 }
 
@@ -850,6 +877,32 @@ export interface MindooDBAppBridgeLocaleChangedMessage {
   locale: string;
 }
 
+/**
+ * Host-pushed event carrying a changed live-query result.
+ *
+ * The host only sends this when the result fingerprint actually changed
+ * (or after an explicit `refresh()`), so bursts of writes produce at most
+ * one coalesced push per re-evaluation.
+ */
+export interface MindooDBAppBridgeQueryResultMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "query-result";
+  subscriptionId: string;
+  result: MindooDBAppQueryResult;
+}
+
+/**
+ * Host-pushed event fired after the view behind a navigator applied a
+ * change batch. The navigator surface (entries, counts, positions) may
+ * have changed; apps typically re-read the visible page.
+ */
+export interface MindooDBAppBridgeViewChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "view-changed";
+  navigatorId: string;
+  stats: MindooDBAppViewUpdateStats;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
@@ -857,7 +910,9 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeThemeChangedMessage
   | MindooDBAppBridgeViewportChangedMessage
   | MindooDBAppBridgeUiPreferencesChangedMessage
-  | MindooDBAppBridgeLocaleChangedMessage;
+  | MindooDBAppBridgeLocaleChangedMessage
+  | MindooDBAppBridgeQueryResultMessage
+  | MindooDBAppBridgeViewChangedMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -920,12 +975,16 @@ export type MindooDBAppMenuItem =
 
 /** Request payload for a host-rendered overlay menu. */
 export interface MindooDBAppShowMenuInput {
+  /** Where to position the menu, in app-viewport (iframe-relative) coordinates. */
   anchor: MindooDBAppMenuAnchor;
   placement?: MindooDBAppMenuPlacement;
   kind?: MindooDBAppMenuKind;
   items: MindooDBAppMenuItem[];
+  /** Dismiss when the user clicks outside the menu (default `true`). */
   dismissOnOutsideClick?: boolean;
+  /** Dismiss when the user presses Escape (default `true`). */
   dismissOnEscape?: boolean;
+  /** Dismiss when the app viewport is resized (default `true`). */
   dismissOnViewportChange?: boolean;
 }
 
@@ -955,32 +1014,169 @@ export type MindooDBAppShowMenuResult =
   | MindooDBAppMenuSelectionResult
   | MindooDBAppMenuDismissedResult;
 
-/** Overlay menu operations exposed by the host session. */
+/**
+ * Overlay menu operations exposed by the host session. Haven renders the
+ * menu above the app iframe so it can escape the iframe clip rect —
+ * data-only (no HTML/CSS/script crosses the bridge). Intended for
+ * `runtime === "iframe"`; window-mode apps can usually render local menus.
+ */
 export interface MindooDBAppMenuApi {
+  /**
+   * Show a host-rendered menu at the given anchor (iframe-relative
+   * coordinates) and resolve once the user selects an item
+   * (`{ action: "selected", itemId }`) or the menu is dismissed
+   * (`{ action: "dismissed", reason }`). Showing a new menu replaces a
+   * pending one.
+   */
   show(input: MindooDBAppShowMenuInput): Promise<MindooDBAppShowMenuResult>;
+  /** Dismiss a pending host-rendered menu (its `show()` resolves with reason `"hide"`). */
   hide(): Promise<void>;
 }
 
 /** Pull-based read stream for document attachments. */
 export interface MindooDBAppReadableAttachmentStream {
+  /** Next chunk, or `null` when the attachment is fully consumed. */
   read(): Promise<Uint8Array | null>;
+  /** Release the host-side stream; safe to call after `read()` returned `null`. */
   close(): Promise<void>;
 }
 
 /** Push-based write stream for document attachments. */
 export interface MindooDBAppWritableAttachmentStream {
+  /** Send one chunk; resolves once the host acknowledged it (backpressure). */
   write(chunk: Uint8Array): Promise<void>;
+  /** Finalize the upload and attach the file to the document. */
   close(): Promise<void>;
+  /** Cancel the upload and discard all chunks written so far. */
   abort(): Promise<void>;
+}
+
+/**
+ * One sort key of a {@link MindooDBAppDocumentQuery}: either a plain summary
+ * field path or a computed expression, evaluated per row before comparison.
+ * Mirrors mindoodb's `MindooQuerySortKey`.
+ */
+export interface MindooDBAppQuerySortKey {
+  field?: string;
+  expression?: MindooDBAppExpression;
+  direction?: "ascending" | "descending";
+}
+
+/**
+ * An ad-hoc query answered from the database's document summary buffer —
+ * no documents are materialized on the host, which makes this the fastest
+ * way to filter and sort documents from an app.
+ *
+ * The `filter` accepts either a prebuilt boolean expression (from
+ * `createViewLanguage()`) or formula source text (e.g.
+ * `'v.and(v.eq(v.field("type"), "invoice"), v.gt(v.field("total"), 100))'`),
+ * which the SDK parses locally; only JSON travels across the bridge.
+ */
+export interface MindooDBAppDocumentQuery {
+  filter?: MindooDBAppBooleanExpression | string;
+  sortBy?: MindooDBAppQuerySortKey[];
+  /**
+   * Maximum number of rows returned. The host enforces a cap; omitting the
+   * limit yields the host default page size.
+   */
+  limit?: number;
+  offset?: number;
+  /**
+   * Projection: restrict the fields returned per row. Defaults to all
+   * summary fields of the matching document.
+   */
+  fields?: string[];
+}
+
+/** One result row of a summary-backed document query. */
+export interface MindooDBAppQueryRow {
+  docId: string;
+  fields: Record<string, unknown>;
+  lastModified: number;
+}
+
+/**
+ * Which data answered the query: `"full"` when the summary buffer is
+ * complete, `"rebuilding"` while a backfill is still running (results may
+ * be incomplete), `"full-scan"` when documents were materialized.
+ */
+export type MindooDBAppQueryCoverage = "full" | "rebuilding" | "full-scan";
+
+/** Result of a summary-backed document query. */
+export interface MindooDBAppQueryResult {
+  rows: MindooDBAppQueryRow[];
+  /** Number of matching documents before `offset`/`limit` were applied. */
+  total: number;
+  coverage: MindooDBAppQueryCoverage;
+}
+
+/**
+ * Handle returned by `documents.liveQuery()`. Dispose it when the UI that
+ * consumes the results goes away — live subscriptions otherwise stay
+ * active until the app disconnects.
+ */
+export interface MindooDBAppLiveQuerySubscription {
+  /**
+   * Force a re-evaluation now. The new result is delivered through the
+   * subscription's `onResult` callback even when nothing changed.
+   */
+  refresh(): Promise<void>;
+  /** Stop the subscription; no further `onResult` calls occur afterwards. */
+  dispose(): Promise<void>;
 }
 
 /** Document operations exposed by an opened database handle. */
 export interface MindooDBAppDocumentApi {
+  /**
+   * Run an ad-hoc query against the database's document summary buffer:
+   * declarative filter, dynamic sorting, paging, and field projection —
+   * without materializing documents on the host.
+   *
+   * Requires the summary buffer to cover all referenced fields; queries
+   * that need encrypted or uncovered fields are rejected with a
+   * `query-not-supported` error.
+   */
+  query(query?: MindooDBAppDocumentQuery): Promise<MindooDBAppQueryResult>;
+  /**
+   * Live variant of {@link query}: delivers the initial result, then keeps
+   * watching the database and calls `onResult` again whenever the result
+   * actually changed (membership, order, or row content). Updates are
+   * coalesced on the host, so bursts of writes produce a single push.
+   */
+  liveQuery(
+    query: MindooDBAppDocumentQuery,
+    onResult: (result: MindooDBAppQueryResult) => void,
+  ): Promise<MindooDBAppLiveQuerySubscription>;
+  /**
+   * Page through the database's changefeed. Pass the returned `nextCursor`
+   * back in to resume — this is the primitive for incremental sync and
+   * app-side derived indexes (use `status: "all"` there so deletions are
+   * visible). For plain "find matching documents" use cases prefer
+   * {@link query}. Requires the `read` capability.
+   */
   list(
     query?: MindooDBAppDocumentListQuery,
   ): Promise<MindooDBAppDocumentListResult>;
+  /**
+   * The database's latest changefeed cursor without loading any documents.
+   * Useful as a baseline checkpoint before starting an incremental
+   * {@link list} loop. Requires the `read` capability.
+   */
   getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult>;
+  /**
+   * Load a single document by id, including its current Automerge `heads`
+   * (needed as `baseHeads` for granular text/rich-text/JSON patches) and
+   * attachment metadata. Resolves to `null` when the document does not
+   * exist or is deleted. Requires the `read` capability.
+   */
   get(docId: string): Promise<MindooDBAppDocument | null>;
+  /**
+   * Read the rich-text spans of an Automerge rich-text field at `path`,
+   * plus the heads they were read at. Pass `options.revisionId` (from
+   * {@link listHistory}) for a read-only historical snapshot. Feed the
+   * result into `createMindooDBRichTextHandle` or diff against it before
+   * writing back via `update({ richText: [...] })`.
+   */
   getRichText(
     docId: string,
     path: Array<string | number>,
@@ -1008,6 +1204,14 @@ export interface MindooDBAppDocumentApi {
     docId: string,
     patch: MindooDBAppAutomergeChangesPatch,
   ): Promise<MindooDBAppAutomergePatchResult>;
+  /**
+   * Create a new document from `input.set` (or return the existing one
+   * when a caller-provided `input.id` already exists — idempotent create,
+   * see {@link MindooDBAppCreateDocumentInput}). Requires the `create`
+   * capability; the database's write access policy is enforced on the host
+   * and violations reject with an access error. Use {@link canCreate} to
+   * predict the outcome without writing.
+   */
   create(input: MindooDBAppCreateDocumentInput): Promise<MindooDBAppDocument>;
   /**
    * Bulk-create documents in one host round trip.
@@ -1025,10 +1229,25 @@ export interface MindooDBAppDocumentApi {
   createMany(
     inputs: MindooDBAppCreateDocumentInput[],
   ): Promise<{ ids: string[] }>;
+  /**
+   * Apply a sparse patch to an existing document and return the updated
+   * state. `set`/`unset` address top-level fields; `json`, `text`,
+   * `richText`, and `richTextSteps` apply granular collaborative edits at
+   * any path and are merged on the host using the patch's `baseHeads`, so
+   * concurrent edits from other replicas converge instead of overwriting
+   * each other. Requires the `update` capability.
+   */
   update(
     docId: string,
     patch: MindooDBAppUpdateDocumentInput,
   ): Promise<MindooDBAppDocument>;
+  /**
+   * Mark a document as deleted by writing a lifecycle tombstone. The
+   * append-only history keeps the document body, so {@link undelete} can
+   * restore it and {@link listHistory} still shows past revisions. To
+   * record a deletion reason, `update` a reason field first, then delete.
+   * Requires the `delete` capability.
+   */
   delete(docId: string): Promise<{ ok: true }>;
   /**
    * Bulk-delete documents in one host round trip.
@@ -1041,6 +1260,10 @@ export interface MindooDBAppDocumentApi {
    * falls back to sequential `delete()` calls.
    */
   deleteMany(docIds: string[]): Promise<{ ok: true }>;
+  /**
+   * Make the latest state of a deleted document live again (the inverse of
+   * {@link delete}). Requires the `delete` capability.
+   */
   undelete(docId: string): Promise<{ ok: true }>;
   /**
    * Predict whether `create` would be allowed, without writing anything. Useful
@@ -1066,11 +1289,29 @@ export interface MindooDBAppDocumentApi {
    * and falls back to `"default"`.
    */
   getDefaultCreateKeyId(): Promise<string>;
+  /**
+   * List the document's revision timeline (newest first), including author
+   * identity metadata and the stable `revisionId` per entry. Requires the
+   * `history` capability.
+   */
   listHistory(docId: string): Promise<MindooDBAppDocumentHistoryEntry[]>;
+  /**
+   * Read-only snapshot of the document as it existed at an epoch-millisecond
+   * timestamp. Prefer {@link getAtRevision} with a `revisionId` from
+   * {@link listHistory} when you need an exact revision — timestamps can be
+   * ambiguous around concurrent edits. Requires the `history` capability.
+   */
   getAtTimestamp(
     docId: string,
     timestamp: number,
   ): Promise<MindooDBAppHistoricalDocument>;
+  /**
+   * Read-only snapshot of the document at an exact revision. `revisionId`
+   * values come from {@link listHistory} and are stable, DAG-backed
+   * identifiers — the preferred way to load historical states and the value
+   * to pass to historical attachment APIs. Requires the `history`
+   * capability.
+   */
   getAtRevision(
     docId: string,
     revisionId: MindooDBAppDocumentRevisionId,
@@ -1113,10 +1354,15 @@ export interface MindooDBAppViewEntry {
 
 /** Options that shape which subtree and entry kinds a navigator exposes. */
 export interface MindooDBAppViewNavigatorOpenOptions {
+  /** Emit category entries (default `true`). */
   includeCategories?: boolean;
+  /** Emit document entries (default `true`). */
   includeDocuments?: boolean;
+  /** Skip categories whose subtree contains no visible documents. */
   hideEmptyCategories?: boolean;
+  /** Restrict the navigator to the subtree below this category-value path. */
   rootCategoryPath?: unknown[];
+  /** Restrict the navigator to the subtree below this entry key (alternative to `rootCategoryPath`). */
   rootEntryKey?: string;
 }
 
@@ -1126,6 +1372,14 @@ export interface MindooDBAppCreateViewNavigatorInput {
   definition: MindooDBAppViewDefinition;
   categorizationStyle?: MindooDBAppConfiguredViewCategorizationStyle;
   options?: MindooDBAppViewNavigatorOpenOptions;
+  /**
+   * Force the host to index from fully materialized documents instead of
+   * the document summary buffer. Expensive by design — without it the host
+   * picks the summary buffer whenever the view definition allows it and
+   * only falls back to documents when it must (e.g. decrypt expressions or
+   * fields not covered by the summary configuration).
+   */
+  useFullDocuments?: boolean;
 }
 
 /** @deprecated Use `MindooDBAppCreateViewNavigatorInput`. */
@@ -1133,22 +1387,33 @@ export type MindooDBAppCreateViewInput = MindooDBAppCreateViewNavigatorInput;
 
 /** Range query options for key and key-range lookups within a category. */
 export interface MindooDBAppViewNavigatorRangeQuery {
+  /** Inclusive lower bound on the sort key; omit for an open start. */
   startKey?: unknown;
+  /** Inclusive upper bound on the sort key; omit for an open end. */
   endKey?: unknown;
+  /** Return matches in reverse view order. */
   descending?: boolean;
+  /** Require exact key matches at the bounds instead of prefix matching for strings. */
   exact?: boolean;
 }
 
 /** Options for batched navigator reads. */
 export interface MindooDBAppViewNavigatorPageOptions {
+  /** Maximum entries per page. */
   limit?: number;
+  /** Only return entries that are currently selected. */
   selectedOnly?: boolean;
+  /**
+   * Continuation token from a previous page's `nextPosition` (or an entry's
+   * `position`). Omit to start at the navigator's current cursor.
+   */
   startPosition?: string | null;
 }
 
 /** Paged batch of navigator entries. */
 export interface MindooDBAppViewNavigatorPageResult {
   entries: MindooDBAppViewEntry[];
+  /** Pass back as `startPosition` to fetch the next page; `null` at the end. */
   nextPosition: string | null;
   hasMore: boolean;
 }
@@ -1166,12 +1431,54 @@ export interface MindooDBAppViewNavigatorExpansionState {
   entryKeys: string[];
 }
 
-/** Stateful view navigator that closely mirrors the core VirtualViewNavigator. */
+/** Change statistics delivered with a `view-changed` push event. */
+export interface MindooDBAppViewUpdateStats {
+  addedCount: number;
+  removedCount: number;
+}
+
+/**
+ * Stateful view navigator that closely mirrors the core VirtualViewNavigator.
+ *
+ * All navigation state (current position, selection, expansion) lives on the
+ * host per navigator session. `goto*()` calls are cheap but cost one bridge
+ * round trip each — prefer {@link entriesForward} / {@link entriesBackward}
+ * when rendering lists. Always call {@link dispose} when the consuming UI
+ * goes away so the host can release the session.
+ */
 export interface MindooDBAppViewNavigator {
+  /** The effective view definition this navigator was opened with. */
   getDefinition(): Promise<MindooDBAppViewDefinition>;
+  /**
+   * Opaque cursor describing the database state currently reflected in the
+   * view. Pass it to `session.listDocumentsSinceViewCursor()` for
+   * delta-sync use cases (legacy polling path — prefer
+   * {@link onDidUpdate}).
+   */
   getViewCursor(): Promise<string | null>;
+  /**
+   * Force an incremental catch-up of the underlying view and return the new
+   * view cursor. Rarely needed when {@link onDidUpdate} is used — the host
+   * keeps live views current on its own.
+   */
   refresh(): Promise<string | null>;
+  /**
+   * Subscribe to host-pushed view updates: the host keeps the underlying
+   * view bound to its databases' change feeds and fires this listener
+   * after every applied change batch. Apps no longer need to poll or call
+   * {@link refresh} — just re-read the visible page when the listener
+   * fires. Returns an unsubscribe function.
+   */
+  onDidUpdate(
+    listener: (stats: MindooDBAppViewUpdateStats) => void,
+  ): () => void;
+  /** The entry at the navigator's current cursor position, if any. */
   getCurrentEntry(): Promise<MindooDBAppViewEntry | null>;
+  /**
+   * Cursor movement. Each method moves the host-side cursor and resolves to
+   * `true` when a matching entry exists (read it with
+   * {@link getCurrentEntry}), `false` when the move was not possible.
+   */
   gotoFirst(): Promise<boolean>;
   gotoLast(): Promise<boolean>;
   gotoNext(): Promise<boolean>;
@@ -1181,19 +1488,38 @@ export interface MindooDBAppViewNavigator {
   gotoParent(): Promise<boolean>;
   gotoFirstChild(): Promise<boolean>;
   gotoLastChild(): Promise<boolean>;
+  /** Move the cursor to a `position` token taken from a previously read entry or page result. */
   gotoPos(position: string): Promise<boolean>;
+  /** Read the entry at a `position` token without moving the cursor. */
   getPos(position: string): Promise<MindooDBAppViewEntry | null>;
+  /**
+   * Look up a category entry by its category-value path, e.g.
+   * `["Sales", "2026"]` for a two-level categorization.
+   */
   findCategoryEntryByParts(
     parts: unknown[],
   ): Promise<MindooDBAppViewEntry | null>;
+  /**
+   * Read a batch of entries starting at the cursor (or at
+   * `options.startPosition`) — the preferred call for rendering lists, since
+   * it replaces many `goto*()` round trips with one. Page onwards by passing
+   * the result's `nextPosition` back as `startPosition`.
+   */
   entriesForward(
     options?: MindooDBAppViewNavigatorPageOptions,
   ): Promise<MindooDBAppViewNavigatorPageResult>;
+  /** Like {@link entriesForward}, but walking backwards. */
   entriesBackward(
     options?: MindooDBAppViewNavigatorPageOptions,
   ): Promise<MindooDBAppViewNavigatorPageResult>;
+  /** Move the cursor to the next/previous selected entry. */
   gotoNextSelected(): Promise<boolean>;
   gotoPrevSelected(): Promise<boolean>;
+  /**
+   * Selection state lives on the host per navigator session. `origin` is the
+   * source binding name of the entry (see `MindooDBAppViewEntry.origin`);
+   * `selectParentCategories` also marks the ancestor categories as selected.
+   */
   select(
     origin: string,
     docId: string,
@@ -1203,20 +1529,32 @@ export interface MindooDBAppViewNavigator {
   selectAllEntries(): Promise<void>;
   deselectAllEntries(): Promise<void>;
   isSelected(origin: string, docId: string): Promise<boolean>;
+  /** Snapshot the selection for persistence; restore it with {@link setSelectionState}. */
   getSelectionState(): Promise<MindooDBAppViewNavigatorSelectionState>;
   setSelectionState(
     state: MindooDBAppViewNavigatorSelectionState,
   ): Promise<void>;
+  /**
+   * Expansion state controls which category subtrees are visible to cursor
+   * movement and paging. Like selection, it lives on the host per session.
+   */
   expand(origin: string, docId: string): Promise<void>;
   collapse(origin: string, docId: string): Promise<void>;
   expandAll(): Promise<void>;
   collapseAll(): Promise<void>;
+  /** Expand categories down to `level` (0 = top-level) and collapse deeper ones. */
   expandToLevel(level: number): Promise<void>;
   isExpanded(entryKey: string): Promise<boolean>;
+  /** Snapshot the expansion state for persistence; restore it with {@link setExpansionState}. */
   getExpansionState(): Promise<MindooDBAppViewNavigatorExpansionState>;
   setExpansionState(
     state: MindooDBAppViewNavigatorExpansionState,
   ): Promise<void>;
+  /**
+   * Direct children of a category entry (`entryKey` from a previously read
+   * entry): all entries, categories only, or documents only. These helpers
+   * ignore expansion state and read the full child list in one round trip.
+   */
   childEntries(
     entryKey: string,
     descending?: boolean,
@@ -1229,6 +1567,10 @@ export interface MindooDBAppViewNavigator {
     entryKey: string,
     descending?: boolean,
   ): Promise<MindooDBAppViewEntry[]>;
+  /**
+   * Children of a category whose sort key matches `key`. With
+   * `exact: false`, prefix matching is used for string keys.
+   */
   childCategoriesByKey(
     entryKey: string,
     key: unknown,
@@ -1241,6 +1583,7 @@ export interface MindooDBAppViewNavigator {
     exact?: boolean,
     descending?: boolean,
   ): Promise<MindooDBAppViewEntry[]>;
+  /** Children of a category whose sort key falls inside `range` (`startKey`..`endKey`). */
   childCategoriesBetween(
     entryKey: string,
     range: MindooDBAppViewNavigatorRangeQuery,
@@ -1249,40 +1592,85 @@ export interface MindooDBAppViewNavigator {
     entryKey: string,
     range: MindooDBAppViewNavigatorRangeQuery,
   ): Promise<MindooDBAppViewEntry[]>;
+  /** All document ids in view order, across every category. */
   getSortedDocIds(descending?: boolean): Promise<MindooDBAppScopedDocId[]>;
+  /** Document ids in view order below one category subtree. */
   getSortedDocIdsScoped(
     entryKey: string,
     descending?: boolean,
   ): Promise<MindooDBAppScopedDocId[]>;
+  /**
+   * Release the host-side navigator session (view binding, selection and
+   * expansion state, update listeners). Always call this when the consuming
+   * UI unmounts.
+   */
   dispose(): Promise<void>;
 }
 
-/** Attachment operations exposed by an opened database handle. */
+/**
+ * Attachment operations exposed by an opened database handle. All methods
+ * require the `attachments` capability; historical reads (passing
+ * `timestamp`/`revisionId` options) additionally require `history`, and
+ * mutations (`openWriteStream`, `remove`, `scan`) require `update`.
+ */
 export interface MindooDBAppAttachmentApi {
+  /**
+   * Attachment metadata of a document. Pass `options.revisionId` (preferred
+   * over `timestamp`) to read the attachment list of an exact historical
+   * revision.
+   */
   list(
     docId: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<MindooDBAppAttachmentInfo[]>;
+  /** Remove an attachment from the current document state. */
   remove(docId: string, attachmentName: string): Promise<{ ok: true }>;
+  /**
+   * Download via a pull-based chunk stream: call `read()` until it resolves
+   * to `null`, then `close()`. Chunks travel as transferable binary over the
+   * bridge port, so large files never materialize as one buffer. Accepts
+   * historical `options` like {@link list}.
+   */
   openReadStream(
     docId: string,
     attachmentName: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<MindooDBAppReadableAttachmentStream>;
+  /**
+   * Upload via a push-based chunk stream: `write()` chunks, then `close()`
+   * to finalize — or `abort()` to discard the partial upload. Always targets
+   * the current document state.
+   */
   openWriteStream(
     docId: string,
     attachmentName: string,
     contentType?: string,
   ): Promise<MindooDBAppWritableAttachmentStream>;
+  /**
+   * Open Haven's document-scanner dialog (camera capture with perspective
+   * correction) and attach the scan to the document. Resolves with the new
+   * attachment, or `ok: false` when the user cancelled.
+   */
   scan(
     docId: string,
     options?: MindooDBAppScanAttachmentOptions,
   ): Promise<MindooDBAppScanAttachmentResult>;
+  /**
+   * Resolve a preview session (`previewUrl`) that the app can open itself
+   * in a separate tab or window — the low-level variant of
+   * {@link openPreview} for window-mode apps or custom link handling.
+   */
   preparePreviewSession(
     docId: string,
     attachmentName: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<MindooDBAppAttachmentPreviewSession>;
+  /**
+   * Open Haven's built-in attachment viewer (images, PDF, Markdown, text,
+   * Office formats, streaming audio/video). Use `canPreviewAttachment()`
+   * to gate preview buttons in the app UI. Accepts historical `options`
+   * like {@link list}.
+   */
   openPreview(
     docId: string,
     attachmentName: string,
@@ -1292,6 +1680,7 @@ export interface MindooDBAppAttachmentApi {
 
 /** Database handle returned from `session.openDatabase()`. */
 export interface MindooDBAppDatabase {
+  /** Metadata (id, title, role, granted capabilities) of this database binding. */
   info(): Promise<MindooDBAppDatabaseInfo>;
   documents: MindooDBAppDocumentApi;
   attachments: MindooDBAppAttachmentApi;
@@ -1299,25 +1688,81 @@ export interface MindooDBAppDatabase {
 
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
+  /**
+   * The full launch context supplied by Haven: runtime, theme, viewport,
+   * locale, user, tenant, launch parameters, plus the databases and views
+   * mapped to this app. Cached — repeated calls do not hit the host again.
+   */
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
+  /**
+   * Product license identifiers active for the current Haven user, for apps
+   * that gate features on licensing.
+   */
   getLicensedProducts(): Promise<string[]>;
+  /**
+   * The databases visible to this app together with their granted
+   * capabilities. Same data as `launchContext.databases`, re-fetched from
+   * the host.
+   */
   listDatabases(): Promise<MindooDBAppDatabaseInfo[]>;
+  /**
+   * Open one of the granted databases by its binding id (from
+   * {@link listDatabases} / the launch context) and get the `documents` and
+   * `attachments` APIs for it.
+   */
   openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
+  /**
+   * Legacy polling/delta-sync path: list documents that changed across all
+   * granted databases since a view cursor previously obtained from
+   * `navigator.getViewCursor()` / `refresh()`. Prefer the push-based
+   * `navigator.onDidUpdate()` and `documents.liveQuery()` for keeping UI
+   * current; this remains useful for app-side derived state that needs an
+   * explicit multi-database checkpoint.
+   */
   listDocumentsSinceViewCursor(
     cursor: string | null,
   ): Promise<MindooDBAppViewCursorDocumentListResult>;
+  /**
+   * Create an app-defined (multi-database) view from a
+   * `MindooDBAppViewDefinition` and immediately open a navigator on it.
+   * The host builds the view summary-first (see
+   * {@link MindooDBAppCreateViewNavigatorInput.useFullDocuments}) and keeps
+   * it live-bound to the source databases. Requires the `views` capability
+   * on every referenced database. Dispose the navigator when done.
+   */
   createViewNavigator(
     input: MindooDBAppCreateViewNavigatorInput,
   ): Promise<MindooDBAppViewNavigator>;
+  /**
+   * Open a navigator on a Haven-configured view mapping (from
+   * `launchContext.views`, referenced by its `id`). Requires the `read`
+   * capability on the view's source databases. Dispose the navigator when
+   * done.
+   */
   openViewNavigator(
     viewId: string,
     options?: MindooDBAppViewNavigatorOpenOptions,
   ): Promise<MindooDBAppViewNavigator>;
   menus: MindooDBAppMenuApi;
+  /**
+   * Subscribe to host-pushed theme changes (light/dark mode and preset).
+   * The initial theme is in `launchContext.theme`. Returns an unsubscribe
+   * function.
+   */
   onThemeChange(listener: (theme: MindooDBAppHostTheme) => void): () => void;
+  /**
+   * Subscribe to host-pushed iframe viewport size changes. Only fires for
+   * `runtime === "iframe"` (window-mode apps observe their own window).
+   * Returns an unsubscribe function.
+   */
   onViewportChange(
     listener: (viewport: MindooDBAppViewport) => void,
   ): () => void;
+  /**
+   * Subscribe to host-pushed UI preference changes (e.g. iOS multitasking
+   * optimizations). The initial value is in `launchContext.uiPreferences`.
+   * Returns an unsubscribe function.
+   */
   onUiPreferencesChange(
     listener: (uiPreferences: MindooDBAppUiPreferences) => void,
   ): () => void;
@@ -1326,11 +1771,22 @@ export interface MindooDBAppSession {
    * new BCP-47 language tag (e.g. `"de"`). Returns an unsubscribe function.
    */
   onLocaleChange(listener: (locale: string) => void): () => void;
+  /**
+   * Tear down the session: close the bridge port and release all host-side
+   * resources of this launch (navigators, live queries, streams). The
+   * session object is unusable afterwards.
+   */
   disconnect(): Promise<void>;
 }
 
 /** Root SDK bridge object used to establish a session. */
 export interface MindooDBAppBridge {
+  /**
+   * Perform the `postMessage` handshake with the Haven host and resolve
+   * with a connected session. Reads the `mindoodbAppLaunchId` query
+   * parameter injected by Haven when `options.launchId` is omitted; rejects
+   * when no host answers within `connectTimeoutMs`.
+   */
   connect(
     options?: MindooDBAppBridgeConnectOptions,
   ): Promise<MindooDBAppSession>;

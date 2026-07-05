@@ -893,9 +893,70 @@ Requires the `update` capability (same as other write operations). For historica
 
 TeamEdit's Word/.docx mode is why these RPCs exist — see `wordAutomergeHandle.ts` in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit). Treat it as a reference for an unsupported edge case, not as a pattern to copy into new apps.
 
+### Queries & Live Queries
+
+`documents.query()` runs ad-hoc queries against the database's **document summary buffer** on the host: declarative filtering, dynamic sorting, paging, and field projection — without materializing documents. This is the fastest way to find and order documents from an app and the right default for lists, search results, and dashboards.
+
+```ts
+import { createViewLanguage } from "mindoodb-app-sdk";
+
+const v = createViewLanguage<{ type: string; total: number }>();
+
+const result = await db.documents.query({
+  filter: v.and(
+    v.eq(v.field("type"), v.string("invoice")),
+    v.gt(v.toNumber(v.field("total")), v.number(100)),
+  ),
+  sortBy: [{ field: "total", direction: "descending" }],
+  limit: 50,
+  offset: 0,
+  fields: ["total", "customer"],
+});
+
+console.log(result.total); // matching docs before paging
+console.log(result.coverage); // "full" | "rebuilding" | "full-scan"
+for (const row of result.rows) {
+  console.log(row.docId, row.fields, row.lastModified);
+}
+```
+
+The `filter` also accepts formula source text, which the SDK parses locally before it crosses the bridge (only the JSON expression AST travels):
+
+```ts
+const invoices = await db.documents.query({
+  filter: 'v.eq(v.field("type"), "invoice")',
+});
+```
+
+Notes:
+
+- The host caps `limit` (default 200, maximum 1000) so result payloads stay bounded. Page with `offset` for more rows.
+- `coverage: "rebuilding"` means the summary buffer is still backfilling — results may be incomplete and will improve on their own.
+- Queries that reference encrypted fields or fields outside the summary configuration are rejected with a `query-not-supported` bridge error. Use a view with `useFullDocuments` (see below) or `documents.list()` for those cases.
+- Queries require the `read` capability and are not available in time-travel launches (the summary buffer reflects the live state only).
+
+**Live queries** keep a query result up to date. The callback receives the initial result and runs again whenever the result actually changed — the host coalesces bursts of writes and fingerprints results, so you only hear about real changes:
+
+```ts
+const subscription = await db.documents.liveQuery(
+  { filter: 'v.eq(v.field("status"), "open")', limit: 100 },
+  (result) => {
+    renderList(result.rows);
+  },
+);
+
+// Force a re-evaluation (delivers a result even when nothing changed):
+await subscription.refresh();
+
+// Always dispose when the consuming UI goes away:
+await subscription.dispose();
+```
+
+Live query results are pushed from the host over the bridge port — no polling. Subscriptions are cleaned up automatically when the app disconnects, but dispose them explicitly when the UI that consumes them unmounts.
+
 ### Incremental sync
 
-The changefeed-backed `documents.list()` API is also the right primitive for app-side indexes, search, and other derived caches.
+The changefeed-backed `documents.list()` API is also the right primitive for app-side indexes, search, and other derived caches. For plain "show me matching documents" use cases, prefer [`documents.query()`](#queries--live-queries); the changefeed shines when you need deletions and a durable resume checkpoint for derived state.
 
 **Initial scan from the beginning:**
 
@@ -1225,13 +1286,28 @@ await navigator.setExpansionState(expansion);
 await navigator.setSelectionState(selection);
 ```
 
+**Live updates** -- the host keeps the view bound to its source databases' change feeds. Subscribe with `onDidUpdate` and re-read the visible page when it fires; there is no need to poll or call `refresh()`:
+
+```ts
+const unsubscribe = navigator.onDidUpdate(({ addedCount, removedCount }) => {
+  console.log(`view changed: +${addedCount} / -${removedCount}`);
+  void rerenderVisiblePage();
+});
+
+// later, when the consuming UI unmounts:
+unsubscribe();
+```
+
 The expression language is fully declarative: apps define filter and column logic through a typed builder API that compiles to JSON-safe expression objects. No app-provided JavaScript runs inside the bridge host.
 
 #### Performance notes
 
+- Navigator views are built **summary-first**: whenever the view definition (filter + column expressions) can be answered from the database's document summary buffer, the host feeds the view from the summary without materializing a single document. Views fall back to the (slower) document path automatically when they need decrypted fields, JS value functions, or fields outside the summary configuration.
+- Pass `useFullDocuments: true` in `createViewNavigator` input to force the document path explicitly — the escape hatch for views that deliberately need full document data.
 - `goto*()` and `getCurrentEntry()` are lightweight stateful cursor operations. They may still produce many bridge round-trips if you call them for every rendered row.
 - `entriesForward()` and `entriesBackward()` exist specifically to reduce those round-trips for UI rendering.
-- `refresh()` rebuilds or invalidates the host-side navigator state and should be treated as an expensive operation compared to simple cursor movement.
+- `refresh()` performs an incremental catch-up on the host-side view (no pipeline rebuild). With `onDidUpdate` in place you rarely need it — the host pushes updates on its own.
+- `session.listDocumentsSinceViewCursor(cursor)` remains available as a **legacy polling/delta-sync path**; prefer `onDidUpdate` pushes and `documents.liveQuery()` for keeping UI current.
 - Child/key/range helpers operate on the same host-side navigator session. They do not create a separate query engine.
 
 Available expression helpers:
@@ -1324,6 +1400,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 | Method                             | Returns                                      |
 | ---------------------------------- | -------------------------------------------- |
+| `query(query?)`                    | `Promise<MindooDBAppQueryResult>`            |
+| `liveQuery(query, onResult)`       | `Promise<MindooDBAppLiveQuerySubscription>`  |
 | `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
 | `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |
 | `getRichText(docId, path, opts?)`  | `Promise<MindooDBAppRichTextSnapshot>`       |
@@ -1378,7 +1456,9 @@ interface MindooDBAppUpdateDocumentInput {
 | Method                                                     | Returns                                           |
 | ---------------------------------------------------------- | ------------------------------------------------- |
 | `getDefinition()`                                          | `Promise<MindooDBAppViewDefinition>`              |
-| `refresh()`                                                | `Promise<void>`                                   |
+| `refresh()`                                                | `Promise<string \| null>` (new view cursor)       |
+| `onDidUpdate(listener)`                                    | `() => void` (unsubscribe)                        |
+| `getViewCursor()`                                          | `Promise<string \| null>`                         |
 | `getCurrentEntry()`                                        | `Promise<MindooDBAppViewEntry \| null>`           |
 | `gotoFirst()` / `gotoLast()`                               | `Promise<boolean>`                                |
 | `gotoNext()` / `gotoPrev()`                                | `Promise<boolean>`                                |

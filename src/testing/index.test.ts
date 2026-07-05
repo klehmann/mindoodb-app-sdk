@@ -501,4 +501,180 @@ describe("mindoodb-app-sdk/testing", () => {
     });
     host.dispose();
   });
+
+  it("answers summary queries with filters, sorting, and paging in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await database.documents.create({ set: { type: "invoice", total: 250, customer: "acme" } });
+    await database.documents.create({ set: { type: "invoice", total: 80, customer: "globex" } });
+    await database.documents.create({ set: { type: "offer", total: 500, customer: "acme" } });
+
+    // Formula-string filter, parsed locally by the SDK/mock.
+    const filtered = await database.documents.query({
+      filter: 'v.eq(v.field("type"), "invoice")',
+      sortBy: [{ field: "total", direction: "descending" }],
+    });
+    expect(filtered.total).toBe(2);
+    expect(filtered.coverage).toBe("full");
+    expect(filtered.rows.map((row) => row.fields.total)).toEqual([250, 80]);
+
+    // Paging + field projection.
+    const paged = await database.documents.query({
+      sortBy: [{ field: "total", direction: "ascending" }],
+      offset: 1,
+      limit: 1,
+      fields: ["customer"],
+    });
+    expect(paged.total).toBe(3);
+    expect(paged.rows).toHaveLength(1);
+    expect(paged.rows[0].fields).toEqual({ customer: "acme" });
+  });
+
+  it("runs the live query lifecycle in the mock bridge: initial result, coalesced updates, dispose", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update", "delete"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await database.documents.create({ set: { type: "task", title: "First" } });
+
+    const results: number[] = [];
+    const subscription = await database.documents.liveQuery(
+      { filter: 'v.eq(v.field("type"), "task")' },
+      (result) => {
+        results.push(result.total);
+      },
+    );
+    expect(results).toEqual([1]);
+
+    // A matching mutation pushes a new result...
+    await database.documents.create({ set: { type: "task", title: "Second" } });
+    expect(results).toEqual([1, 2]);
+
+    // ...a non-matching mutation is coalesced away (fingerprint unchanged).
+    await database.documents.create({ set: { type: "note", title: "Ignored" } });
+    expect(results).toEqual([1, 2]);
+
+    // refresh() re-delivers even without changes.
+    await subscription.refresh();
+    expect(results).toEqual([1, 2, 2]);
+
+    await subscription.dispose();
+    await database.documents.create({ set: { type: "task", title: "Third" } });
+    expect(results).toEqual([1, 2, 2]);
+  });
+
+  it("routes queries and live-query pushes through the fake host and real bridge", async () => {
+    const host = createFakeBridgeHost({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    host.install();
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+
+    await database.documents.create({ set: { type: "invoice", total: 100 } });
+    await expect(
+      database.documents.query({ filter: 'v.eq(v.field("type"), "invoice")' }),
+    ).resolves.toMatchObject({
+      total: 1,
+      coverage: "full",
+    });
+    expect(host.requests.some((request) => request.method === "documents.query")).toBe(true);
+
+    const totals: number[] = [];
+    const subscription = await database.documents.liveQuery(
+      { filter: 'v.eq(v.field("type"), "invoice")' },
+      (result) => {
+        totals.push(result.total);
+      },
+    );
+    expect(totals).toEqual([1]);
+
+    // Mutations on the host push query-result messages back over the port.
+    await database.documents.create({ set: { type: "invoice", total: 300 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(totals).toEqual([1, 2]);
+
+    await subscription.dispose();
+    await database.documents.create({ set: { type: "invoice", total: 400 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(totals).toEqual([1, 2]);
+    expect(
+      host.requests.some((request) => request.method === "documents.liveQuery.unsubscribe"),
+    ).toBe(true);
+
+    host.dispose();
+  });
+
+  it("delivers navigator onDidUpdate pushes emitted by the fake host", async () => {
+    const host = createFakeBridgeHost({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "views"],
+        },
+      }],
+    });
+
+    host.install();
+    const session = await createMindooDBAppBridge().connect();
+    const navigator = await session.createViewNavigator({
+      databaseIds: ["main"],
+      definition: {
+        id: "tasks-by-status",
+        title: "Tasks",
+        columns: [{
+          name: "status",
+          role: "category",
+          expression: { kind: "field", path: "status" },
+        }],
+      },
+    });
+
+    const updates: Array<{ addedCount: number; removedCount: number }> = [];
+    const unsubscribe = navigator.onDidUpdate((stats) => {
+      updates.push(stats);
+    });
+
+    host.emitViewChanged("navigator-1", { addedCount: 3, removedCount: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updates).toEqual([{ addedCount: 3, removedCount: 1 }]);
+
+    // Pushes for other navigators are ignored.
+    host.emitViewChanged("navigator-999", { addedCount: 9, removedCount: 9 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updates).toHaveLength(1);
+
+    unsubscribe();
+    host.emitViewChanged("navigator-1", { addedCount: 1, removedCount: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updates).toHaveLength(1);
+
+    host.dispose();
+  });
 });
