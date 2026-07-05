@@ -12,6 +12,15 @@ import {
 } from "mindoodb-app-sdk/testing";
 ```
 
+The testing entrypoint emulates document storage with real Automerge documents,
+so `@automerge/automerge` is declared as an optional peer dependency. Add it to
+your app's `devDependencies` when you import `mindoodb-app-sdk/testing`
+(the runtime SDK entrypoint does not need it):
+
+```bash
+pnpm add -D @automerge/automerge
+```
+
 ## Pick a level
 
 ### Level 1: simple app tests
@@ -93,8 +102,9 @@ Each database entry can provide:
 - `methods.documents`
 - `methods.views` for session-level `createView()` and `openView()` calls
 - `methods.attachments`
+- `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.
 
-The default in-memory document store also implements `documents.query()` and `documents.liveQuery()`: expression and formula-string filters are evaluated against the seeded documents, `sortBy`/`limit`/`offset` work as documented, and live query callbacks fire automatically after `create`/`update`/`delete`/`undelete` mutations. That means app code built on queries and live queries is testable at Level 1 without any extra setup:
+The default in-memory document store also implements `documents.query()` and `documents.liveQuery()`: expression and formula-string filters are evaluated against the seeded documents, `sortBy`/`limit`/`offset` work as documented, and live query callbacks fire automatically after `create`/`update`/`delete`/`undelete` mutations. Full-text `text` clauses are supported with a deterministic mock implementation (token matching with prefix/AND semantics and an occurrence-count `textScore`) — assert on membership and relative ordering, not absolute scores, since real hosts use a BM25-style engine. That means app code built on queries and live queries is testable at Level 1 without any extra setup:
 
 ```ts
 const session = await mock.bridge.connect();

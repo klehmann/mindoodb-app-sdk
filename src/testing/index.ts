@@ -21,6 +21,8 @@ import type {
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
+  MindooDBAppFulltextSetup,
+  MindooDBAppExtractionSetup,
   MindooDBAppDocument,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentHeadCursorResult,
@@ -36,6 +38,7 @@ import type {
   MindooDBAppMenuApi,
   MindooDBAppQueryResult,
   MindooDBAppQueryRow,
+  MindooDBAppQuerySortKey,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppScopedDocId,
   MindooDBAppScopedDocumentSummary,
@@ -637,6 +640,70 @@ function compareMockQueryValues(left: unknown, right: unknown) {
   });
 }
 
+/** Collect the searchable plain text of a value for the mock text clause. */
+function collectMockText(value: unknown, depth = 0): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || typeof value !== "object" || depth > 8) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    const text = collectMockText(item, depth + 1);
+    if (text.length > 0) {
+      parts.push(text);
+    }
+  }
+  return parts.join(" ");
+}
+
+function mockTokenize(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 0);
+}
+
+/**
+ * Deterministic mock implementation of the full-text `text` clause: token
+ * matching (prefix by default, AND semantics by default) with a plain
+ * occurrence-count score. Real hosts use a BM25-style engine, so tests
+ * should assert membership and relative ordering, not absolute scores.
+ */
+function computeMockTextScore(
+  document: MockStoredDocument,
+  clause: NonNullable<MindooDBAppDocumentQuery["text"]>,
+): number | undefined {
+  const terms = mockTokenize(clause.query);
+  if (terms.length === 0) {
+    return undefined;
+  }
+  const haystack = clause.fields
+    ? clause.fields
+        .map((field) => collectMockText(getFieldValue(document.data, field)))
+        .join(" ")
+    : collectMockText(
+        Object.fromEntries(
+          Object.entries(document.data).filter(([key]) => !key.startsWith("_")),
+        ),
+      );
+  const tokens = mockTokenize(haystack);
+  const prefix = clause.prefix ?? true;
+  const combineWith = clause.combineWith ?? "AND";
+
+  let matchedTerms = 0;
+  let score = 0;
+  for (const term of terms) {
+    const occurrences = tokens.filter((token) =>
+      prefix ? token.startsWith(term) : token === term,
+    ).length;
+    if (occurrences > 0) {
+      matchedTerms++;
+      score += occurrences;
+    }
+  }
+  const matches = combineWith === "AND" ? matchedTerms === terms.length : matchedTerms > 0;
+  return matches ? score : undefined;
+}
+
 /**
  * Evaluates a summary-style document query against the mock document store.
  * Filters use the real expression evaluator (formula strings are parsed the
@@ -653,10 +720,30 @@ function runMockDocumentQuery(
       ? parseMindooDBFormulaBooleanExpression(query.filter)
       : query?.filter;
 
-  const matches: Array<{ document: MockStoredDocument; sortValues: unknown[] }> = [];
+  // A text clause without an explicit sortBy defaults to relevance
+  // ranking (best score first), mirroring the host behavior.
+  const sortBy: MindooDBAppQuerySortKey[] =
+    query?.sortBy && query.sortBy.length > 0
+      ? query.sortBy
+      : query?.text
+        ? [{ special: "textScore", direction: "descending" }]
+        : [];
+
+  const matches: Array<{
+    document: MockStoredDocument;
+    sortValues: unknown[];
+    textScore?: number;
+  }> = [];
   for (const document of storedDocuments.values()) {
     if (document.isDeleted) {
       continue;
+    }
+    let textScore: number | undefined;
+    if (query?.text) {
+      textScore = computeMockTextScore(document, query.text);
+      if (textScore === undefined) {
+        continue;
+      }
     }
     const context = {
       doc: document.data,
@@ -667,15 +754,17 @@ function runMockDocumentQuery(
     if (filter && !mockExpressionToBoolean(evaluateExpression(filter, context))) {
       continue;
     }
-    const sortValues = (query?.sortBy ?? []).map((key) =>
-      key.expression
+    const sortValues = sortBy.map((key) => {
+      if (key.special === "textScore") {
+        return textScore ?? 0;
+      }
+      return key.expression
         ? evaluateExpression(key.expression, context)
-        : getFieldValue(document.data, key.field ?? ""),
-    );
-    matches.push({ document, sortValues });
+        : getFieldValue(document.data, key.field ?? "");
+    });
+    matches.push({ document, sortValues, textScore });
   }
 
-  const sortBy = query?.sortBy ?? [];
   if (sortBy.length > 0) {
     matches.sort((left, right) => {
       for (let i = 0; i < sortBy.length; i++) {
@@ -697,7 +786,7 @@ function runMockDocumentQuery(
   const limit = Math.max(1, query?.limit ?? 200);
   const rows: MindooDBAppQueryRow[] = matches
     .slice(offset, offset + limit)
-    .map(({ document }) => ({
+    .map(({ document, textScore }) => ({
       docId: document.id,
       fields: query?.fields
         ? Object.fromEntries(
@@ -708,6 +797,7 @@ function runMockDocumentQuery(
           )
         : structuredClone(document.data),
       lastModified: document.updatedAt ? Date.parse(document.updatedAt) || 0 : 0,
+      ...(textScore === undefined ? {} : { textScore }),
     }));
 
   return { rows, total: matches.length, coverage: "full" };
@@ -1395,6 +1485,10 @@ function createDatabaseHandle(
   };
 
   const methods: MockDatabaseMethods = definition.methods ?? {};
+  let fulltextSetup: MindooDBAppFulltextSetup | null =
+    definition.fulltextSetup ?? null;
+  let extractionSetup: MindooDBAppExtractionSetup | null =
+    definition.extractionSetup ?? null;
 
   return {
     async info() {
@@ -1410,6 +1504,18 @@ function createDatabaseHandle(
     attachments: {
       ...defaultAttachments,
       ...methods.attachments,
+    },
+    async getFulltextSetup() {
+      return fulltextSetup === null ? null : { ...fulltextSetup };
+    },
+    async setFulltextSetup(config) {
+      fulltextSetup = config === null ? null : { ...config };
+    },
+    async getExtractionSetup() {
+      return extractionSetup === null ? null : { ...extractionSetup };
+    },
+    async setExtractionSetup(config) {
+      extractionSetup = config === null ? null : { ...config };
     },
   };
 }
@@ -1658,6 +1764,21 @@ function createMockSessionState(
 export interface MockMindooDBAppDatabaseDefinition {
   info: MindooDBAppDatabaseInfo;
   methods?: MockDatabaseMethods;
+  /**
+   * Initial full-text configuration returned by `getFulltextSetup()`.
+   * `setFulltextSetup()` overwrites it for the lifetime of the handle.
+   * Note the mock evaluates `text` query clauses regardless of this
+   * config (see TESTING.md) — it exists so apps can test their setup/
+   * bootstrap logic.
+   */
+  fulltextSetup?: MindooDBAppFulltextSetup | null;
+  /**
+   * Initial extraction configuration returned by `getExtractionSetup()`.
+   * `setExtractionSetup()` overwrites it for the lifetime of the handle.
+   * The mock runs no extraction service — this exists so apps can test
+   * their setup/bootstrap logic.
+   */
+  extractionSetup?: MindooDBAppExtractionSetup | null;
 }
 
 export interface CreateMockMindooDBAppSessionOptions {
@@ -2006,6 +2127,32 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.getHeadCursor();
+      case "database.getFulltextSetup":
+        return {
+          config: await state
+            .getDatabase(String(params.databaseId))
+            .getFulltextSetup(),
+        };
+      case "database.setFulltextSetup":
+        await state
+          .getDatabase(String(params.databaseId))
+          .setFulltextSetup(
+            (params.config ?? null) as MindooDBAppFulltextSetup | null,
+          );
+        return { ok: true };
+      case "database.getExtractionSetup":
+        return {
+          config: await state
+            .getDatabase(String(params.databaseId))
+            .getExtractionSetup(),
+        };
+      case "database.setExtractionSetup":
+        await state
+          .getDatabase(String(params.databaseId))
+          .setExtractionSetup(
+            (params.config ?? null) as MindooDBAppExtractionSetup | null,
+          );
+        return { ok: true };
       case "documents.query":
         return await state
           .getDatabase(String(params.databaseId))

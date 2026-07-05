@@ -90,6 +90,87 @@ describe("mindoodb-app-sdk/testing", () => {
     mock.dispose();
   });
 
+  it("stores and returns full-text setup on mock database handles", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: {
+            id: "plain",
+            title: "Plain",
+            capabilities: ["read", "update"],
+          },
+        },
+        {
+          info: {
+            id: "preconfigured",
+            title: "Preconfigured",
+            capabilities: ["read"],
+          },
+          fulltextSetup: { enabled: true, attachments: true, language: "de" },
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+
+    const plain = await session.openDatabase("plain");
+    await expect(plain.getFulltextSetup()).resolves.toBeNull();
+    await plain.setFulltextSetup({ enabled: true, include: ["subject", "body"] });
+    await expect(plain.getFulltextSetup()).resolves.toEqual({
+      enabled: true,
+      include: ["subject", "body"],
+    });
+    await plain.setFulltextSetup(null);
+    await expect(plain.getFulltextSetup()).resolves.toBeNull();
+
+    const preconfigured = await session.openDatabase("preconfigured");
+    await expect(preconfigured.getFulltextSetup()).resolves.toEqual({
+      enabled: true,
+      attachments: true,
+      language: "de",
+    });
+  });
+
+  it("stores and returns extraction setup on mock database handles", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: {
+            id: "plain",
+            title: "Plain",
+            capabilities: ["read", "update"],
+          },
+        },
+        {
+          info: {
+            id: "preconfigured",
+            title: "Preconfigured",
+            capabilities: ["read"],
+          },
+          extractionSetup: { enabled: true, languages: ["deu", "eng"] },
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+
+    const plain = await session.openDatabase("plain");
+    await expect(plain.getExtractionSetup()).resolves.toBeNull();
+    await plain.setExtractionSetup({ enabled: true, mimeTypes: ["image/"] });
+    await expect(plain.getExtractionSetup()).resolves.toEqual({
+      enabled: true,
+      mimeTypes: ["image/"],
+    });
+    await plain.setExtractionSetup(null);
+    await expect(plain.getExtractionSetup()).resolves.toBeNull();
+
+    const preconfigured = await session.openDatabase("preconfigured");
+    await expect(preconfigured.getExtractionSetup()).resolves.toEqual({
+      enabled: true,
+      languages: ["deu", "eng"],
+    });
+  });
+
   it("honors caller-provided document ids and is idempotent in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
@@ -538,6 +619,58 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(paged.total).toBe(3);
     expect(paged.rows).toHaveLength(1);
     expect(paged.rows[0].fields).toEqual({ customer: "acme" });
+  });
+
+  it("evaluates full-text `text` clauses in the mock bridge with relevance ordering", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const many = await database.documents.create({
+      set: { type: "article", body: "solar power, solar panels, solar everywhere" },
+    });
+    const single = await database.documents.create({
+      set: { type: "article", title: "solar", body: "one mention only" },
+    });
+    await database.documents.create({ set: { type: "article", body: "wind energy" } });
+    const note = await database.documents.create({
+      set: { type: "note", body: "solar notes" },
+    });
+
+    // Text clause alone: matches ordered best score first, scores exposed.
+    const result = await database.documents.query({ text: { query: "solar" } });
+    expect(result.total).toBe(3);
+    expect(result.rows[0].docId).toBe(many.id);
+    expect(result.rows.every((row) => typeof row.textScore === "number")).toBe(true);
+
+    // Combined with a filter (logical AND).
+    const filtered = await database.documents.query({
+      text: { query: "solar" },
+      filter: 'v.eq(v.field("type"), "note")',
+    });
+    expect(filtered.rows.map((row) => row.docId)).toEqual([note.id]);
+
+    // Field restriction: only the title mentions "solar" here.
+    const titleOnly = await database.documents.query({
+      text: { query: "solar", fields: ["title"] },
+    });
+    expect(titleOnly.rows.map((row) => row.docId)).toEqual([single.id]);
+
+    // Prefix matching is on by default; exact matching can be forced off.
+    const prefixed = await database.documents.query({ text: { query: "sol" } });
+    expect(prefixed.total).toBe(3);
+    const exact = await database.documents.query({
+      text: { query: "sol", prefix: false },
+    });
+    expect(exact.total).toBe(0);
   });
 
   it("runs the live query lifecycle in the mock bridge: initial result, coalesced updates, dispose", async () => {

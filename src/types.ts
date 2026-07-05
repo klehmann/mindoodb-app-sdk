@@ -1052,14 +1052,110 @@ export interface MindooDBAppWritableAttachmentStream {
 }
 
 /**
- * One sort key of a {@link MindooDBAppDocumentQuery}: either a plain summary
- * field path or a computed expression, evaluated per row before comparison.
- * Mirrors mindoodb's `MindooQuerySortKey`.
+ * One sort key of a {@link MindooDBAppDocumentQuery}: a plain summary
+ * field path, a computed expression (evaluated per row before comparison),
+ * or the special `textScore` pseudo-key (relevance of the query's `text`
+ * clause). Mirrors mindoodb's `MindooQuerySortKey`.
  */
 export interface MindooDBAppQuerySortKey {
   field?: string;
   expression?: MindooDBAppExpression;
+  /**
+   * `"textScore"`: sort by the relevance score of the query's `text`
+   * clause (only meaningful together with one). For "best match first"
+   * use `direction: "descending"` — which is also the implicit default
+   * ordering when a `text` clause is present and no `sortBy` was given.
+   */
+  special?: "textScore";
   direction?: "ascending" | "descending";
+}
+
+/**
+ * Full-text clause of a {@link MindooDBAppDocumentQuery}: matches
+ * documents through the database's full-text index and adds a relevance
+ * score per row. Requires full-text indexing to be enabled for the
+ * database (`fulltextSetup` in its `dbsetup` document) — otherwise the
+ * query is rejected with a `fulltext-not-enabled` error.
+ *
+ * Search results are device-specific under end-to-end encryption: the
+ * index is built from content the current device can decrypt.
+ */
+export interface MindooDBAppQueryTextClause {
+  /** The search string (tokenized like indexed content). */
+  query: string;
+  /**
+   * Restrict matching to these index fields (document field paths, plus
+   * the synthetic `_attachments` field for extracted attachment text).
+   * Default: all indexed fields.
+   */
+  fields?: string[];
+  /** Match term prefixes (`"drag"` matches `"dragon"`). Default: `true`. */
+  prefix?: boolean;
+  /**
+   * Fuzzy matching tolerance: `true`, an edit-distance fraction (0..1) of
+   * the term length, or an absolute edit distance (> 1). Default: `false`.
+   */
+  fuzzy?: boolean | number;
+  /** How multiple terms combine: `"AND"` (default) or `"OR"`. */
+  combineWith?: "AND" | "OR";
+}
+
+/**
+ * Full-text index configuration of a database, stored in the synced
+ * `dbsetup` document (`fulltextSetup` field) — the app-SDK mirror of
+ * MindooDB's `FulltextConfig`. Read/write it via
+ * {@link MindooDBAppDatabase.getFulltextSetup} /
+ * {@link MindooDBAppDatabase.setFulltextSetup}.
+ */
+export interface MindooDBAppFulltextSetup {
+  /** Master switch — full-text indexing is opt-in (default `false`). */
+  enabled?: boolean;
+  /**
+   * Dot-separated document field paths to index. Empty/omitted = auto
+   * mode: every non-underscore top-level field with non-empty extracted
+   * plain text.
+   */
+  include?: string[];
+  /**
+   * Extract and index attachment text through the host's registered
+   * extractors (Haven ships PDF/Office/plain-text extractors), indexed
+   * under the synthetic `_attachments` field. Default: `false`.
+   */
+  attachments?: boolean;
+  /**
+   * BCP-47 language tag steering tokenization (`Intl.Segmenter` locale).
+   * Changing it rebuilds the index. Default: `"und"`.
+   */
+  language?: string;
+  /** Per-field cap (approximate bytes) for extracted text. */
+  maxFieldBytes?: number;
+}
+
+/**
+ * Attachment text extraction configuration of a database, stored in the
+ * synced `dbsetup` document (`extractionSetup` field) — the app-SDK
+ * mirror of MindooDB's `ExtractionConfig`. Enables host-side extraction
+ * services (e.g. Haven's OCR) that extract text from attachment content
+ * once and persist it at the attachment entry, where the full-text index
+ * picks it up on every replica. Read/write it via
+ * {@link MindooDBAppDatabase.getExtractionSetup} /
+ * {@link MindooDBAppDatabase.setExtractionSetup}.
+ */
+export interface MindooDBAppExtractionSetup {
+  /** Master switch — extraction services stay idle without it (default `false`). */
+  enabled?: boolean;
+  /**
+   * Tesseract-style OCR language codes (e.g. `["deu", "eng"]`). Default is
+   * host-defined.
+   */
+  languages?: string[];
+  /**
+   * Restrict extraction to these MIME types (prefix match allowed, e.g.
+   * `"image/"`). Default is host-defined (typically images + PDFs).
+   */
+  mimeTypes?: string[];
+  /** Cap on persisted text per attachment in characters. */
+  maxCharsPerAttachment?: number;
 }
 
 /**
@@ -1074,6 +1170,14 @@ export interface MindooDBAppQuerySortKey {
  */
 export interface MindooDBAppDocumentQuery {
   filter?: MindooDBAppBooleanExpression | string;
+  /**
+   * Full-text clause: additionally require documents to match this
+   * full-text search (combined with `filter` as a logical AND). Adds a
+   * relevance score per row ({@link MindooDBAppQueryRow.textScore});
+   * without an explicit `sortBy`, results are ordered best score first.
+   * Requires full-text indexing to be enabled for the database.
+   */
+  text?: MindooDBAppQueryTextClause;
   sortBy?: MindooDBAppQuerySortKey[];
   /**
    * Maximum number of rows returned. The host enforces a cap; omitting the
@@ -1093,6 +1197,11 @@ export interface MindooDBAppQueryRow {
   docId: string;
   fields: Record<string, unknown>;
   lastModified: number;
+  /**
+   * Relevance score of the query's `text` clause (higher = better match).
+   * Only present when the query had a `text` clause.
+   */
+  textScore?: number;
 }
 
 /**
@@ -1129,12 +1238,14 @@ export interface MindooDBAppLiveQuerySubscription {
 export interface MindooDBAppDocumentApi {
   /**
    * Run an ad-hoc query against the database's document summary buffer:
-   * declarative filter, dynamic sorting, paging, and field projection —
-   * without materializing documents on the host.
+   * declarative filter, full-text `text` clause, dynamic sorting, paging,
+   * and field projection — without materializing documents on the host.
    *
    * Requires the summary buffer to cover all referenced fields; queries
    * that need encrypted or uncovered fields are rejected with a
-   * `query-not-supported` error.
+   * `query-not-supported` error. A `text` clause requires full-text
+   * indexing to be enabled for the database, otherwise the query is
+   * rejected with `fulltext-not-enabled`.
    */
   query(query?: MindooDBAppDocumentQuery): Promise<MindooDBAppQueryResult>;
   /**
@@ -1684,6 +1795,42 @@ export interface MindooDBAppDatabase {
   info(): Promise<MindooDBAppDatabaseInfo>;
   documents: MindooDBAppDocumentApi;
   attachments: MindooDBAppAttachmentApi;
+  /**
+   * Read the database's full-text index configuration from the synced
+   * `dbsetup` document. Resolves to `null` when full-text indexing has
+   * never been configured. Requires the `read` capability.
+   */
+  getFulltextSetup(): Promise<MindooDBAppFulltextSetup | null>;
+  /**
+   * Write the database's full-text index configuration (persisted in the
+   * synced `dbsetup` document, so it applies on every replica; each device
+   * builds its own local index). Pass `null` to remove the configuration
+   * (disables indexing). Typically called once during app setup, e.g.
+   * `setFulltextSetup({ enabled: true, attachments: true })`.
+   *
+   * Requires the `update` capability; the change is idempotent, so calling
+   * it on every app start with the same config is fine (no-op write when
+   * nothing changed).
+   */
+  setFulltextSetup(config: MindooDBAppFulltextSetup | null): Promise<void>;
+  /**
+   * Read the database's attachment extraction configuration from the
+   * synced `dbsetup` document. Resolves to `null` when extraction has
+   * never been configured. Requires the `read` capability.
+   */
+  getExtractionSetup(): Promise<MindooDBAppExtractionSetup | null>;
+  /**
+   * Write the database's attachment extraction configuration (persisted
+   * in the synced `dbsetup` document). Enables host-side extraction
+   * services (e.g. Haven's OCR): extracted text is persisted at the
+   * attachment entry and syncs with the document, so every replica can
+   * search it without re-extracting. Pass `null` to remove the
+   * configuration.
+   *
+   * Requires the `update` capability; idempotent like
+   * {@link setFulltextSetup}.
+   */
+  setExtractionSetup(config: MindooDBAppExtractionSetup | null): Promise<void>;
 }
 
 /** Connected session between the running app and the Haven host. */

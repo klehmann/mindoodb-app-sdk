@@ -60,6 +60,8 @@ import type {
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
+  MindooDBAppFulltextSetup,
+  MindooDBAppExtractionSetup,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
   MindooDBAppLaunchContext,
@@ -1204,6 +1206,40 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   async info(): Promise<MindooDBAppDatabaseInfo> {
     return await this.rpc.call("databases.info", {
       databaseId: this.databaseId,
+    });
+  }
+
+  /** Reads the full-text configuration from the synced `dbsetup` document. */
+  async getFulltextSetup(): Promise<MindooDBAppFulltextSetup | null> {
+    const result = await this.rpc.call<{ config: MindooDBAppFulltextSetup | null }>(
+      "database.getFulltextSetup",
+      { databaseId: this.databaseId },
+    );
+    return result.config;
+  }
+
+  /** Writes (or removes, with `null`) the full-text configuration. */
+  async setFulltextSetup(config: MindooDBAppFulltextSetup | null): Promise<void> {
+    await this.rpc.call("database.setFulltextSetup", {
+      databaseId: this.databaseId,
+      config,
+    });
+  }
+
+  /** Reads the attachment extraction configuration from the synced `dbsetup` document. */
+  async getExtractionSetup(): Promise<MindooDBAppExtractionSetup | null> {
+    const result = await this.rpc.call<{ config: MindooDBAppExtractionSetup | null }>(
+      "database.getExtractionSetup",
+      { databaseId: this.databaseId },
+    );
+    return result.config;
+  }
+
+  /** Writes (or removes, with `null`) the attachment extraction configuration. */
+  async setExtractionSetup(config: MindooDBAppExtractionSetup | null): Promise<void> {
+    await this.rpc.call("database.setExtractionSetup", {
+      databaseId: this.databaseId,
+      config,
     });
   }
 }

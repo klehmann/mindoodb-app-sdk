@@ -1,6 +1,6 @@
 {
   "name": "mindoodb-app-sdk",
-  "version": "0.0.23",
+  "version": "0.0.26",
   "packageManager": "pnpm@11.1.1",
   "engines": {
     "node": ">=22.13.0"
@@ -37,7 +37,7 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/testing/index.ts --format esm --dts --clean --tsconfig tsconfig.build.json",
+    "build": "tsup src/index.ts src/testing/index.ts --format esm --dts --clean --external @automerge/automerge --tsconfig tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -46,9 +46,17 @@
   "dependencies": {
     "mindoodb-view-language": "0.0.14"
   },
+  "peerDependencies": {
+    "@automerge/automerge": "^3.2.1"
+  },
+  "peerDependenciesMeta": {
+    "@automerge/automerge": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@automerge/automerge": "^3.2.1",
-    "mindoodb": "^0.0.30",
+    "mindoodb": "^0.0.32",
     "@types/node": "25.5.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.2",

@@ -935,6 +935,42 @@ Notes:
 - Queries that reference encrypted fields or fields outside the summary configuration are rejected with a `query-not-supported` bridge error. Use a view with `useFullDocuments` (see below) or `documents.list()` for those cases.
 - Queries require the `read` capability and are not available in time-travel launches (the summary buffer reflects the live state only).
 
+**Full-text search** — a query can additionally carry a `text` clause, evaluated against the database's client-side full-text index on the host and combined with `filter` as a logical AND:
+
+```ts
+const result = await db.documents.query({
+  text: { query: "solar panels" },              // full-text match + relevance score
+  filter: 'v.eq(v.field("type"), "article")',   // optional structured filter
+});
+
+for (const row of result.rows) {
+  console.log(row.docId, row.textScore);        // higher score = better match
+}
+```
+
+- Options: `fields` (restrict matching to specific index fields), `prefix` (default `true` — `"sol"` matches `"solar"`), `fuzzy` (edit-distance tolerance, default off), `combineWith` (`"AND"` default | `"OR"`).
+- Rows gain a `textScore`; without an explicit `sortBy`, results come best score first. Sorting can reference the score explicitly with `sortBy: [{ special: "textScore", direction: "descending" }]`.
+- Full-text indexing is **opt-in per database** (`fulltextSetup` in the `dbsetup` document). A `text` clause against a database without it is rejected with a `fulltext-not-enabled` bridge error — catch it and hide/disable the search UI.
+- `liveQuery` supports `text` clauses unchanged; the host rounds scores in its result fingerprint so minor relevance drift does not spam your callback.
+
+**Enabling full-text indexing** — apps turn indexing on themselves through the database handle. The configuration is stored in the synced `dbsetup` document, so it applies on every replica (each device builds its own local, encrypted index):
+
+```ts
+// Idempotent — safe to call on every app start (no write when unchanged).
+// Requires the `update` capability.
+await db.setFulltextSetup({
+  enabled: true,
+  attachments: true, // index text extracted from attachments (PDF, Office, …)
+  language: "de",    // BCP-47 tag steering tokenization; omit for language-neutral
+});
+
+const setup = await db.getFulltextSetup(); // null when never configured
+```
+
+- Without `include`, every non-underscore top-level field with extractable text is indexed (auto mode). Pass `include: ["subject", "body"]` to pin the indexed fields, including nested/long-text fields outside the summary buffer.
+- `attachments: true` indexes attachment text under the synthetic `_attachments` field using the host's extractors (Haven ships PDF, Office, and plain-text extractors). Restrict a query to attachment content with `text: { query, fields: ["_attachments"] }`.
+- Changing the configuration (including `language`) rebuilds the index in the background; queries during the rebuild report `coverage: "rebuilding"`.
+
 **Live queries** keep a query result up to date. The callback receives the initial result and runs again whenever the result actually changed — the host coalesces bursts of writes and fingerprints results, so you only hear about real changes:
 
 ```ts
@@ -1319,7 +1355,7 @@ Available expression helpers:
 - **String helpers:** `concat()`, `lower()`, `upper()`, `trim()`, `contains()`, `startsWith()`, `endsWith()`
 - **Null/existence:** `coalesce()`, `exists()`, `notExists()`
 - **Date/path:** `datePart()`, `pathJoin()`
-- **Control flow:** `ifElse()`, `let()`
+- **Control flow:** `ifElse()`, `let()` — `ifElse()` accepts multiple condition/value pairs followed by a default, like Domino's `@If`: `v.ifElse(cond1, val1, cond2, val2, default)`
 
 The full language guide lives in the `mindoodb-view-language` package. The SDK re-exports `createViewLanguage()` for convenience.
 
@@ -1390,11 +1426,13 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 ### MindooDBAppDatabase
 
-| Property / Method | Returns                            |
-| ----------------- | ---------------------------------- |
-| `info()`          | `Promise<MindooDBAppDatabaseInfo>` |
-| `documents`       | `MindooDBAppDocumentApi`           |
-| `attachments`     | `MindooDBAppAttachmentApi`         |
+| Property / Method            | Returns                                        |
+| ---------------------------- | ---------------------------------------------- |
+| `info()`                     | `Promise<MindooDBAppDatabaseInfo>`             |
+| `documents`                  | `MindooDBAppDocumentApi`                       |
+| `attachments`                | `MindooDBAppAttachmentApi`                     |
+| `getFulltextSetup()`         | `Promise<MindooDBAppFulltextSetup \| null>`    |
+| `setFulltextSetup(config)`   | `Promise<void>`                                |
 
 ### MindooDBAppDocumentApi
 
