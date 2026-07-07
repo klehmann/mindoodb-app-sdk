@@ -368,6 +368,20 @@ export interface MindooDBAppDocumentListQuery {
   fields?: string[];
   /** Simple equality filter on top-level document data fields. */
   filter?: Record<string, unknown>;
+  /**
+   * Restrict the listing to documents whose id matches this prefix. Matching is
+   * boundary-aware: an id matches when it equals `idPrefix` exactly or begins
+   * with `<idPrefix>_`, mirroring the `<prefix>_<base62>` ids produced by
+   * `documents.create({ idPrefix })`. So `"cls"` matches `cls_…` documents but
+   * not an unrelated `classroom_…` id.
+   *
+   * Unlike `filter` (a data-field equality applied *after* each document body is
+   * loaded), the id-prefix filter is applied on the changefeed metadata *before*
+   * loading — so a content-type prefix listing never ships unrelated document
+   * bodies across the bridge. Prefer it over `filter: { type }` when your ids
+   * carry a per-type prefix.
+   */
+  idPrefix?: string;
 }
 
 /** Paged result returned by `documents.list()`. */
@@ -449,8 +463,24 @@ export interface MindooDBAppCreateDocumentInput {
    * Documents created with the same caller-provided id on independent replicas
    * share Automerge ancestry, so subsequent edits on either replica still
    * merge correctly when the replicas sync.
+   *
+   * Mutually exclusive with `idPrefix`.
    */
   id?: string;
+  /**
+   * Optional short prefix (1–10 ASCII-alphanumeric chars, starting with a
+   * letter, no `_`) for a host-generated document id. The final id is
+   * `<idPrefix>_<22-char-base62(uuidv7)>`, e.g. `cls_0BqXa9yTFn2M4kVzR1sWpq`
+   * — unique by construction and time-sortable within the same prefix.
+   *
+   * Unlike a caller-provided `id`, uniqueness is guaranteed by MindooDB, so
+   * the initial `set` values are baked into the single `doc_create` entry (no
+   * follow-up change entry). Requires a host with idPrefix support (MindooDB
+   * >= 0.0.33).
+   *
+   * Mutually exclusive with `id`.
+   */
+  idPrefix?: string;
 }
 
 export interface MindooDBAppTextEdit {

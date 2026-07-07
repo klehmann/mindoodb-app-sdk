@@ -601,6 +601,18 @@ function matchesDocumentFilter(
   );
 }
 
+/**
+ * Boundary-aware id-prefix match mirroring mindoodb's `matchesDocIdPrefix`: an
+ * id matches when it equals `idPrefix` or begins with `<idPrefix>_`. An
+ * undefined/empty prefix matches everything.
+ */
+function matchesMockIdPrefix(docId: string, idPrefix?: string): boolean {
+  if (!idPrefix) {
+    return true;
+  }
+  return docId === idPrefix || docId.startsWith(`${idPrefix}_`);
+}
+
 function decodeMockListCursor(cursor?: string | null) {
   if (!cursor) {
     return 0;
@@ -1124,6 +1136,7 @@ function createDatabaseHandle(
       const offset = decodeMockListCursor(query?.cursor) + skip;
       const metadataOnly = query?.metadataOnly ?? false;
 
+      const idPrefix = query?.idPrefix;
       const items = Array.from(storedDocuments.values())
         .filter((document) =>
           status === "all"
@@ -1132,6 +1145,7 @@ function createDatabaseHandle(
               ? document.isDeleted
               : !document.isDeleted,
         )
+        .filter((document) => matchesMockIdPrefix(document.id, idPrefix))
         .filter((document) =>
           metadataOnly ? true : matchesDocumentFilter(document, query?.filter),
         )
@@ -1258,6 +1272,11 @@ function createDatabaseHandle(
       // already exists, return the existing document (mirrors MindooDB's
       // idempotent create). Otherwise create a new document with the supplied
       // id, falling back to a generated `doc-<counter>` id when none is given.
+      // `idPrefix` mirrors the host's generated-id semantics with a
+      // deterministic, sortable 22-char suffix.
+      if (input.id !== undefined && input.idPrefix !== undefined) {
+        throw new Error("documents.create: id and idPrefix are mutually exclusive");
+      }
       const callerId =
         typeof input.id === "string" && input.id.length > 0 ? input.id : null;
       if (callerId) {
@@ -1283,6 +1302,9 @@ function createDatabaseHandle(
       let id: string;
       if (callerId) {
         id = callerId;
+      } else if (typeof input.idPrefix === "string" && input.idPrefix.length > 0) {
+        createCounter += 1;
+        id = `${input.idPrefix}_${String(createCounter).padStart(22, "0")}`;
       } else {
         createCounter += 1;
         id = `doc-${createCounter}`;
@@ -2233,6 +2255,7 @@ export function createFakeBridgeHost(
               set: Record<string, unknown>;
               decryptionKeyId?: string;
               id?: string;
+              idPrefix?: string;
             },
           );
       case "documents.update":

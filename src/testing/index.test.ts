@@ -621,6 +621,38 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(paged.rows[0].fields).toEqual({ customer: "acme" });
   });
 
+  it("narrows documents.list by idPrefix (boundary-aware) in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const cls1 = await database.documents.create({ idPrefix: "cls", set: { name: "5a" } });
+    const cls2 = await database.documents.create({ idPrefix: "cls", set: { name: "5b" } });
+    await database.documents.create({ idPrefix: "stu", set: { name: "Ada" } });
+    const classroom = await database.documents.create({ idPrefix: "classroom", set: { name: "R1" } });
+
+    const clsPage = await database.documents.list({ idPrefix: "cls", metadataOnly: true });
+    expect(clsPage.items.map((item) => item.id).sort()).toEqual([cls1.id, cls2.id].sort());
+    // Boundary: the `classroom_…` doc shares the "cls" substring but must not match.
+    expect(clsPage.items.map((item) => item.id)).not.toContain(classroom.id);
+
+    const stuPage = await database.documents.list({ idPrefix: "stu", metadataOnly: true });
+    expect(stuPage.items).toHaveLength(1);
+    expect(stuPage.items[0].id.startsWith("stu_")).toBe(true);
+
+    // No prefix → all four documents.
+    const allPage = await database.documents.list({ metadataOnly: true });
+    expect(allPage.items).toHaveLength(4);
+  });
+
   it("evaluates full-text `text` clauses in the mock bridge with relevance ordering", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
