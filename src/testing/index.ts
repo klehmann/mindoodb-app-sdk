@@ -498,6 +498,7 @@ function createDefaultLaunchContext(
     },
     uiPreferences: {
       iosMultitaskingOptimized: false,
+      reduceMotion: false,
     },
     locale: "en",
     user: {

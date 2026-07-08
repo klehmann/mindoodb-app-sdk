@@ -75,6 +75,12 @@ export interface MindooDBAppViewport {
 /** Host-controlled UI preferences exposed to embedded apps. */
 export interface MindooDBAppUiPreferences {
   iosMultitaskingOptimized: boolean;
+  /**
+   * When `true`, the user asked Haven to reduce interface motion (e.g. over a
+   * remote-desktop connection). Apps should disable non-essential transitions
+   * and entrance animations to match the host.
+   */
+  reduceMotion: boolean;
 }
 
 /** Saved categorization mode for Haven-managed view mappings delivered at launch time. */

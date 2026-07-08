@@ -754,6 +754,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
                 },
                 uiPreferences: {
                   iosMultitaskingOptimized: false,
+                  reduceMotion: false,
                 },
                 locale: "en",
                 user: {
@@ -799,7 +800,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const session = await createMindooDBAppBridge().connect();
     const themeChanges: Array<{ mode: string; preset: string }> = [];
     const viewportChanges: Array<{ width: number; height: number }> = [];
-    const uiPreferencesChanges: Array<{ iosMultitaskingOptimized: boolean }> = [];
+    const uiPreferencesChanges: Array<{ iosMultitaskingOptimized: boolean; reduceMotion: boolean }> = [];
     const localeChanges: string[] = [];
     const unsubscribe = session.onThemeChange((theme) => {
       themeChanges.push(theme);
@@ -826,6 +827,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       },
       uiPreferences: {
         iosMultitaskingOptimized: false,
+        reduceMotion: false,
       },
       locale: "en",
     });
@@ -857,6 +859,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
       kind: "ui-preferences-changed",
       uiPreferences: {
         iosMultitaskingOptimized: true,
+        reduceMotion: true,
       },
     });
     hostPort.postMessage({
@@ -876,6 +879,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     }]);
     expect(uiPreferencesChanges).toEqual([{
       iosMultitaskingOptimized: true,
+      reduceMotion: true,
     }]);
     expect(localeChanges).toEqual(["de"]);
 
