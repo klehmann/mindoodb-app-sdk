@@ -51,16 +51,21 @@ export function expandAbbreviatedName(value: string): string {
     return value.trim();
   }
 
-  const [commonName, ...rest] = parts;
-  const organization = rest.at(-1);
-  if (!commonName || !organization) {
-    return value.trim();
-  }
-
-  const organizationUnits = rest.slice(0, -1);
-  return [
-    `cn=${commonName}`,
-    ...organizationUnits.map((part) => `ou=${part}`),
-    `o=${organization}`,
-  ].join("/");
+  const lastIndex = parts.length - 1;
+  return parts
+    .map((part, index) => {
+      // Leave segments that already carry an explicit key (e.g. "o=myorg") untouched,
+      // so mixed input like "test/o=myorg" does not become "cn=test/o=o=myorg".
+      if (CANONICAL_PART_PATTERN.test(part)) {
+        return part;
+      }
+      if (index === 0) {
+        return `cn=${part}`;
+      }
+      if (index === lastIndex) {
+        return `o=${part}`;
+      }
+      return `ou=${part}`;
+    })
+    .join("/");
 }

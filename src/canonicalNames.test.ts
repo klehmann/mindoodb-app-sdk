@@ -17,4 +17,9 @@ describe("canonicalNames", () => {
     expect(expandAbbreviatedName("Karsten Lehmann/dev/eu/Mindoo"))
       .toBe("cn=Karsten Lehmann/ou=dev/ou=eu/o=Mindoo");
   });
+
+  it("does not double-prefix segments that already carry a key", () => {
+    expect(expandAbbreviatedName("test/o=myorg")).toBe("cn=test/o=myorg");
+    expect(expandAbbreviatedName("cn=test/myorg")).toBe("cn=test/o=myorg");
+  });
 });
