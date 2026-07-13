@@ -1278,6 +1278,11 @@ function createDatabaseHandle(
       if (input.id !== undefined && input.idPrefix !== undefined) {
         throw new Error("documents.create: id and idPrefix are mutually exclusive");
       }
+      // Mirrors the host's validation; the mock has no store-entry granularity,
+      // so the flag is otherwise a no-op here.
+      if (input.assumeUniqueId && input.id === undefined) {
+        throw new Error("documents.create: assumeUniqueId requires a caller-provided id");
+      }
       const callerId =
         typeof input.id === "string" && input.id.length > 0 ? input.id : null;
       if (callerId) {
@@ -2257,6 +2262,7 @@ export function createFakeBridgeHost(
               decryptionKeyId?: string;
               id?: string;
               idPrefix?: string;
+              assumeUniqueId?: boolean;
             },
           );
       case "documents.update":

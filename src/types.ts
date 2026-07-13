@@ -474,6 +474,22 @@ export interface MindooDBAppCreateDocumentInput {
    */
   id?: string;
   /**
+   * Caller assertion that the provided `id` was generated randomly with
+   * enough entropy that no other replica can create the same id concurrently
+   * (e.g. an app-side `<prefix>_<uuid>` scheme). Only meaningful together
+   * with `id`.
+   *
+   * With this flag the create behaves like the `idPrefix` path: the initial
+   * `set` values are baked into the single `doc_create` entry — no
+   * deterministic seed change and no follow-up change entry. This halves the
+   * store entries for bulk imports whose documents cross-reference each other
+   * by pre-generated random ids.
+   *
+   * WARNING: do NOT set this for fixed/well-known ids (settings singletons
+   * etc.) — concurrent creates of the same id would fork instead of converge.
+   */
+  assumeUniqueId?: boolean;
+  /**
    * Optional short prefix (1–10 ASCII-alphanumeric chars, starting with a
    * letter, no `_`) for a host-generated document id. The final id is
    * `<idPrefix>_<22-char-base62(uuidv7)>`, e.g. `cls_0BqXa9yTFn2M4kVzR1sWpq`
