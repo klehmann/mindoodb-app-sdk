@@ -1454,8 +1454,10 @@ export interface MindooDBAppDocumentApi {
   getDefaultCreateKeyId(): Promise<string>;
   /**
    * List the document's revision timeline (newest first), including author
-   * identity metadata and the stable `revisionId` per entry. Requires the
-   * `history` capability.
+   * identity metadata and the stable `revisionId` per entry. Entries are
+   * metadata-only — document bodies are not included; load a revision with
+   * {@link getAtRevision} or {@link getAtTimestamp}. Requires the `history`
+   * capability.
    */
   listHistory(docId: string): Promise<MindooDBAppDocumentHistoryEntry[]>;
   /**
