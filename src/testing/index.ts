@@ -21,8 +21,14 @@ import type {
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
+  MindooDBAppDirectoryApi,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
+  MindooDBAppIdentityApi,
+  MindooDBAppRevisionVerification,
+  MindooDBAppSignStatementInput,
+  MindooDBAppTimestampApi,
+  MindooDBAppTimestampInput,
   MindooDBAppDocument,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentHeadCursorResult,
@@ -63,6 +69,10 @@ import type {
 } from "../types";
 
 const PROTOCOL = "mindoodb-app-bridge";
+
+/** Stand-in identity key for the mock host. Signs nothing; verifies nothing. */
+const MOCK_SIGNING_PUBLIC_KEY_PEM =
+  "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmockmockmockmockmockmockmockmockmockmockmoc=\n-----END PUBLIC KEY-----\n";
 
 type MaybePromise<T> = T | Promise<T>;
 type MockViewApi = {
@@ -1054,7 +1064,22 @@ type MockDatabaseMethods = {
   documents?: Partial<MindooDBAppDocumentApi>;
   views?: Partial<MockViewApi>;
   attachments?: Partial<MindooDBAppAttachmentApi>;
+  identity?: Partial<MindooDBAppIdentityApi>;
+  timestamps?: Partial<MindooDBAppTimestampApi>;
+  directory?: Partial<MindooDBAppDirectoryApi>;
 };
+
+/** Lower-case hex SHA-256, or `null` where WebCrypto is unavailable. */
+async function mockSha256Hex(value: string): Promise<string | null> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    return null;
+  }
+  const digest = await subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
@@ -1447,6 +1472,77 @@ function createDatabaseHandle(
         attachments: [],
       };
     },
+    async listVerification(): Promise<MindooDBAppRevisionVerification[]> {
+      return [];
+    },
+  };
+
+  /**
+   * Signing, mocked.
+   *
+   * The signature is deterministic filler, not Ed25519 — a test host has no
+   * identity key, and pretending otherwise would let a test "verify" something
+   * that never held. Supply `methods.identity` when a test needs real bytes.
+   *
+   * The render-digest check *is* real, because that is the branch apps get
+   * wrong: an app whose preview and statement disagree must see the same
+   * refusal here that Haven would give it.
+   */
+  const defaultIdentity: MindooDBAppIdentityApi = {
+    async signStatement(input) {
+      if (input.preview.svg != null && input.preview.renderDigest != null) {
+        const actual = await mockSha256Hex(input.preview.svg);
+        if (actual != null && actual !== input.preview.renderDigest) {
+          return { ok: false, reason: "render-mismatch" };
+        }
+      }
+      return {
+        ok: true,
+        signature: `mock-signature-${input.statement.byteLength}`,
+        publicKey: MOCK_SIGNING_PUBLIC_KEY_PEM,
+        fingerprint: "0".repeat(64),
+        domain: input.domain,
+        signedAt: Date.now(),
+      };
+    },
+  };
+
+  /**
+   * Timestamping, mocked. The token is not a parseable `TimeStampResp`; a test
+   * that verifies tokens should use a recorded fixture instead.
+   */
+  const defaultTimestamps: MindooDBAppTimestampApi = {
+    async rfc3161(input) {
+      return {
+        token: `mock-timestamp-token-${input.digest.byteLength}`,
+        providerId: input.providerId ?? "mock",
+        providerName: "Mock TSA (test host)",
+        transport: "direct",
+        genTime: Date.now(),
+        rootInPublicTrustStores: false,
+      };
+    },
+    async listProviders() {
+      return [
+        {
+          id: "mock",
+          name: "Mock TSA (test host)",
+          qualified: false,
+          rootInPublicTrustStores: false,
+          browserReachable: true,
+        },
+      ];
+    },
+  };
+
+  const defaultDirectory: MindooDBAppDirectoryApi = {
+    async excerpt(publicKeys) {
+      return publicKeys.map((signingPublicKey) => ({
+        signingPublicKey,
+        fingerprint: "0".repeat(64),
+        status: "unknown" as const,
+      }));
+    },
   };
 
   const defaultViews: MockViewApi = {
@@ -1532,6 +1628,18 @@ function createDatabaseHandle(
     attachments: {
       ...defaultAttachments,
       ...methods.attachments,
+    },
+    identity: {
+      ...defaultIdentity,
+      ...methods.identity,
+    },
+    timestamps: {
+      ...defaultTimestamps,
+      ...methods.timestamps,
+    },
+    directory: {
+      ...defaultDirectory,
+      ...methods.directory,
     },
     async getFulltextSetup() {
       return fulltextSetup === null ? null : { ...fulltextSetup };
@@ -2319,6 +2427,39 @@ export function createFakeBridgeHost(
           .documents.getAtRevision(
             String(params.docId),
             String(params.revisionId),
+          );
+      case "documents.history.listVerification":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.listVerification(
+            String(params.docId),
+            Array.isArray(params.revisionIds)
+              ? params.revisionIds.map(String)
+              : undefined,
+          );
+      case "identity.signStatement": {
+        const { databaseId: _databaseId, ...input } = params;
+        return await state
+          .getDatabase(String(params.databaseId))
+          .identity.signStatement(
+            input as unknown as MindooDBAppSignStatementInput,
+          );
+      }
+      case "timestamps.rfc3161": {
+        const { databaseId: _databaseId, ...input } = params;
+        return await state
+          .getDatabase(String(params.databaseId))
+          .timestamps.rfc3161(input as unknown as MindooDBAppTimestampInput);
+      }
+      case "timestamps.listProviders":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .timestamps.listProviders();
+      case "directory.excerpt":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.excerpt(
+            Array.isArray(params.publicKeys) ? params.publicKeys.map(String) : [],
           );
       case "attachments.list":
         return await state

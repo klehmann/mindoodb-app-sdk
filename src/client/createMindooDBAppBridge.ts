@@ -62,8 +62,11 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
+  MindooDBAppDirectoryApi,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
+  MindooDBAppIdentityApi,
+  MindooDBAppTimestampApi,
   MindooDBAppLaunchContext,
   MindooDBAppLiveQuerySubscription,
   MindooDBAppMenuApi,
@@ -874,6 +877,9 @@ class MindooDBAppWritableAttachmentStreamImpl implements MindooDBAppWritableAtta
 class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly documents: MindooDBAppDocumentApi;
   public readonly attachments: MindooDBAppAttachmentApi;
+  public readonly identity: MindooDBAppIdentityApi;
+  public readonly timestamps: MindooDBAppTimestampApi;
+  public readonly directory: MindooDBAppDirectoryApi;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -1068,6 +1074,40 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           docId,
           revisionId,
+        }),
+      listVerification: async (docId, revisionIds) =>
+        await this.rpc.call("documents.history.listVerification", {
+          databaseId: this.databaseId,
+          docId,
+          revisionIds,
+        }),
+    };
+
+    this.identity = {
+      signStatement: async (input) =>
+        await this.rpc.call("identity.signStatement", {
+          databaseId: this.databaseId,
+          ...input,
+        }),
+    };
+
+    this.timestamps = {
+      rfc3161: async (input) =>
+        await this.rpc.call("timestamps.rfc3161", {
+          databaseId: this.databaseId,
+          ...input,
+        }),
+      listProviders: async () =>
+        await this.rpc.call("timestamps.listProviders", {
+          databaseId: this.databaseId,
+        }),
+    };
+
+    this.directory = {
+      excerpt: async (publicKeys) =>
+        await this.rpc.call("directory.excerpt", {
+          databaseId: this.databaseId,
+          publicKeys,
         }),
     };
 

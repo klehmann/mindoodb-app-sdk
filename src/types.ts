@@ -205,7 +205,10 @@ export type MindooDBAppCapability =
   | "delete"
   | "history"
   | "attachments"
-  | "views";
+  | "views"
+  | "sign"
+  | "timestamps"
+  | "directory";
 
 /** Metadata about the current app launch supplied by the Haven host. */
 export interface MindooDBAppLaunchContext {
@@ -338,6 +341,89 @@ export interface MindooDBAppDocumentHistoryEntry {
   isDeleted: boolean;
   isCurrent: boolean;
   summary?: string;
+}
+
+/**
+ * The cryptographic record behind one revision, as it sits in the append-only
+ * store — what a seal or an audit needs and what {@link MindooDBAppDocumentHistoryEntry}
+ * deliberately omits.
+ *
+ * Nothing here requires the document's decryption key. `metadataSignature`
+ * covers the entry id, and an entry id ends in the hash of the *plaintext*
+ * Automerge change, so an outsider can attribute every change to a key and
+ * order the whole edit DAG while learning nothing about what any change
+ * contained.
+ *
+ * Byte fields are base64 rather than `Uint8Array` because these records are
+ * written verbatim into evidence bundles as JSON, and read back years later by
+ * a verifier that has no Haven, no tenant and no network.
+ */
+export interface MindooDBAppRevisionVerification {
+  /** Matches `revisionId` in {@link MindooDBAppDocumentHistoryEntry}. */
+  revisionId: MindooDBAppDocumentRevisionId;
+  /** Store entry id: `<docId>_d_<depsFingerprint>_<automergeChangeHash>`. */
+  entryId: string;
+  entryType: string;
+  docId: string;
+  /** Database name the entry lives under; bound into the witness receipt. */
+  dbid: string;
+  /** SHA-256 of the *encrypted* payload. */
+  contentHash: string;
+  createdAt: number;
+  createdByPublicKey: string;
+  decryptionKeyId: string;
+  dependencyIds: string[];
+  attachmentRefs?: MindooDBAppEntryAttachmentRef[];
+  provenance?: MindooDBAppEntryProvenance;
+  /** Base64 legacy signature, over the ciphertext only. */
+  signature: string;
+  /**
+   * Base64 signature over the canonical metadata layout, which includes the
+   * entry id. Absent on entries written before this field existed — those
+   * cannot be bound to a plaintext change at all, and a verifier must report
+   * them as unattributable rather than pass them.
+   */
+  metadataSignature?: string;
+  /** Epoch ms at which a witnessing server accepted the entry. */
+  receivedAt?: number;
+  receivedByPublicKey?: string;
+  /** Base64 Ed25519 signature by the witness over the receipt layout. */
+  receivedDateSignature?: string;
+  receiptScheme?: string;
+  entryVersion?: number;
+  /**
+   * The tenant's trusted witness keys *as of* `receivedAt`. A receipt is only
+   * worth something if its signer was trusted when it was made, and that set
+   * changes over a tenant's life — so it is resolved at read time and carried
+   * along, not left for the verifier to guess.
+   */
+  trustedWitnessKeys?: string[];
+}
+
+/** Attachment reference bound into an entry's metadata signature. */
+export interface MindooDBAppEntryAttachmentRef {
+  attachmentId: string;
+  lastChunkId: string;
+  size: number;
+}
+
+/** Where a copied entry came from, as recorded in its signed metadata. */
+export interface MindooDBAppEntryProvenance {
+  sourceTenantId: string;
+  sourceDbId: string;
+  source: {
+    entryType: string;
+    id: string;
+    docId: string;
+    decryptionKeyId: string;
+    createdAt: number;
+    dependencyIds: string[];
+    contentHash: string;
+    createdByPublicKey: string;
+    attachmentRefs?: MindooDBAppEntryAttachmentRef[];
+  };
+  /** Base64 signature by the original author. */
+  sourceMetadataSignature?: string;
 }
 
 /** Historical snapshot returned for a document at a specific timestamp. */
@@ -1481,6 +1567,210 @@ export interface MindooDBAppDocumentApi {
     docId: string,
     revisionId: MindooDBAppDocumentRevisionId,
   ): Promise<MindooDBAppHistoricalDocument>;
+  /**
+   * The signatures and witness receipts behind a document's revisions —
+   * everything {@link listHistory} leaves out because a timeline UI does not
+   * need it and an audit cannot do without it.
+   *
+   * Pass `revisionIds` to fetch only the revisions being sealed; omit it for
+   * the whole document. Requires the `history` capability.
+   */
+  listVerification(
+    docId: string,
+    revisionIds?: MindooDBAppDocumentRevisionId[],
+  ): Promise<MindooDBAppRevisionVerification[]>;
+}
+
+/**
+ * Signing with the launching user's MindooDB identity key.
+ *
+ * The app never touches the key, and never signs silently: every call opens a
+ * Haven dialog showing what is about to be signed. Requires the `sign`
+ * capability, which only grants the *right to ask*.
+ */
+export interface MindooDBAppIdentityApi {
+  /**
+   * Ask the user to sign `input.statement` under `input.domain`.
+   *
+   * Resolves with `ok: false` when the user declines or when the preview SVG
+   * does not match the `renderDigest` inside the statement — neither is an
+   * error, and both should leave the app's UI intact.
+   */
+  signStatement(
+    input: MindooDBAppSignStatementInput,
+  ): Promise<MindooDBAppSignStatementResult>;
+}
+
+/** RFC 3161 timestamps over app-supplied digests. */
+export interface MindooDBAppTimestampApi {
+  /**
+   * Obtain a timestamp token. Haven calls a browser-reachable TSA directly
+   * where it can, and otherwise proxies through the tenant's server; the
+   * returned `transport` says which happened.
+   *
+   * A token proves the digest existed *no later than* `genTime`. It cannot
+   * prove a lower bound, and no amount of UI wording should imply otherwise.
+   * Requires the `timestamps` capability.
+   */
+  rfc3161(
+    input: MindooDBAppTimestampInput,
+  ): Promise<MindooDBAppTimestampResult>;
+  /** Providers this host can currently reach, best first. */
+  listProviders(): Promise<MindooDBAppTimestampProvider[]>;
+}
+
+/** Read-only lookups against the tenant's user directory. */
+export interface MindooDBAppDirectoryApi {
+  /**
+   * Resolve the directory's claims about specific signing keys.
+   *
+   * Only the keys asked for are returned, and unknown keys come back with
+   * `status: "unknown"` rather than being dropped — an evidence excerpt should
+   * name the keys it could not resolve. Requires the `directory` capability.
+   */
+  excerpt(publicKeys: string[]): Promise<MindooDBAppDirectoryEntry[]>;
+}
+
+// ---------------------------------------------------------------------------
+// Signing, timestamping and directory excerpts (approval seals)
+// ---------------------------------------------------------------------------
+
+/**
+ * The only signing domain apps may request today. Domain separation is not
+ * decoration: the same Ed25519 key signs store entries and auth challenges, and
+ * an app that could choose its own prefix could have the user unwittingly sign
+ * something that replays as one of those.
+ */
+export const MINDOODB_APP_SEAL_SIGNING_DOMAIN = "mindoodb-seal/v1";
+
+/** What the seal asserts about the material it covers. */
+export type MindooDBAppSealIntent = "approval" | "countersign" | "authorship";
+
+/**
+ * What Haven shows the user before signing.
+ *
+ * This is the WYSIWYS ("what you see is what you sign") surface. The app hands
+ * over the exact picture and wording it wants attested; Haven checks the SVG
+ * against `renderDigest` — which is inside the signed bytes — and refuses to
+ * sign when they disagree. Without that check a signature would attest to bytes
+ * nobody ever looked at.
+ */
+export interface MindooDBAppSignPreview {
+  /** Headline of the consent dialog, e.g. "Approve page 3 of Site survey". */
+  title: string;
+  intent: MindooDBAppSealIntent;
+  /**
+   * SVG source of what is being sealed, shown inline. Haven verifies that its
+   * SHA-256 equals {@link renderDigest} before rendering it.
+   */
+  svg?: string;
+  /** Lower-case hex SHA-256 of `svg`, as it appears in the statement. */
+  renderDigest?: string;
+  /** One row per sealed document, shown as a list the user can read. */
+  scope: MindooDBAppSignPreviewScope[];
+  /** Free-text note that is part of the signed statement. */
+  note?: string;
+}
+
+/** One sealed document as presented in the consent dialog. */
+export interface MindooDBAppSignPreviewScope {
+  label: string;
+  detail?: string;
+}
+
+/** Request to sign a canonical statement with the launching user's identity key. */
+export interface MindooDBAppSignStatementInput {
+  /** Must be {@link MINDOODB_APP_SEAL_SIGNING_DOMAIN}. */
+  domain: string;
+  /** Canonical (RFC 8785) statement bytes. Signed verbatim under `domain`. */
+  statement: Uint8Array;
+  preview: MindooDBAppSignPreview;
+}
+
+/**
+ * Outcome of a signing request.
+ *
+ * Declining is an ordinary outcome, not an error: `ok: false` with a `reason`,
+ * so an app can distinguish "the user said no" from "the bridge broke" without
+ * inspecting error strings.
+ */
+export type MindooDBAppSignStatementResult =
+  | {
+      ok: true;
+      /** Base64 Ed25519 signature over `domain || 0x00 || statement`. */
+      signature: string;
+      /** PEM public key of the signing identity. */
+      publicKey: string;
+      /** Lower-case hex SHA-256 of the DER SubjectPublicKeyInfo. */
+      fingerprint: string;
+      domain: string;
+      /** Client wall-clock at signing. Not evidence — the TSA token is. */
+      signedAt: number;
+    }
+  | {
+      ok: false;
+      reason: "declined" | "render-mismatch";
+    };
+
+/** Request for an RFC 3161 token over a digest the app computed. */
+export interface MindooDBAppTimestampInput {
+  /** Raw digest bytes to be timestamped (32 bytes for SHA-256). */
+  digest: Uint8Array;
+  /** @defaultValue `"SHA-256"` */
+  hashAlgorithm?: "SHA-256" | "SHA-512";
+  /**
+   * Preferred provider id from {@link MindooDBAppTimestampProvider}. Apps name
+   * a provider, never a URL — the URL set is server configuration, so a hostile
+   * app cannot aim the host at an address of its choosing.
+   */
+  providerId?: string;
+  /** Ask the TSA to include its certificate chain in the token. @defaultValue `true` */
+  requestCertificates?: boolean;
+}
+
+/** A timestamp token, with enough context to verify it offline later. */
+export interface MindooDBAppTimestampResult {
+  /** Base64 DER `TimeStampResp`. */
+  token: string;
+  providerId: string;
+  providerName?: string;
+  /** Where the token came from: a direct browser call or the tenant's server. */
+  transport: "direct" | "proxy";
+  /** TSA-asserted time, epoch ms, as parsed from the token. */
+  genTime?: number;
+  policyOid?: string;
+  /** True when the token chains to a root in public trust stores. */
+  rootInPublicTrustStores?: boolean;
+  /** PEM chain extracted from the token, for a verifier with no trust store. */
+  certificateChainPem?: string;
+}
+
+/** A timestamping provider this host can reach. */
+export interface MindooDBAppTimestampProvider {
+  id: string;
+  name: string;
+  /** eIDAS-qualified. Free and non-qualified are the common case. */
+  qualified: boolean;
+  rootInPublicTrustStores: boolean;
+  policyOid?: string;
+  /** Reachable straight from the browser (CORS-enabled), no server needed. */
+  browserReachable: boolean;
+}
+
+/**
+ * One directory entry, for the identity excerpt a bundle carries.
+ *
+ * This is the weakest link in the evidence and the docs say so plainly: it
+ * records what the tenant's directory claimed about a key, which is an
+ * agreement between the parties, not a cryptographic fact.
+ */
+export interface MindooDBAppDirectoryEntry {
+  /** PEM Ed25519 signing key, as it appears in entry metadata. */
+  signingPublicKey: string;
+  fingerprint: string;
+  label?: string;
+  email?: string;
+  status: "active" | "revoked" | "unknown";
 }
 
 export type MindooDBAppViewEntryKind = "category" | "document";
@@ -1849,6 +2139,17 @@ export interface MindooDBAppDatabase {
   info(): Promise<MindooDBAppDatabaseInfo>;
   documents: MindooDBAppDocumentApi;
   attachments: MindooDBAppAttachmentApi;
+  /**
+   * Signing, timestamping and directory lookups.
+   *
+   * These hang off a database rather than the session because each one is
+   * granted per binding and resolves through that binding's tenant — the
+   * signing identity, the server that proxies timestamps and the directory
+   * being quoted are all the tenant's, not the app's.
+   */
+  identity: MindooDBAppIdentityApi;
+  timestamps: MindooDBAppTimestampApi;
+  directory: MindooDBAppDirectoryApi;
   /**
    * Read the database's full-text index configuration from the synced
    * `dbsetup` document. Resolves to `null` when full-text indexing has
