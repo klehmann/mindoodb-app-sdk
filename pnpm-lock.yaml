@@ -19,8 +19,8 @@ importers:
         specifier: 25.5.0
         version: 25.5.0
       mindoodb:
-        specifier: ^0.0.36
-        version: 0.0.36
+        specifier: ^0.0.46
+        version: 0.0.46
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(postcss@8.5.14)(typescript@6.0.3)
@@ -693,8 +693,8 @@ packages:
       tweetnacl:
         optional: true
 
-  mindoodb@0.0.36:
-    resolution: {integrity: sha512-ipwl9+3ruGkMvf9b0aNpMIQFHWhCpaF7eGR5xvWCtVmWNTf9OZkxFXrZWzfgpSeMNT2LarGrbD2QmqtIWyLflA==}
+  mindoodb@0.0.46:
+    resolution: {integrity: sha512-37GkwIzYCQpHd8LUxRs+BTUPXjJ8MNAPpzLYEk9VjfbZowunmqkeCXf3NtUE9BzeedlPQcm4XqrHGYk6DM0vZg==}
     engines: {node: '>=22.13.0'}
     hasBin: true
     peerDependencies:
@@ -1451,7 +1451,7 @@ snapshots:
       minisearch: 7.2.0
       uuid: 10.0.0
 
-  mindoodb@0.0.36:
+  mindoodb@0.0.46:
     dependencies:
       '@automerge/automerge': 3.2.6
       minisearch: 7.2.0
