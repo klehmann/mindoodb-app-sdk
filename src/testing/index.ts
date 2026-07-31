@@ -1472,6 +1472,19 @@ function createDatabaseHandle(
         attachments: [],
       };
     },
+    async getAtHeads(
+      docId: string,
+      _headIds: string[],
+    ): Promise<MindooDBAppHistoricalDocument> {
+      return {
+        id: docId,
+        timestamp: Date.now(),
+        heads: [],
+        state: "missing",
+        data: null,
+        attachments: [],
+      };
+    },
     async listVerification(): Promise<MindooDBAppRevisionVerification[]> {
       return [];
     },
@@ -2427,6 +2440,14 @@ export function createFakeBridgeHost(
           .documents.getAtRevision(
             String(params.docId),
             String(params.revisionId),
+            params.phase === "before" ? { phase: "before" } : undefined,
+          );
+      case "documents.history.getAtHeads":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getAtHeads(
+            String(params.docId),
+            Array.isArray(params.headIds) ? params.headIds.map(String) : [],
           );
       case "documents.history.listVerification":
         return await state

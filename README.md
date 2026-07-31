@@ -418,7 +418,8 @@ const history = await db.documents.listHistory(docId);
 //   identityLabel?,
 //   isDeleted,
 //   isCurrent,
-//   summary?
+//   summary?,
+//   dependencyIds?
 // }
 
 // Load the document state at an exact DAG revision
@@ -445,6 +446,27 @@ const pointInTime = await db.documents.getAtTimestamp(
 ```
 
 Historical snapshots include the document data payload as it existed at that revision. When the snapshot has attachments, `attachments` reflects the historical `_attachments` array for that same revision, including the attachment reference that Haven needs to stop at the correct historical `lastChunkId`.
+
+#### What one revision changed
+
+To show a diff, you need both sides of a revision. Pass `{ phase: "before" }` to read the state the revision was written against instead of the state it produced:
+
+```ts
+const after = await db.documents.getAtRevision(docId, revisionId);
+const before = await db.documents.getAtRevision(docId, revisionId, {
+  phase: "before",
+});
+```
+
+`before` is always a single document, even when the revision merged concurrent branches: it is the merge of all its parents, which is exactly what its author had loaded. For the document's creation there is no prior state, so `before` reports `state: "missing"`.
+
+The `dependencyIds` on each history entry are that revision's parents — the edges of the signed change graph. Since a timeline is only one linearization of that graph, use them to draw or walk the graph itself, and `getAtHeads` to materialize any point in it:
+
+```ts
+const merged = await db.documents.getAtHeads(docId, entry.dependencyIds ?? []);
+```
+
+An id in `dependencyIds` may name a revision the timeline does not list, because a change that left the document state untouched produces no timeline row. Draw only the edges whose endpoints you have; `getAtHeads` still resolves the full list.
 
 ### Granular JSON edits
 
@@ -1451,7 +1473,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `undelete(docId)`                  | `Promise<{ ok: true }>`                      |
 | `listHistory(docId)`               | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>`     |
-| `getAtRevision(docId, revisionId)` | `Promise<MindooDBAppHistoricalDocument>`     |
+| `getAtRevision(docId, revisionId, opts?)` | `Promise<MindooDBAppHistoricalDocument>` |
+| `getAtHeads(docId, headIds)`       | `Promise<MindooDBAppHistoricalDocument>`     |
 
 `getAutomergeSnapshot` and `applyAutomergeChanges` are **discouraged** escape-hatch APIs for binary Automerge sync. Prefer `set`/`unset` and JSON patches (`text`, `richText`, `json`) instead. See [Automerge binary sync (advanced)](#automerge-binary-sync-advanced).
 

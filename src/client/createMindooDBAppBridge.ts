@@ -1069,11 +1069,18 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           docId,
           timestamp,
         }),
-      getAtRevision: async (docId, revisionId) =>
+      getAtRevision: async (docId, revisionId, options) =>
         await this.rpc.call("documents.history.getAtRevision", {
           databaseId: this.databaseId,
           docId,
           revisionId,
+          phase: options?.phase,
+        }),
+      getAtHeads: async (docId, headIds) =>
+        await this.rpc.call("documents.history.getAtHeads", {
+          databaseId: this.databaseId,
+          docId,
+          headIds,
         }),
       listVerification: async (docId, revisionIds) =>
         await this.rpc.call("documents.history.listVerification", {

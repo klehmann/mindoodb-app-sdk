@@ -349,6 +349,78 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
   });
 
+  it("sends the revision phase and head list on history reads", async () => {
+    const requestParams = new Map<string, unknown>();
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          requestParams.set(message.method, message.params);
+          port.postMessage({
+            protocol: "mindoodb-app-bridge",
+            kind: "success",
+            id: message.id,
+            result: message.method === "session.openDatabase"
+              ? { ok: true }
+              : { id: "doc-1", state: "exists", data: {}, attachments: [] },
+          });
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-history-phase",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await database.documents.getAtRevision("doc-1", "rev-merge", { phase: "before" });
+    await database.documents.getAtHeads("doc-1", ["rev-a", "rev-b"]);
+
+    expect(requestParams.get("documents.history.getAtRevision")).toEqual({
+      databaseId: "main",
+      docId: "doc-1",
+      revisionId: "rev-merge",
+      phase: "before",
+    });
+    expect(requestParams.get("documents.history.getAtHeads")).toEqual({
+      databaseId: "main",
+      docId: "doc-1",
+      headIds: ["rev-a", "rev-b"],
+    });
+
+    // Callers that omit the option must keep the host's "after" default.
+    await database.documents.getAtRevision("doc-1", "rev-merge");
+    expect(requestParams.get("documents.history.getAtRevision")).toEqual({
+      databaseId: "main",
+      docId: "doc-1",
+      revisionId: "rev-merge",
+      phase: undefined,
+    });
+  });
+
   it("streams attachment uploads and downloads over the bridge port", async () => {
     let writeChunk: Uint8Array | null = null;
     let readRequests = 0;

@@ -795,6 +795,62 @@ describe("mindoodb-app-sdk/testing", () => {
     host.dispose();
   });
 
+  it("carries DAG parents, the revision phase, and head sets to the host", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const host = createFakeBridgeHost({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read"],
+        },
+        methods: {
+          documents: {
+            async listHistory() {
+              return [{
+                revisionId: "rev-merge",
+                timestamp: 3,
+                publicKey: "pk-1",
+                isDeleted: false,
+                isCurrent: true,
+                dependencyIds: ["rev-a", "rev-b"],
+              }];
+            },
+            async getAtRevision(docId, revisionId, options) {
+              calls.push({ call: "getAtRevision", docId, revisionId, phase: options?.phase });
+              return { id: docId, revisionId, timestamp: 3, state: "missing", data: null, attachments: [] };
+            },
+            async getAtHeads(docId, headIds) {
+              calls.push({ call: "getAtHeads", docId, headIds });
+              return { id: docId, timestamp: 3, state: "missing", data: null, attachments: [] };
+            },
+          },
+        },
+      }],
+    });
+
+    host.install();
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+
+    // A merge's parents are what a change-graph view draws its edges from.
+    await expect(database.documents.listHistory("doc-1")).resolves.toMatchObject([
+      { revisionId: "rev-merge", dependencyIds: ["rev-a", "rev-b"] },
+    ]);
+
+    await database.documents.getAtRevision("doc-1", "rev-merge", { phase: "before" });
+    await database.documents.getAtRevision("doc-1", "rev-merge");
+    await database.documents.getAtHeads("doc-1", ["rev-a", "rev-b"]);
+
+    expect(calls).toEqual([
+      { call: "getAtRevision", docId: "doc-1", revisionId: "rev-merge", phase: "before" },
+      { call: "getAtRevision", docId: "doc-1", revisionId: "rev-merge", phase: undefined },
+      { call: "getAtHeads", docId: "doc-1", headIds: ["rev-a", "rev-b"] },
+    ]);
+
+    host.dispose();
+  });
+
   it("delivers navigator onDidUpdate pushes emitted by the fake host", async () => {
     const host = createFakeBridgeHost({
       databases: [{

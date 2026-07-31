@@ -341,7 +341,30 @@ export interface MindooDBAppDocumentHistoryEntry {
   isDeleted: boolean;
   isCurrent: boolean;
   summary?: string;
+  /**
+   * The revisions this one was written on top of — the edges of the signed
+   * change graph, in the same id space as {@link revisionId}. More than one id
+   * means this revision merged concurrent branches.
+   *
+   * A timeline is a linearization of that graph, so an id here may name a
+   * revision the timeline does not list (a change that left the document state
+   * untouched produces no timeline row). Draw only the edges whose endpoints you
+   * have; use {@link MindooDBAppDocumentHistoryApi.getAtHeads} to reconstruct
+   * state from the full list.
+   */
+  dependencyIds?: string[];
 }
+
+/**
+ * Which side of a revision to read: the state it produced (`after`, the
+ * default), or the state it was written against (`before`).
+ *
+ * `before` is a single document even for a revision that merged several
+ * branches: it is the merge of all its parents, which is what its author had
+ * loaded. For the document's creation there is no prior state, so `before`
+ * reports a `missing` snapshot.
+ */
+export type MindooDBAppRevisionPhase = "before" | "after";
 
 /**
  * The cryptographic record behind one revision, as it sits in the append-only
@@ -1562,10 +1585,30 @@ export interface MindooDBAppDocumentApi {
    * identifiers — the preferred way to load historical states and the value
    * to pass to historical attachment APIs. Requires the `history`
    * capability.
+   *
+   * Pass `{ phase: "before" }` to read the state the revision was written
+   * against instead of the state it produced, which is how you show what one
+   * revision changed. See {@link MindooDBAppRevisionPhase}.
    */
   getAtRevision(
     docId: string,
     revisionId: MindooDBAppDocumentRevisionId,
+    options?: { phase?: MindooDBAppRevisionPhase },
+  ): Promise<MindooDBAppHistoricalDocument>;
+  /**
+   * Read-only snapshot of the document as it stood at a set of concurrent
+   * revisions: the merge of those heads, with nothing that came after them.
+   *
+   * Use it to reconstruct a specific point in the change graph rather than in
+   * the timeline — for example, pass a revision's
+   * {@link MindooDBAppDocumentHistoryEntry.dependencyIds} to see exactly the
+   * document its author was editing. An empty or unresolvable head list means
+   * there was no document yet and reports a `missing` snapshot. Requires the
+   * `history` capability.
+   */
+  getAtHeads(
+    docId: string,
+    headIds: MindooDBAppDocumentRevisionId[],
   ): Promise<MindooDBAppHistoricalDocument>;
   /**
    * The signatures and witness receipts behind a document's revisions —
