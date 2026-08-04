@@ -873,6 +873,7 @@ describe("mindoodb-app-sdk/testing", () => {
           name: "status",
           role: "category",
           expression: { kind: "field", path: "status" },
+          sorting: "ascending",
         }],
       },
     });
@@ -897,5 +898,158 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(updates).toHaveLength(1);
 
     host.dispose();
+  });
+});
+
+describe("evaluating VirtualView navigators", () => {
+  it("filters seeded documents with the view definition expression", async () => {
+    const { createViewLanguage } = await import("mindoodb-view-language");
+    const v = createViewLanguage();
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "teacher_core",
+          title: "Core",
+          capabilities: ["read", "views"],
+        },
+        documents: [
+          {
+            id: "obs_a",
+            data: { type: "observation", classGroupId: "cls_a", title: "A" },
+          },
+          {
+            id: "obs_b",
+            data: { type: "observation", classGroupId: "cls_b", title: "B" },
+          },
+          {
+            id: "task_a",
+            data: {
+              type: "task",
+              context: { classGroupId: "cls_a" },
+              title: "Task A",
+            },
+          },
+        ],
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const navigator = await session.createViewNavigator({
+      databaseIds: ["teacher_core"],
+      categorizationStyle: "category_then_document",
+      definition: {
+        id: "class-scoped-test-v1",
+        title: "Class scoped",
+        filter: {
+          mode: "expression",
+          expression: v.and(
+            v.or(
+              v.eq(v.field("type"), "observation"),
+              v.eq(v.field("type"), "task"),
+            ),
+            v.eq(
+              v.coalesce(v.field("classGroupId"), v.field("context.classGroupId")),
+              "cls_a",
+            ),
+          ),
+        },
+        columns: [
+          {
+            name: "type",
+            role: "category",
+            expression: v.field("type"),
+            sorting: "ascending",
+          },
+          {
+            name: "title",
+            role: "display",
+            expression: v.field("title"),
+            sorting: "ascending",
+          },
+          {
+            name: "sourceType",
+            role: "display",
+            expression: v.field("type"),
+          },
+        ],
+      },
+      options: {
+        includeCategories: false,
+        includeDocuments: true,
+        hideEmptyCategories: true,
+      },
+    });
+
+    await navigator.expandAll();
+    const page = await navigator.entriesForward({ limit: 100 });
+    const docIds = page.entries
+      .filter((entry) => entry.kind === "document")
+      .map((entry) => entry.docId)
+      .sort();
+
+    expect(docIds).toEqual(["obs_a", "task_a"]);
+    await navigator.dispose();
+  });
+
+  it("supports calendar-style childDocumentsBetween on sorted display columns", async () => {
+    const { createViewLanguage } = await import("mindoodb-view-language");
+    const v = createViewLanguage();
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "events",
+          title: "Events",
+          capabilities: ["read", "views"],
+        },
+        documents: [
+          { id: "evt_before", data: { startsAt: "2026-09-01T00:00:00.000", title: "Before" } },
+          { id: "evt_in", data: { startsAt: "2026-10-15T08:00:00.000", title: "In range" } },
+          { id: "evt_after", data: { startsAt: "2026-11-20T00:00:00.000", title: "After" } },
+        ],
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const navigator = await session.createViewNavigator({
+      databaseIds: ["events"],
+      categorizationStyle: "category_then_document",
+      definition: {
+        id: "calendar-range-test-v1",
+        title: "Calendar",
+        columns: [
+          {
+            name: "calendarBucket",
+            role: "category",
+            expression: v.literal("calendar"),
+            sorting: "ascending",
+          },
+          {
+            name: "calendarStart",
+            role: "display",
+            expression: v.field("startsAt"),
+            sorting: "ascending",
+          },
+          {
+            name: "title",
+            role: "display",
+            expression: v.field("title"),
+          },
+        ],
+      },
+      options: {
+        includeCategories: true,
+        includeDocuments: true,
+        hideEmptyCategories: true,
+      },
+    });
+
+    const category = await navigator.findCategoryEntryByParts(["calendar"]);
+    expect(category).not.toBeNull();
+    const entries = await navigator.childDocumentsBetween(category!.key, {
+      startKey: "2026-10-01T00:00:00.000",
+      endKey: "2026-10-31T23:59:59.999",
+    });
+    expect(entries.map((entry) => entry.docId)).toEqual(["evt_in"]);
+    await navigator.dispose();
   });
 });

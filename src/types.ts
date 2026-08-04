@@ -2111,6 +2111,35 @@ export interface MindooDBAppViewNavigator {
  * `timestamp`/`revisionId` options) additionally require `history`, and
  * mutations (`openWriteStream`, `remove`, `scan`) require `update`.
  */
+/**
+ * Output format for {@link MindooDBAppAttachmentApi.extractText}.
+ * `"markdown"` (default) keeps anydoc's GFM; `"plainText"` strips markup.
+ * OCR / plain-file paths return the same string for either value.
+ */
+export type MindooDBAppExtractTextFormat = "markdown" | "plainText";
+
+/** Bytes-in extraction request for {@link MindooDBAppAttachmentApi.extractText}. */
+export interface MindooDBAppExtractDocumentTextInput {
+  bytes: Uint8Array;
+  mimeType: string;
+  fileName?: string;
+  /** Default `"markdown"`. */
+  format?: MindooDBAppExtractTextFormat;
+  /** Optional OCR language hints when the host falls back to OCR. */
+  languages?: string[];
+}
+
+/** Result of {@link MindooDBAppAttachmentApi.extractText}. */
+export interface MindooDBAppExtractDocumentTextResult {
+  text: string;
+  /** False when the host has no extractor for this format. */
+  handled: boolean;
+  /** Resolved output format (defaults to `"markdown"`). */
+  format: MindooDBAppExtractTextFormat;
+  /** Engine label, e.g. `anydoc@0.1.2` or `tesseract`. */
+  engine?: string;
+}
+
 export interface MindooDBAppAttachmentApi {
   /**
    * Attachment metadata of a document. Pass `options.revisionId` (preferred
@@ -2174,6 +2203,15 @@ export interface MindooDBAppAttachmentApi {
     attachmentName: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<{ ok: true }>;
+  /**
+   * Extract searchable / displayable text from document bytes the app already
+   * holds (e.g. after {@link openReadStream}). Haven runs anydoc for Office/PDF
+   * (Markdown by default), UTF-8 decode for plain text, and OCR for images /
+   * scanned PDFs. Requires the `attachments` capability.
+   */
+  extractText(
+    input: MindooDBAppExtractDocumentTextInput,
+  ): Promise<MindooDBAppExtractDocumentTextResult>;
 }
 
 /** Database handle returned from `session.openDatabase()`. */

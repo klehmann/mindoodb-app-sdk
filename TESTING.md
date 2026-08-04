@@ -15,10 +15,13 @@ import {
 The testing entrypoint emulates document storage with real Automerge documents,
 so `@automerge/automerge` is declared as an optional peer dependency. Add it to
 your app's `devDependencies` when you import `mindoodb-app-sdk/testing`
-(the runtime SDK entrypoint does not need it):
+(the runtime SDK entrypoint does not need it).
+
+Evaluating VirtualViews also need the optional `mindoodb` peer (same core engine
+Haven uses):
 
 ```bash
-pnpm add -D @automerge/automerge
+pnpm add -D @automerge/automerge mindoodb
 ```
 
 ## Pick a level
@@ -99,10 +102,63 @@ When you pass `databases`, the mock session also exposes them through `session.g
 Each database entry can provide:
 
 - `info`
+- `documents` — seed documents into the mock store (used by `list`/`query` and by evaluating VirtualViews)
 - `methods.documents`
-- `methods.views` for session-level `createView()` and `openView()` calls
+- `methods.views` for session-level `createView()` and `openView()` calls (overrides the default evaluating navigator)
 - `methods.attachments`
 - `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.
+
+### Evaluating VirtualViews
+
+With the optional `mindoodb` peer installed (`pnpm add -D mindoodb`),
+`session.createViewNavigator({ definition, databaseIds })` evaluates the view
+definition against seeded (and later created) documents using the same
+VirtualView engine Haven uses. That means class-scoped filters,
+`childDocumentsBetween`, and multi-database origins work in Vitest without a
+full Haven host:
+
+```ts
+import { createViewLanguage } from "mindoodb-view-language";
+import { createMockMindooDBAppSession } from "mindoodb-app-sdk/testing";
+
+const v = createViewLanguage();
+const mock = createMockMindooDBAppSession({
+  databases: [{
+    info: { id: "teacher_core", title: "Core", capabilities: ["read", "views"] },
+    documents: [
+      { id: "obs_a", data: { type: "observation", classGroupId: "cls_a" } },
+      { id: "obs_b", data: { type: "observation", classGroupId: "cls_b" } },
+    ],
+  }],
+});
+
+const navigator = await mock.session.createViewNavigator({
+  databaseIds: ["teacher_core"],
+  definition: {
+    id: "class-detail-v1",
+    title: "Class",
+    filter: {
+      mode: "expression",
+      expression: v.and(
+        v.eq(v.field("type"), "observation"),
+        v.eq(v.field("classGroupId"), "cls_a"),
+      ),
+    },
+    columns: [
+      { name: "type", role: "category", expression: v.field("type") },
+      { name: "sourceType", role: "display", expression: v.field("type") },
+    ],
+  },
+  options: { includeCategories: false, includeDocuments: true },
+});
+
+await navigator.expandAll();
+const page = await navigator.entriesForward({ limit: 100 });
+// page.entries → only obs_a
+```
+
+Without `mindoodb`, the testing entrypoint falls back to an empty navigator and
+logs a warning — install the peer for realistic view tests.
 
 The default in-memory document store also implements `documents.query()` and `documents.liveQuery()`: expression and formula-string filters are evaluated against the seeded documents, `sortBy`/`limit`/`offset` work as documented, and live query callbacks fire automatically after `create`/`update`/`delete`/`undelete` mutations. Full-text `text` clauses are supported with a deterministic mock implementation (token matching with prefix/AND semantics and an occurrence-count `textScore`) — assert on membership and relative ordering, not absolute scores, since real hosts use a BM25-style engine. That means app code built on queries and live queries is testable at Level 1 without any extra setup:
 

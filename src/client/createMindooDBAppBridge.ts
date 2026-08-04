@@ -1246,6 +1246,16 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           revisionId: options?.revisionId,
         });
       },
+      extractText: async (input) => {
+        return await this.rpc.call("attachments.extractText", {
+          databaseId: this.databaseId,
+          bytes: input.bytes,
+          mimeType: input.mimeType,
+          fileName: input.fileName,
+          format: input.format,
+          languages: input.languages,
+        });
+      },
     };
   }
 

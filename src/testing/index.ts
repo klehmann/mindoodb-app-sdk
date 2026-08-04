@@ -3,6 +3,10 @@ import {
   evaluateExpression,
   parseMindooDBFormulaBooleanExpression,
 } from "mindoodb-view-language";
+import {
+  createEvaluatingViewNavigator,
+  type EvaluatingViewDocument,
+} from "./evaluatingViewNavigator.js";
 import type {
   MindooDBAppAttachmentApi,
   MindooDBAppBridge,
@@ -1083,11 +1087,25 @@ async function mockSha256Hex(value: string): Promise<string | null> {
 
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
-): MindooDBAppDatabase {
+): {
+  handle: MindooDBAppDatabase;
+  listViewDocuments: () => EvaluatingViewDocument[];
+} {
   let createCounter = 0;
   let changeCounter = 0;
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
+
+  for (const seed of definition.documents ?? []) {
+    storedDocuments.set(seed.id, {
+      id: seed.id,
+      data: structuredClone(seed.data),
+      heads: seed.heads ? [...seed.heads] : undefined,
+      attachments: seed.attachments ? structuredClone(seed.attachments) : [],
+      updatedAt: seed.updatedAt ?? new Date().toISOString(),
+      isDeleted: seed.isDeleted ?? false,
+    });
+  }
 
   type MockLiveQuerySubscription = {
     query?: MindooDBAppDocumentQuery;
@@ -1619,6 +1637,16 @@ function createDatabaseHandle(
     ) {
       return { ok: true as const };
     },
+    async extractText(input) {
+      const format = input.format ?? "markdown";
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(input.bytes);
+      return {
+        text,
+        handled: true,
+        format,
+        engine: "mock-utf-8",
+      };
+    },
   };
 
   const methods: MockDatabaseMethods = definition.methods ?? {};
@@ -1627,7 +1655,7 @@ function createDatabaseHandle(
   let extractionSetup: MindooDBAppExtractionSetup | null =
     definition.extractionSetup ?? null;
 
-  return {
+  const databaseHandle: MindooDBAppDatabase = {
     async info() {
       return {
         ...definition.info,
@@ -1667,6 +1695,19 @@ function createDatabaseHandle(
       extractionSetup = config === null ? null : { ...config };
     },
   };
+
+  return {
+    handle: databaseHandle,
+    listViewDocuments: () =>
+      Array.from(storedDocuments.values())
+        .filter((document) => !document.isDeleted)
+        .map((document) => ({
+          origin: definition.info.id,
+          docId: document.id,
+          data: structuredClone(document.data),
+          createdAt: document.updatedAt ?? null,
+        })),
+  };
 }
 
 type MockSessionState = {
@@ -1704,6 +1745,7 @@ function createMockSessionState(
   >();
   const localeListeners = new Set<(locale: string) => void>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
+  const databaseViewDocumentLists = new Map<string, () => EvaluatingViewDocument[]>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
@@ -1733,15 +1775,27 @@ function createMockSessionState(
 
   const setDatabases = (definitions: MockMindooDBAppDatabaseDefinition[]) => {
     databaseHandles.clear();
+    databaseViewDocumentLists.clear();
     databaseViewApis.clear();
     databaseInfos = definitions.map((definition) => ({
       ...definition.info,
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
-      databaseHandles.set(definition.info.id, createDatabaseHandle(definition));
+      const created = createDatabaseHandle(definition);
+      databaseHandles.set(definition.info.id, created.handle);
+      databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
       databaseViewApis.set(definition.info.id, {
-        async create(_input: MindooDBAppCreateViewNavigatorInput) {
+        async create(input: MindooDBAppCreateViewNavigatorInput) {
+          const documents = input.databaseIds.flatMap((databaseId) => {
+            const list = databaseViewDocumentLists.get(databaseId);
+            return list ? list() : [];
+          });
+          const evaluating = await createEvaluatingViewNavigator(input, documents);
+          if (evaluating) return evaluating;
+          console.warn(
+            "[mindoodb-app-sdk/testing] mindoodb peer not available; using empty view navigator. Install mindoodb as a devDependency for evaluating VirtualViews.",
+          );
           return await createDefaultViewNavigator();
         },
         async open(_viewId: string) {
@@ -1910,9 +1964,24 @@ function createMockSessionState(
   };
 }
 
+export interface MockSeedDocument {
+  id: string;
+  data: Record<string, unknown>;
+  updatedAt?: string;
+  isDeleted?: boolean;
+  heads?: string[];
+  attachments?: MindooDBAppDocument["attachments"];
+}
+
 export interface MockMindooDBAppDatabaseDefinition {
   info: MindooDBAppDatabaseInfo;
   methods?: MockDatabaseMethods;
+  /**
+   * Documents pre-loaded into the mock database store. Used by
+   * `documents.list` / `query` and by the evaluating VirtualView navigator
+   * (`session.createViewNavigator`).
+   */
+  documents?: MockSeedDocument[];
   /**
    * Initial full-text configuration returned by `getFulltextSetup()`.
    * `setFulltextSetup()` overwrites it for the lifetime of the handle.
@@ -1951,6 +2020,12 @@ export interface MockMindooDBAppSessionController {
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   emitLocaleChange(locale: string): void;
 }
+
+export {
+  createEvaluatingViewNavigator,
+  loadMindoodbForTesting,
+  type EvaluatingViewDocument,
+} from "./evaluatingViewNavigator.js";
 
 export function createMockMindooDBAppSession(
   options: CreateMockMindooDBAppSessionOptions = {},
@@ -2561,6 +2636,28 @@ export function createFakeBridgeHost(
                 ? { timestamp: params.timestamp }
                 : undefined,
           );
+      case "attachments.extractText":
+        return await state.getDatabase(String(params.databaseId)).attachments.extractText({
+          bytes:
+            params.bytes instanceof Uint8Array
+              ? params.bytes
+              : new Uint8Array(
+                  params.bytes instanceof ArrayBuffer
+                    ? params.bytes
+                    : Array.isArray(params.bytes)
+                      ? params.bytes
+                      : [],
+                ),
+          mimeType: typeof params.mimeType === "string" ? params.mimeType : "",
+          fileName: typeof params.fileName === "string" ? params.fileName : undefined,
+          format:
+            params.format === "plainText" || params.format === "markdown"
+              ? params.format
+              : undefined,
+          languages: Array.isArray(params.languages)
+            ? params.languages.filter((entry): entry is string => typeof entry === "string")
+            : undefined,
+        });
       case "attachments.preparePreviewSession":
         return await state
           .getDatabase(String(params.databaseId))

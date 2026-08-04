@@ -990,8 +990,32 @@ const setup = await db.getFulltextSetup(); // null when never configured
 ```
 
 - Without `include`, every non-underscore top-level field with extractable text is indexed (auto mode). Pass `include: ["subject", "body"]` to pin the indexed fields, including nested/long-text fields outside the summary buffer.
-- `attachments: true` indexes attachment text under the synthetic `_attachments` field using the host's extractors (Haven ships PDF, Office, and plain-text extractors). Restrict a query to attachment content with `text: { query, fields: ["_attachments"] }`.
+- `attachments: true` indexes attachment text under the synthetic `_attachments` field using the host's extractors (Haven ships anydoc for Office/PDF/… plus plain-text extractors). Restrict a query to attachment content with `text: { query, fields: ["_attachments"] }`.
 - Changing the configuration (including `language`) rebuilds the index in the background; queries during the rebuild report `coverage: "rebuilding"`.
+
+**Extracting text from bytes you already have** (requires `attachments`):
+
+```ts
+const stream = await db.attachments.openReadStream(docId, fileName);
+const chunks: Uint8Array[] = [];
+for (;;) {
+  const chunk = await stream.read();
+  if (chunk === null) break;
+  chunks.push(chunk);
+}
+await stream.close();
+const bytes = concatUint8Arrays(chunks); // your helper
+
+const { text, handled, format, engine } = await db.attachments.extractText({
+  bytes,
+  mimeType: "application/pdf",
+  fileName,
+  format: "markdown", // default — or "plainText"
+});
+if (handled) {
+  console.log(engine, format, text.slice(0, 200));
+}
+```
 
 **Live queries** keep a query result up to date. The callback receives the initial result and runs again whenever the result actually changed — the host coalesces bursts of writes and fingerprints results, so you only hear about real changes:
 
@@ -1387,7 +1411,7 @@ You do **not** need a full Haven environment to test apps that use `mindoodb-app
 
 The SDK ships a dedicated `mindoodb-app-sdk/testing` entrypoint with two levels of test helpers:
 
-- **Level 1 -- app tests:** Returns a fake `MindooDBAppSession` and bridge for unit, composable, store, and component tests. No `postMessage` or `MessageChannel` involved.
+- **Level 1 -- app tests:** Returns a fake `MindooDBAppSession` and bridge for unit, composable, store, and component tests. No `postMessage` or `MessageChannel` involved. With the optional `mindoodb` peer, `createViewNavigator` evaluates view definitions against seeded documents (same VirtualView engine as Haven).
 - **Level 2 -- bridge protocol tests:** A fake host harness that exercises the real `createMindooDBAppBridge()` handshake over `postMessage` and `MessageChannel`. Useful for integration-style tests.
 
 Use Level 1 when you are testing app behavior. Use Level 2 when you want to validate the bridge transport itself.
