@@ -565,9 +565,11 @@ export interface MindooDBAppCreateDocumentInput {
   decryptionKeyId?: string;
   /**
    * Optional caller-provided document id. When omitted, MindooDB generates a
-   * UUID7. When provided, the id must match `^[A-Za-z][A-Za-z0-9_]*$`: the
-   * first character is an ASCII letter and subsequent characters may be ASCII
-   * letters, ASCII digits, or `_`.
+   * MongoDB-style ObjectId (24 lowercase hex characters). When provided, the id
+   * must match `^[a-z][a-z0-9_]*$`: the first character is a lowercase ASCII
+   * letter and subsequent characters may be lowercase ASCII letters, ASCII
+   * digits, or `_`. Uppercase is rejected because ids end up in on-disk
+   * filenames, and those file systems are case-insensitive.
    *
    * If a document with this id already exists locally, MindooDB returns the
    * existing document instead of creating a new one (idempotent create), and

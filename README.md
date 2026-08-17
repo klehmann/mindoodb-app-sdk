@@ -326,7 +326,7 @@ const window = await db.documents.list({
 // Read
 const doc = await db.documents.get(docId);
 
-// Create (MindooDB generates a UUID7 id; optionally use a named document key)
+// Create (MindooDB generates an ObjectId; optionally use a named document key)
 const created = await db.documents.create({
   set: { title: "Meeting notes", content: "..." },
   decryptionKeyId: "team-key", // omit to use "default"
@@ -335,15 +335,16 @@ const created = await db.documents.create({
 // Create with a caller-provided id (e.g. a known well-known document the app
 // always loads on launch, or migrating an id from another system).
 const settings = await db.documents.create({
-  id: "AppSettings",
+  id: "appsettings",
   set: { theme: "dark" },
 });
 // Subsequent calls with the same id return the existing document and DO NOT
 // overwrite `set`, so `documents.create({ id })` is safe to call on every app
 // launch as a "create-if-missing" primitive. Custom ids must match
-// /^[A-Za-z][A-Za-z0-9_]*$/ (first char must be a letter, subsequent chars
-// may be letters, digits, or `_`). Documents created with the same custom id
-// on different replicas merge correctly when synced.
+// /^[a-z][a-z0-9_]*$/ (lowercase only — ids become on-disk filenames, which are
+// case-insensitive: first char must be a lowercase letter, subsequent chars may
+// be lowercase letters, digits, or `_`). Documents created with the same custom
+// id on different replicas merge correctly when synced.
 
 // Update top-level fields
 const updated = await db.documents.update(docId, {
@@ -1504,7 +1505,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
-For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; id?: string }`. The optional `id` lets the app pick the document id instead of letting MindooDB generate a UUID7; when provided it must match `/^[A-Za-z][A-Za-z0-9_]*$/` and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
+For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; id?: string }`. The optional `id` lets the app pick the document id instead of letting MindooDB generate an ObjectId; when provided it must match `/^[a-z][a-z0-9_]*$/` (lowercase only, since ids become on-disk filenames) and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
 
 `delete(docId)` writes a lifecycle tombstone; it does not erase the document body from the append-only history. Use `undelete(docId)` to make the latest document state live again. If you want to record a deletion reason, first call `update(docId, { set: { intendedDeletionReason: "..." } })`, then call `delete(docId)`.
 

@@ -190,13 +190,13 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     const session = await createMindooDBAppBridge().connect();
     const database = await session.openDatabase("main");
     await expect(database.documents.create({
-      id: "AppSettings",
+      id: "appsettings",
       set: {
         title: "Settings",
       },
       decryptionKeyId: "payroll",
     })).resolves.toEqual({
-      id: "AppSettings",
+      id: "appsettings",
       data: {
         title: "Settings",
       },
@@ -204,7 +204,7 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
 
     expect(createInput).toEqual({
-      id: "AppSettings",
+      id: "appsettings",
       set: {
         title: "Settings",
       },

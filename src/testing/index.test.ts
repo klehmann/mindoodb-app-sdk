@@ -185,25 +185,25 @@ describe("mindoodb-app-sdk/testing", () => {
     const session = await mock.bridge.connect();
     const database = await session.openDatabase("main");
     const created = await database.documents.create({
-      id: "AppSettings",
+      id: "appsettings",
       set: {
         title: "Initial",
       },
     });
-    expect(created.id).toBe("AppSettings");
+    expect(created.id).toBe("appsettings");
 
     const reCreated = await database.documents.create({
-      id: "AppSettings",
+      id: "appsettings",
       set: {
         title: "Should not overwrite",
       },
     });
-    expect(reCreated.id).toBe("AppSettings");
+    expect(reCreated.id).toBe("appsettings");
     expect(reCreated.data).toEqual({ title: "Initial" });
 
-    const fetched = await database.documents.get("AppSettings");
+    const fetched = await database.documents.get("appsettings");
     expect(fetched).toMatchObject({
-      id: "AppSettings",
+      id: "appsettings",
       data: { title: "Initial" },
       attachments: [],
     });
