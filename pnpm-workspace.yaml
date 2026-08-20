@@ -1,0 +1,6 @@
+# pnpm 11 reads security policy settings from pnpm-workspace.yaml, not .npmrc.
+# Keep first-party releases installable immediately after publishing.
+minimumReleaseAgeExclude:
+  - mindoodb
+  - mindoodb-app-sdk
+  - mindoodb-view-language
