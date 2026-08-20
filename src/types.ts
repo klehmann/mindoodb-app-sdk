@@ -554,6 +554,23 @@ export interface MindooDBAppAccessDecision {
 }
 
 /**
+ * Options for person-bound (`recipients`) encryption.
+ *
+ * Matches MindooDB `recipientOptions`. The launching user is included as a
+ * reader unless {@link includeSelf} is `false`.
+ */
+export interface MindooDBAppRecipientOptions {
+  /**
+   * When `false`, the launching user is not added as a reader. Use this to
+   * create a document for someone else (a drop box): `set` still writes the
+   * initial values, then only `recipients` can decrypt later. Defaults to
+   * `true`. Empty `recipients` with `includeSelf: false` is rejected by the
+   * host — it would produce a document nobody can read.
+   */
+  includeSelf?: boolean;
+}
+
+/**
  * Payload used when creating a new document.
  *
  * `set` becomes the initial top-level document state, mirroring the update
@@ -563,6 +580,15 @@ export interface MindooDBAppCreateDocumentInput {
   set: Record<string, unknown>;
   /** Optional named document key. Defaults to `"default"` when omitted. */
   decryptionKeyId?: string;
+  /**
+   * Usernames to encrypt this new document for (person-bound User-Keys).
+   * Mutually exclusive with {@link decryptionKeyId}. The launching user is
+   * included by the host unless {@link recipientOptions}.includeSelf is
+   * `false`.
+   */
+  recipients?: string[];
+  /** Sealed-create options. Only used when {@link recipients} is set. */
+  recipientOptions?: MindooDBAppRecipientOptions;
   /**
    * Optional caller-provided document id. When omitted, MindooDB generates a
    * MongoDB-style ObjectId (24 lowercase hex characters). When provided, the id
@@ -1516,6 +1542,37 @@ export interface MindooDBAppDocumentApi {
     patch: MindooDBAppUpdateDocumentInput,
   ): Promise<MindooDBAppDocument>;
   /**
+   * Add readers to a document created with {@link MindooDBAppCreateDocumentInput.recipients}.
+   * One key wrap per new user, no rotation — new readers can decrypt the
+   * whole history. The launching user is already on the list and does not
+   * need to be passed. Requires the `update` capability.
+   */
+  addRecipients(
+    docId: string,
+    recipients: string[],
+  ): Promise<MindooDBAppDocument>;
+  /**
+   * Drop readers from a sealed document. Rotates the document key so
+   * removed readers keep what they already have and cannot read later
+   * changes. Do not write `_encryptFor` via {@link update}. Requires the
+   * `update` capability.
+   */
+  removeRecipients(
+    docId: string,
+    recipients: string[],
+  ): Promise<MindooDBAppDocument>;
+  /**
+   * Replace the extra-recipient list of a sealed document. Diffs against
+   * the current set (additions wrap, removals rotate). The launching user
+   * stays on the list unless {@link MindooDBAppRecipientOptions.includeSelf}
+   * is `false`. Requires the `update` capability.
+   */
+  setRecipients(
+    docId: string,
+    recipients: string[],
+    options?: MindooDBAppRecipientOptions,
+  ): Promise<MindooDBAppDocument>;
+  /**
    * Mark a document as deleted by writing a lifecycle tombstone. The
    * append-only history keeps the document body, so {@link undelete} can
    * restore it and {@link listHistory} still shows past revisions. To
@@ -1545,6 +1602,8 @@ export interface MindooDBAppDocumentApi {
    */
   canCreate(input?: {
     decryptionKeyId?: string;
+    recipients?: string[];
+    recipientOptions?: MindooDBAppRecipientOptions;
   }): Promise<MindooDBAppAccessDecision>;
   /**
    * Predict whether `update` would be allowed for the given document, without
@@ -1563,6 +1622,12 @@ export interface MindooDBAppDocumentApi {
    * and falls back to `"default"`.
    */
   getDefaultCreateKeyId(): Promise<string>;
+  /**
+   * Shared document keys this user can create with in this database, plus
+   * which one {@link getDefaultCreateKeyId} would pick. Use this to populate a
+   * "New document" key picker. Requires the `create` capability.
+   */
+  listCreateKeys(): Promise<MindooDBAppCreateKeyInfo[]>;
   /**
    * List the document's revision timeline (newest first), including author
    * identity metadata and the stable `revisionId` per entry. Entries are
@@ -1664,6 +1729,14 @@ export interface MindooDBAppTimestampApi {
   listProviders(): Promise<MindooDBAppTimestampProvider[]>;
 }
 
+/** A shared document key the launching user can create with. */
+export interface MindooDBAppCreateKeyInfo {
+  /** Key id as stored on the document (`"default"`, `"$publicinfos"`, …). */
+  keyId: string;
+  /** True when this is the database/tenant default for new documents. */
+  isDefault: boolean;
+}
+
 /** Read-only lookups against the tenant's user directory. */
 export interface MindooDBAppDirectoryApi {
   /**
@@ -1674,6 +1747,11 @@ export interface MindooDBAppDirectoryApi {
    * name the keys it could not resolve. Requires the `directory` capability.
    */
   excerpt(publicKeys: string[]): Promise<MindooDBAppDirectoryEntry[]>;
+  /**
+   * Active directory usernames in this tenant, for recipient pickers.
+   * Requires the `directory` capability.
+   */
+  listUsers(): Promise<string[]>;
 }
 
 // ---------------------------------------------------------------------------

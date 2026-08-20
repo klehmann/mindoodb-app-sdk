@@ -1001,6 +1001,25 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           docId,
           patch,
         }),
+      addRecipients: async (docId, recipients) =>
+        await this.rpc.call("documents.addRecipients", {
+          databaseId: this.databaseId,
+          docId,
+          recipients,
+        }),
+      removeRecipients: async (docId, recipients) =>
+        await this.rpc.call("documents.removeRecipients", {
+          databaseId: this.databaseId,
+          docId,
+          recipients,
+        }),
+      setRecipients: async (docId, recipients, options) =>
+        await this.rpc.call("documents.setRecipients", {
+          databaseId: this.databaseId,
+          docId,
+          recipients,
+          recipientOptions: options,
+        }),
       delete: async (docId) =>
         await this.rpc.call("documents.delete", {
           databaseId: this.databaseId,
@@ -1058,6 +1077,21 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         await this.rpc.call("documents.getDefaultCreateKeyId", {
           databaseId: this.databaseId,
         }),
+      listCreateKeys: async () => {
+        try {
+          return await this.rpc.call("documents.listCreateKeys", {
+            databaseId: this.databaseId,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          const keyId = await this.rpc.call<string>("documents.getDefaultCreateKeyId", {
+            databaseId: this.databaseId,
+          });
+          return [{ keyId, isDefault: true }];
+        }
+      },
       listHistory: async (docId) =>
         await this.rpc.call("documents.history.list", {
           databaseId: this.databaseId,
@@ -1116,6 +1150,18 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           publicKeys,
         }),
+      listUsers: async () => {
+        try {
+          return await this.rpc.call("directory.listUsers", {
+            databaseId: this.databaseId,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return [];
+        }
+      },
     };
 
     this.attachments = {

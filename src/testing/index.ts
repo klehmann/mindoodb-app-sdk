@@ -23,6 +23,7 @@ import type {
   MindooDBAppBridgeViewChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
   MindooDBAppCreateViewNavigatorInput,
+  MindooDBAppCreateKeyInfo,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDirectoryApi,
@@ -1133,6 +1134,52 @@ function createDatabaseHandle(
     }
   };
 
+  function mockEncryptForMap(names: string[]): Record<string, { kind: "user" }> {
+    const encryptFor: Record<string, { kind: "user" }> = {};
+    for (const name of names) {
+      const trimmed = name.trim();
+      if (trimmed) {
+        encryptFor[trimmed] = { kind: "user" };
+      }
+    }
+    return encryptFor;
+  }
+
+  function persistEncryptFor(
+    docId: string,
+    nextEncryptFor: Record<string, { kind: "user"; removedAt?: number }>,
+  ) {
+    const existing = storedDocuments.get(docId);
+    if (!existing || existing.isDeleted) {
+      throw new Error(`Recipient mutators require an existing document (${docId})`);
+    }
+    const raw = existing.data._encryptFor;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("Recipient mutators require a document created with `recipients`");
+    }
+    const updatedAt = new Date().toISOString();
+    const updated = {
+      id: docId,
+      data: { ...existing.data, _encryptFor: nextEncryptFor },
+      heads: [`mock-head-${++changeCounter}`],
+      attachments: existing.attachments
+        ? structuredClone(existing.attachments)
+        : [],
+      updatedAt,
+    };
+    storedDocuments.set(docId, {
+      ...updated,
+      data: structuredClone(updated.data),
+      attachments: updated.attachments
+        ? structuredClone(updated.attachments)
+        : [],
+      isDeleted: false,
+      automergeBinary: undefined,
+    });
+    notifyLiveQueries();
+    return updated;
+  }
+
   const defaultDocuments: MindooDBAppDocumentApi = {
     async query(query?: MindooDBAppDocumentQuery) {
       return runMockDocumentQuery(storedDocuments, definition.info.id, query);
@@ -1359,9 +1406,23 @@ function createDatabaseHandle(
         id = `doc-${createCounter}`;
       }
       const createdAt = new Date().toISOString();
+      if (
+        Array.isArray(input.recipients) &&
+        input.recipientOptions?.includeSelf === false &&
+        input.recipients.every((name) => name.trim().length === 0)
+      ) {
+        throw new Error(
+          "recipients: [] with includeSelf: false would produce a document nobody can read",
+        );
+      }
       const created = {
         id,
-        data: { ...input.set },
+        data: {
+          ...input.set,
+          ...(Array.isArray(input.recipients)
+            ? { _encryptFor: mockEncryptForMap(input.recipients) }
+            : {}),
+        },
         heads: [`mock-head-${++changeCounter}`],
         attachments: [],
         updatedAt: createdAt,
@@ -1411,6 +1472,59 @@ function createDatabaseHandle(
       notifyLiveQueries();
       return updated;
     },
+    async addRecipients(docId, recipients) {
+      const existing = storedDocuments.get(docId);
+      const current =
+        existing?.data._encryptFor &&
+        typeof existing.data._encryptFor === "object" &&
+        !Array.isArray(existing.data._encryptFor)
+          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number }>) }
+          : null;
+      if (!current) {
+        throw new Error("Recipient mutators require a document created with `recipients`");
+      }
+      for (const name of recipients) {
+        const trimmed = name.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const key = Object.keys(current).find(
+          (entry) => entry.trim().toLowerCase() === trimmed.toLowerCase(),
+        );
+        if (key) {
+          delete current[key].removedAt;
+        } else {
+          current[trimmed] = { kind: "user" };
+        }
+      }
+      return persistEncryptFor(docId, current);
+    },
+    async removeRecipients(docId, recipients) {
+      const existing = storedDocuments.get(docId);
+      const current =
+        existing?.data._encryptFor &&
+        typeof existing.data._encryptFor === "object" &&
+        !Array.isArray(existing.data._encryptFor)
+          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number }>) }
+          : {};
+      const drop = new Set(
+        recipients.map((name) => name.trim().toLowerCase()).filter(Boolean),
+      );
+      for (const key of Object.keys(current)) {
+        if (drop.has(key.trim().toLowerCase())) {
+          delete current[key];
+        }
+      }
+      return persistEncryptFor(docId, current);
+    },
+    async setRecipients(docId, recipients, options) {
+      if (options?.includeSelf === false && recipients.every((name) => name.trim().length === 0)) {
+        throw new Error(
+          "recipients: [] with includeSelf: false would produce a document nobody can read",
+        );
+      }
+      return persistEncryptFor(docId, mockEncryptForMap(recipients));
+    },
     async delete(_docId: string) {
       const existing = storedDocuments.get(_docId);
       if (existing) {
@@ -1458,6 +1572,9 @@ function createDatabaseHandle(
     },
     async getDefaultCreateKeyId(): Promise<string> {
       return "default";
+    },
+    async listCreateKeys(): Promise<MindooDBAppCreateKeyInfo[]> {
+      return [{ keyId: "default", isDefault: true }];
     },
     async listHistory(
       _docId: string,
@@ -1573,6 +1690,9 @@ function createDatabaseHandle(
         fingerprint: "0".repeat(64),
         status: "unknown" as const,
       }));
+    },
+    async listUsers() {
+      return [];
     },
   };
 
@@ -2468,6 +2588,32 @@ export function createFakeBridgeHost(
             String(params.docId),
             params.patch as MindooDBAppUpdateDocumentInput,
           );
+      case "documents.addRecipients":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.addRecipients(
+            String(params.docId),
+            Array.isArray(params.recipients) ? params.recipients.map(String) : [],
+          );
+      case "documents.removeRecipients":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.removeRecipients(
+            String(params.docId),
+            Array.isArray(params.recipients) ? params.recipients.map(String) : [],
+          );
+      case "documents.setRecipients":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.setRecipients(
+            String(params.docId),
+            Array.isArray(params.recipients) ? params.recipients.map(String) : [],
+            params.recipientOptions &&
+              typeof params.recipientOptions === "object" &&
+              !Array.isArray(params.recipientOptions)
+              ? (params.recipientOptions as { includeSelf?: boolean })
+              : undefined,
+          );
       case "documents.delete":
         return await state
           .getDatabase(String(params.databaseId))
@@ -2480,7 +2626,11 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.canCreate(
-            params.input as { decryptionKeyId?: string } | undefined,
+            params.input as {
+              decryptionKeyId?: string;
+              recipients?: string[];
+              recipientOptions?: { includeSelf?: boolean };
+            } | undefined,
           );
       case "documents.canChange":
         return await state
@@ -2498,6 +2648,10 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.getDefaultCreateKeyId();
+      case "documents.listCreateKeys":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.listCreateKeys();
       case "documents.history.list":
         return await state
           .getDatabase(String(params.databaseId))
@@ -2557,6 +2711,10 @@ export function createFakeBridgeHost(
           .directory.excerpt(
             Array.isArray(params.publicKeys) ? params.publicKeys.map(String) : [],
           );
+      case "directory.listUsers":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.listUsers();
       case "attachments.list":
         return await state
           .getDatabase(String(params.databaseId))

@@ -246,6 +246,61 @@ describe("mindoodb-app-sdk/testing", () => {
     });
   });
 
+  it("adds and removes sealed recipients in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: { title: "Secret" },
+      recipients: ["cn=Ada/o=Acme"],
+    });
+    expect(created.data._encryptFor).toEqual({
+      "cn=Ada/o=Acme": { kind: "user" },
+    });
+
+    const added = await database.documents.addRecipients(created.id, ["cn=Bob/o=Acme"]);
+    expect(added.data._encryptFor).toEqual({
+      "cn=Ada/o=Acme": { kind: "user" },
+      "cn=Bob/o=Acme": { kind: "user" },
+    });
+
+    const removed = await database.documents.removeRecipients(created.id, ["cn=Ada/o=Acme"]);
+    expect(removed.data._encryptFor).toEqual({
+      "cn=Bob/o=Acme": { kind: "user" },
+    });
+  });
+
+  it("rejects an empty recipient list with includeSelf: false", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await expect(
+      database.documents.create({
+        set: { title: "Nobody" },
+        recipients: [],
+        recipientOptions: { includeSelf: false },
+      }),
+    ).rejects.toThrow(/nobody can read/);
+  });
+
   it("applies granular JSON operations in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{

@@ -126,6 +126,391 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
   });
 
+  it("forwards recipients on create", async () => {
+    let createInput: unknown = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.create") {
+            createInput = (message.params as { input: unknown }).input;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: "doc-1",
+                data: {
+                  title: "Secret",
+                },
+                attachments: [],
+              },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-create-recipients",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await database.documents.create({
+      set: { title: "Secret" },
+      recipients: ["cn=Ada/o=Acme"],
+    });
+
+    expect(createInput).toEqual({
+      set: { title: "Secret" },
+      recipients: ["cn=Ada/o=Acme"],
+    });
+  });
+
+  it("forwards recipientOptions.includeSelf on create", async () => {
+    let createInput: unknown = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.create") {
+            createInput = (message.params as { input: unknown }).input;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: "doc-1",
+                data: { title: "Handoff" },
+                attachments: [],
+              },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-create-include-self",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await database.documents.create({
+      set: { title: "Handoff" },
+      recipients: ["cn=Bob/o=Acme"],
+      recipientOptions: { includeSelf: false },
+    });
+
+    expect(createInput).toEqual({
+      set: { title: "Handoff" },
+      recipients: ["cn=Bob/o=Acme"],
+      recipientOptions: { includeSelf: false },
+    });
+  });
+
+  it("forwards addRecipients and removeRecipients", async () => {
+    let addParams: unknown;
+    let removeParams: unknown;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.addRecipients") {
+            addParams = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: "doc-1",
+                data: {
+                  _encryptFor: {
+                    "cn=Ada/o=Acme": { kind: "user" },
+                    "cn=Bob/o=Acme": { kind: "user" },
+                  },
+                },
+                attachments: [],
+              },
+            });
+            return;
+          }
+          if (message.method === "documents.removeRecipients") {
+            removeParams = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: {
+                id: "doc-1",
+                data: { _encryptFor: { "cn=Ada/o=Acme": { kind: "user" } } },
+                attachments: [],
+              },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-recipient-mutators",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await database.documents.addRecipients("doc-1", ["cn=Bob/o=Acme"]);
+    await database.documents.removeRecipients("doc-1", ["cn=Bob/o=Acme"]);
+
+    expect(addParams).toEqual({
+      databaseId: "main",
+      docId: "doc-1",
+      recipients: ["cn=Bob/o=Acme"],
+    });
+    expect(removeParams).toEqual({
+      databaseId: "main",
+      docId: "doc-1",
+      recipients: ["cn=Bob/o=Acme"],
+    });
+  });
+
+  it("lists create keys and directory users", async () => {
+    const methods: string[] = [];
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          methods.push(message.method);
+          if (message.method === "documents.listCreateKeys") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: [
+                { keyId: "default", isDefault: true },
+                { keyId: "$publicinfos", isDefault: false },
+              ],
+            });
+            return;
+          }
+          if (message.method === "directory.listUsers") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: ["cn=Ada/o=Acme"],
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-list-keys",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.listCreateKeys()).resolves.toEqual([
+      { keyId: "default", isDefault: true },
+      { keyId: "$publicinfos", isDefault: false },
+    ]);
+    await expect(database.directory.listUsers()).resolves.toEqual(["cn=Ada/o=Acme"]);
+    expect(methods).toEqual(["documents.listCreateKeys", "directory.listUsers"]);
+  });
+
+  it("falls back to getDefaultCreateKeyId when listCreateKeys is missing", async () => {
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.listCreateKeys") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "error",
+              id: message.id,
+              error: { code: "method-not-found", message: "Unknown method." },
+            });
+            return;
+          }
+          if (message.method === "documents.getDefaultCreateKeyId") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: "$publicinfos",
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-list-keys-fallback",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.listCreateKeys()).resolves.toEqual([
+      { keyId: "$publicinfos", isDefault: true },
+    ]);
+  });
+
   it("forwards optional caller-provided document id on create", async () => {
     let createInput: unknown = null;
     const host = {

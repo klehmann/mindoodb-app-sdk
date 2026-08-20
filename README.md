@@ -1494,8 +1494,13 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `applyAutomergeChanges(docId, patch)` | `Promise<MindooDBAppAutomergePatchResult>` |
 | `create(input)`                    | `Promise<MindooDBAppDocument>`               |
 | `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
+| `addRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
+| `removeRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`            |
+| `setRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
 | `delete(docId)`                    | `Promise<{ ok: true }>`                      |
 | `undelete(docId)`                  | `Promise<{ ok: true }>`                      |
+| `getDefaultCreateKeyId()`          | `Promise<string>`                            |
+| `listCreateKeys()`                 | `Promise<MindooDBAppCreateKeyInfo[]>`        |
 | `listHistory(docId)`               | `Promise<MindooDBAppDocumentHistoryEntry[]>` |
 | `getAtTimestamp(docId, timestamp)` | `Promise<MindooDBAppHistoricalDocument>`     |
 | `getAtRevision(docId, revisionId, opts?)` | `Promise<MindooDBAppHistoricalDocument>` |
@@ -1505,7 +1510,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
-For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; id?: string }`. The optional `id` lets the app pick the document id instead of letting MindooDB generate an ObjectId; when provided it must match `/^[a-z][a-z0-9_]*$/` (lowercase only, since ids become on-disk filenames) and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
+For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; recipients?: string[]; recipientOptions?: { includeSelf?: boolean }; id?: string }`. Omit both `decryptionKeyId` and `recipients` to use the database default shared key (`getDefaultCreateKeyId()` / `listCreateKeys()`). Pass `recipients` to encrypt the document for specific directory users (the launching user is included unless `recipientOptions.includeSelf` is `false`). Use `includeSelf: false` to write initial `set` values and hand the document to someone else — empty `recipients` with `includeSelf: false` is rejected. Changing that list later is `addRecipients` / `removeRecipients` / `setRecipients` — do not write `_encryptFor` via `update`. The optional `id` lets the app pick the document id instead of letting MindooDB generate an ObjectId; when provided it must match `/^[a-z][a-z0-9_]*$/` (lowercase only, since ids become on-disk filenames) and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
 
 `delete(docId)` writes a lifecycle tombstone; it does not erase the document body from the append-only history. Use `undelete(docId)` to make the latest document state live again. If you want to record a deletion reason, first call `update(docId, { set: { intendedDeletionReason: "..." } })`, then call `delete(docId)`.
 
