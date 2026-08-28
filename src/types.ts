@@ -208,7 +208,8 @@ export type MindooDBAppCapability =
   | "views"
   | "sign"
   | "timestamps"
-  | "directory";
+  | "directory"
+  | "sealedchannel";
 
 /** Metadata about the current app launch supplied by the Haven host. */
 export interface MindooDBAppLaunchContext {
@@ -2386,6 +2387,48 @@ export interface MindooDBAppDatabase {
   setExtractionSetup(config: MindooDBAppExtractionSetup | null): Promise<void>;
 }
 
+/** Request to open a host-owned encrypted channel to a tenant-joined service. */
+export interface MindooDBAppSealedChannelOpenInput {
+  /** Binding whose `sealedchannel` capability authorises the channel. */
+  databaseId: string;
+  /**
+   * Base URL of the service, e.g. `https://bridge.example.com`. Must be
+   * `https:` unless it is a loopback host, and carries no path, query or
+   * fragment.
+   */
+  baseUrl: string;
+}
+
+/**
+ * Outcome of {@link MindooDBAppSession.openSealedChannel}.
+ *
+ * Declining is an ordinary outcome, not an error, so an app can tell "the user
+ * said no" from "the handshake failed" without inspecting error strings.
+ */
+export type MindooDBAppSealedChannelOpenResult =
+  | {
+      ok: true;
+      /** Handle for {@link MindooDBAppSession.sealedChannelRequest}. Not a secret. */
+      channelId: string;
+      /** Tenant username the far side authenticated this channel as. */
+      username: string;
+      /** Epoch milliseconds after which the far side stops accepting the channel. */
+      expiresAt: number;
+    }
+  | {
+      ok: false;
+      reason: "declined";
+    };
+
+/** One request over an open sealed channel. */
+export interface MindooDBAppSealedChannelRequestInput {
+  channelId: string;
+  /** Path below the channel's base URL, e.g. `/jmap/api`. */
+  path: string;
+  /** JSON-serialisable body. Sealed by the host before it leaves the device. */
+  payload: unknown;
+}
+
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   /**
@@ -2394,6 +2437,28 @@ export interface MindooDBAppSession {
    * mapped to this app. Cached — repeated calls do not hit the host again.
    */
   getLaunchContext(): Promise<MindooDBAppLaunchContext>;
+  /**
+   * Open an end-to-end encrypted channel to a service that has joined the
+   * user's tenant, such as a mail bridge.
+   *
+   * Haven performs the key exchange with the user's identity key and keeps the
+   * resulting AES key host-side, so the app sends and receives plain JSON and
+   * never handles key material. Requires the `sealedchannel` capability on
+   * `databaseId` plus the user's consent for the target origin.
+   *
+   * Resolves with `ok: false` when the user declines — an ordinary outcome, not
+   * an error.
+   */
+  openSealedChannel(
+    input: MindooDBAppSealedChannelOpenInput,
+  ): Promise<MindooDBAppSealedChannelOpenResult>;
+  /**
+   * Send `payload` through an open channel and return the decrypted reply.
+   * `path` is resolved against the channel's base URL and may not escape it.
+   */
+  sealedChannelRequest<T = unknown>(input: MindooDBAppSealedChannelRequestInput): Promise<T>;
+  /** Discard a channel and its key. Idempotent. */
+  closeSealedChannel(channelId: string): Promise<void>;
   /**
    * Product license identifiers active for the current Haven user, for apps
    * that gate features on licensing.

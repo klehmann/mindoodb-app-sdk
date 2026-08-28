@@ -72,6 +72,9 @@ import type {
   MindooDBAppMenuApi,
   MindooDBAppQueryResult,
   MindooDBAppReadableAttachmentStream,
+  MindooDBAppSealedChannelOpenInput,
+  MindooDBAppSealedChannelOpenResult,
+  MindooDBAppSealedChannelRequestInput,
   MindooDBAppSession,
   MindooDBAppShowMenuInput,
   MindooDBAppShowMenuResult,
@@ -1383,6 +1386,29 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Returns the launch context provided by the Haven host. */
   async getLaunchContext(): Promise<MindooDBAppLaunchContext> {
     return await this.rpc.call("session.getLaunchContext", {});
+  }
+
+  /**
+   * Asks the host to open an encrypted channel to a tenant-joined service.
+   * The host owns the key exchange and the resulting session key; nothing
+   * secret crosses back into the app.
+   */
+  async openSealedChannel(
+    input: MindooDBAppSealedChannelOpenInput,
+  ): Promise<MindooDBAppSealedChannelOpenResult> {
+    return await this.rpc.call("sealedChannel.open", input);
+  }
+
+  /** Sends one request through an open channel; the host seals and opens it. */
+  async sealedChannelRequest<T = unknown>(
+    input: MindooDBAppSealedChannelRequestInput,
+  ): Promise<T> {
+    return await this.rpc.call<T>("sealedChannel.request", input);
+  }
+
+  /** Discards a channel host-side. */
+  async closeSealedChannel(channelId: string): Promise<void> {
+    await this.rpc.call("sealedChannel.close", { channelId });
   }
 
   /** Returns the product names currently licensed in the Haven host. */

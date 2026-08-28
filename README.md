@@ -242,6 +242,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
+| `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
 const db = ctx.databases[0]!;
@@ -255,6 +256,40 @@ if (!db.capabilities.includes("delete")) {
 ```
 
 When the database is readable, `documents.list()` can also expose deleted document IDs by setting `status: "all"` or `status: "deleted"`. This is useful for app-side indexes and sync checkpoints.
+
+### Sealed channels
+
+Some services join the user's tenant as a member of their own and then talk to your app over HTTP — the MindooMail bridge is the first. A sealed channel is how you reach one without your app ever touching key material.
+
+Haven does the key exchange with the user's identity key, keeps the resulting AES key host-side, and seals and opens every payload. Your app holds an opaque `channelId` and exchanges plain JSON.
+
+```ts
+const opened = await session.openSealedChannel({
+  databaseId: db.id,
+  baseUrl: "https://bridge.example.com",
+});
+if (!opened.ok) {
+  // The user declined. Not an error — leave your UI intact.
+  return;
+}
+
+const reply = await session.sealedChannelRequest<JmapResponse>({
+  channelId: opened.channelId,
+  path: "/jmap/api",
+  payload: { using: [], methodCalls: [] },
+});
+
+await session.closeSealedChannel(opened.channelId);
+```
+
+Requirements and limits worth knowing before you design around this:
+
+- The binding named by `databaseId` needs the `sealedchannel` capability.
+- The user is asked to approve the origin the first time this app connects there. Haven stores that grant per identity, app, and origin, and does not ask again on later launches.
+- `baseUrl` must be a bare `https:` origin (or `http:` on loopback for local development) with no path, query, or credentials, and `path` may not leave that origin.
+- The service must allow Haven's origin in its CORS configuration — the request comes from the host, not from your app's iframe.
+
+There is deliberately no API for decrypting arbitrary data with the user's key. That would be a decryption oracle: doc keys wrapped to the same key are publicly readable in the tenant directory, so an app able to unwrap chosen ciphertext could obtain keys for databases it was never granted.
 
 ### Theme and viewport events
 
@@ -1465,6 +1500,9 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openDatabase(databaseId)`            | `Promise<MindooDBAppDatabase>`       |
 | `createViewNavigator(input)`          | `Promise<MindooDBAppViewNavigator>`  |
 | `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>`  |
+| `openSealedChannel(input)`            | `Promise<MindooDBAppSealedChannelOpenResult>` |
+| `sealedChannelRequest(input)`         | `Promise<T>`                         |
+| `closeSealedChannel(channelId)`       | `Promise<void>`                      |
 | `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
 | `menus.hide()`                        | `Promise<void>`                      |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |

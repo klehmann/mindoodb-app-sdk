@@ -22,6 +22,7 @@ import type {
   MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewChangedMessage,
   MindooDBAppBridgeViewportChangedMessage,
+  MindooDBAppCapability,
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppCreateKeyInfo,
   MindooDBAppDatabase,
@@ -53,6 +54,8 @@ import type {
   MindooDBAppQueryRow,
   MindooDBAppQuerySortKey,
   MindooDBAppReadableAttachmentStream,
+  MindooDBAppSealedChannelOpenInput,
+  MindooDBAppSealedChannelRequestInput,
   MindooDBAppScopedDocId,
   MindooDBAppScopedDocumentSummary,
   MindooDBAppSession,
@@ -1898,6 +1901,22 @@ function createMockSessionState(
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
     null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
+  const openSealedChannels = new Map<string, string>();
+
+  const requireCapability = (
+    databaseId: string,
+    capability: MindooDBAppCapability,
+  ) => {
+    const info = databaseInfos.find((entry) => entry.id === databaseId);
+    if (!info) {
+      throw new Error(`Unknown database "${databaseId}"`);
+    }
+    if (!info.capabilities.includes(capability)) {
+      throw new Error(
+        `Database "${databaseId}" was not granted the "${capability}" capability`,
+      );
+    }
+  };
 
   const menus: MindooDBAppMenuApi = {
     async show(_input: MindooDBAppShowMenuInput) {
@@ -1961,6 +1980,36 @@ function createMockSessionState(
   const session: MindooDBAppSession = {
     async getLaunchContext() {
       return mergeLaunchContext(launchContext);
+    },
+    async openSealedChannel(input) {
+      if (options.sealedChannel?.declined) {
+        return { ok: false, reason: "declined" };
+      }
+      requireCapability(input.databaseId, "sealedchannel");
+      const channelId = `mock-channel-${openSealedChannels.size + 1}`;
+      openSealedChannels.set(channelId, input.baseUrl);
+      return {
+        ok: true,
+        channelId,
+        username: options.sealedChannel?.username ?? launchContext.user.username,
+        expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+      };
+    },
+    async sealedChannelRequest(input) {
+      const baseUrl = openSealedChannels.get(input.channelId);
+      if (baseUrl == null) {
+        throw new Error(`Unknown sealed channel "${input.channelId}"`);
+      }
+      const handler = options.sealedChannel?.onRequest;
+      if (!handler) {
+        throw new Error(
+          "sealedChannelRequest is not configured in this test session (pass sealedChannel.onRequest)",
+        );
+      }
+      return (await handler({ baseUrl, path: input.path, payload: input.payload })) as never;
+    },
+    async closeSealedChannel(channelId) {
+      openSealedChannels.delete(channelId);
     },
     async getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
@@ -2151,10 +2200,32 @@ export interface MockMindooDBAppDatabaseDefinition {
   extractionSetup?: MindooDBAppExtractionSetup | null;
 }
 
+/**
+ * Stands in for the host-owned sealed channel.
+ *
+ * The mock carries no crypto: Haven does the key exchange and the AES sealing
+ * for real, and a test host has no identity key to do it with. What a test can
+ * exercise is the shape apps actually depend on — that a declined channel is an
+ * ordinary `ok: false`, and that a request round-trips plain JSON.
+ */
+export interface MockSealedChannelOptions {
+  /** When true, `openSealedChannel` resolves `{ ok: false, reason: "declined" }`. */
+  declined?: boolean;
+  /** Username reported by a successfully opened channel. Defaults to the launch context user. */
+  username?: string;
+  /** Handles each `sealedChannelRequest`. Without it, requests throw. */
+  onRequest?: (input: {
+    baseUrl: string;
+    path: string;
+    payload: unknown;
+  }) => MaybePromise<unknown>;
+}
+
 export interface CreateMockMindooDBAppSessionOptions {
   launchContext?: Partial<MindooDBAppLaunchContext>;
   databases?: MockMindooDBAppDatabaseDefinition[];
   onDisconnect?: () => MaybePromise<void>;
+  sealedChannel?: MockSealedChannelOptions;
 }
 
 export interface MockMindooDBAppSessionController {
@@ -2492,6 +2563,17 @@ export function createFakeBridgeHost(
         return { ok: true };
       case "session.disconnect":
         await state.session.disconnect();
+        return { ok: true };
+      case "sealedChannel.open":
+        return await state.session.openSealedChannel(
+          params as unknown as MindooDBAppSealedChannelOpenInput,
+        );
+      case "sealedChannel.request":
+        return await state.session.sealedChannelRequest(
+          params as unknown as MindooDBAppSealedChannelRequestInput,
+        );
+      case "sealedChannel.close":
+        await state.session.closeSealedChannel(String(params.channelId));
         return { ok: true };
       case "documents.list":
         return await state
