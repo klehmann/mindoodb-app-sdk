@@ -1176,7 +1176,7 @@ const scan = await db.attachments.scan(docId, {
 await db.attachments.remove(docId, "old-file.txt");
 ```
 
-`attachments.scan()` asks Haven to open its document scanner UI on top of your app. Haven handles camera or file selection, runs edge detection through a slim on-device OpenCV WebAssembly pipeline, lets the user fine-tune the corners, applies the perspective correction to the chosen output size, and writes the resulting bytes as a normal MindooDoc attachment via the same path `openWriteStream` would have taken. The scanner runs entirely locally — the picked image and the perspective-corrected result never leave the browser tab.
+`attachments.scan()` asks Haven to open its document scanner UI on top of your app. Haven handles camera or file selection, runs edge detection through a slim on-device OpenCV WebAssembly pipeline, lets the user fine-tune the corners, applies the perspective correction to the chosen output size, and writes the resulting bytes as a normal MindooDoc attachment via the same path `openWriteStream` would have taken. The user can add further pages; two or more pages always come back as one multi-page PDF. The scanner runs entirely locally — the picked image and the perspective-corrected result never leave the browser tab.
 
 Options shape:
 
