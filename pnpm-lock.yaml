@@ -19,8 +19,8 @@ importers:
         specifier: 25.5.0
         version: 25.5.0
       mindoodb:
-        specifier: ^0.0.53
-        version: 0.0.53
+        specifier: ^0.0.55
+        version: 0.0.55
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(postcss@8.5.14)(typescript@6.0.3)
@@ -696,6 +696,28 @@ packages:
 
   mindoodb@0.0.53:
     resolution: {integrity: sha512-VzZEM/nJwiiKQLJn+/5Hg+ioitBlpfMFlFqzDazmx5eLentDhFNBa5WABzML1V3pwp05Zxl+GTAqcDm9W7oyHQ==}
+    engines: {node: '>=22.13.0'}
+    hasBin: true
+    peerDependencies:
+      expo-standard-web-crypto: ^3.0.0
+      node-forge: ^1.3.1
+      react-native-automerge-generated: ^0.1.0
+      react-native-quick-crypto: ^1.0.0
+      tweetnacl: ^1.0.3
+    peerDependenciesMeta:
+      expo-standard-web-crypto:
+        optional: true
+      node-forge:
+        optional: true
+      react-native-automerge-generated:
+        optional: true
+      react-native-quick-crypto:
+        optional: true
+      tweetnacl:
+        optional: true
+
+  mindoodb@0.0.55:
+    resolution: {integrity: sha512-nG45u0oTg7XBPPaDEhEdFbxZ5evzJfENVVpQpM520tDqRHSMvng3p3UDTyh7hdR3oqShsZq1lquGutB/7e273Q==}
     engines: {node: '>=22.13.0'}
     hasBin: true
     peerDependencies:
@@ -1442,6 +1464,12 @@ snapshots:
       - tweetnacl
 
   mindoodb@0.0.53:
+    dependencies:
+      '@automerge/automerge': 3.4.0
+      minisearch: 7.2.0
+      uuid: 11.1.1
+
+  mindoodb@0.0.55:
     dependencies:
       '@automerge/automerge': 3.4.0
       minisearch: 7.2.0

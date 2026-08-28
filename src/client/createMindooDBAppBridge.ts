@@ -891,6 +891,11 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           query: query ?? {},
         }),
+      listInaccessible: async (query) =>
+        await this.rpc.call("documents.listInaccessible", {
+          databaseId: this.databaseId,
+          query: query ?? {},
+        }),
       query: async (query) =>
         await this.rpc.call("documents.query", {
           databaseId: this.databaseId,

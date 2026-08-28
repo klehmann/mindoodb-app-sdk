@@ -499,6 +499,33 @@ export interface MindooDBAppDocumentListQuery {
   idPrefix?: string;
 }
 
+/** Query options for {@link MindooDBAppDocumentApi.listInaccessible}. */
+export interface MindooDBAppInaccessibleDocumentListQuery {
+  /**
+   * Restrict the listing to documents whose id matches this prefix. Matching is
+   * the same boundary-aware rule as {@link MindooDBAppDocumentListQuery.idPrefix}.
+   */
+  idPrefix?: string;
+}
+
+/**
+ * A document that exists in the local store but the current user cannot open.
+ * Built from unsigned `doc_create` (or `doc_snapshot`) metadata — no payload
+ * and no CAS access for the app.
+ */
+export interface MindooDBAppInaccessibleDocument {
+  id: string;
+  createdAt: string;
+  decryptionKeyId: string;
+  /** Directory display name of the origin author, when the host can resolve it. */
+  authorLabel?: string;
+}
+
+/** Result of {@link MindooDBAppDocumentApi.listInaccessible}. */
+export interface MindooDBAppInaccessibleDocumentListResult {
+  items: MindooDBAppInaccessibleDocument[];
+}
+
 /** Paged result returned by `documents.list()`. */
 export interface MindooDBAppDocumentListResult {
   items: MindooDBAppDocumentSummary[];
@@ -1457,6 +1484,16 @@ export interface MindooDBAppDocumentApi {
   list(
     query?: MindooDBAppDocumentListQuery,
   ): Promise<MindooDBAppDocumentListResult>;
+  /**
+   * Documents present in this database that the current user cannot decrypt
+   * (not a recipient, or missing `decryptionKeyId`). They do not appear in
+   * {@link list} or {@link get}. Each row is store-metadata only: id,
+   * origin timestamp, key id, and the author's directory label when known.
+   * Requires the `read` capability.
+   */
+  listInaccessible(
+    query?: MindooDBAppInaccessibleDocumentListQuery,
+  ): Promise<MindooDBAppInaccessibleDocumentListResult>;
   /**
    * The database's latest changefeed cursor without loading any documents.
    * Useful as a baseline checkpoint before starting an incremental

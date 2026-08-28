@@ -708,6 +708,51 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(allPage.items).toHaveLength(4);
   });
 
+  it("lists inaccessible seed documents without exposing them to list/get", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read"],
+        },
+        documents: [
+          {
+            id: "dbsettings_alice",
+            data: { type: "dbsettings" },
+            inaccessible: true,
+            decryptionKeyId: "sealed_alice",
+            authorLabel: "cn=Alice/o=Acme",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "memo_own",
+            data: { type: "memo" },
+          },
+        ],
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.get("dbsettings_alice")).resolves.toBeNull();
+    const visible = await database.documents.list({ metadataOnly: true });
+    expect(visible.items.map((item) => item.id)).toEqual(["memo_own"]);
+
+    const hidden = await database.documents.listInaccessible({ idPrefix: "dbsettings" });
+    expect(hidden.items).toEqual([
+      {
+        id: "dbsettings_alice",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        decryptionKeyId: "sealed_alice",
+        authorLabel: "cn=Alice/o=Acme",
+      },
+    ]);
+    await expect(database.documents.listInaccessible({ idPrefix: "memo" })).resolves.toEqual({
+      items: [],
+    });
+  });
+
   it("evaluates full-text `text` clauses in the mock bridge with relevance ordering", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{

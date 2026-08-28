@@ -1488,6 +1488,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `query(query?)`                    | `Promise<MindooDBAppQueryResult>`            |
 | `liveQuery(query, onResult)`       | `Promise<MindooDBAppLiveQuerySubscription>`  |
 | `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
+| `listInaccessible(query?)`         | `Promise<MindooDBAppInaccessibleDocumentListResult>` |
 | `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |
 | `getRichText(docId, path, opts?)`  | `Promise<MindooDBAppRichTextSnapshot>`       |
 | `getAutomergeSnapshot(docId, opts?)` | `Promise<MindooDBAppAutomergeSnapshot>`   |
@@ -1509,6 +1510,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 `getAutomergeSnapshot` and `applyAutomergeChanges` are **discouraged** escape-hatch APIs for binary Automerge sync. Prefer `set`/`unset` and JSON patches (`text`, `richText`, `json`) instead. See [Automerge binary sync (advanced)](#automerge-binary-sync-advanced).
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
+
+`listInaccessible(query?)` returns documents that exist locally but the current user cannot decrypt (not a recipient, or missing the document key). Those ids never appear in `list` / `get`. Each row is unsigned store metadata only (`id`, `createdAt`, `decryptionKeyId`, optional `authorLabel`) — the app does not get CAS access. Use it to distinguish an empty database from one sealed to someone else.
 
 For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; recipients?: string[]; recipientOptions?: { includeSelf?: boolean }; id?: string }`. Omit both `decryptionKeyId` and `recipients` to use the database default shared key (`getDefaultCreateKeyId()` / `listCreateKeys()`). Pass `recipients` to encrypt the document for specific directory users (the launching user is included unless `recipientOptions.includeSelf` is `false`). Use `includeSelf: false` to write initial `set` values and hand the document to someone else — empty `recipients` with `includeSelf: false` is rejected. Changing that list later is `addRecipients` / `removeRecipients` / `setRecipients` — do not write `_encryptFor` via `update`. The optional `id` lets the app pick the document id instead of letting MindooDB generate an ObjectId; when provided it must match `/^[a-z][a-z0-9_]*$/` (lowercase only, since ids become on-disk filenames) and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
 

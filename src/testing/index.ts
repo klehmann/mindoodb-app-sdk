@@ -40,6 +40,8 @@ import type {
   MindooDBAppDocumentHistoryEntry,
   MindooDBAppDocumentListQuery,
   MindooDBAppDocumentListResult,
+  MindooDBAppInaccessibleDocumentListQuery,
+  MindooDBAppInaccessibleDocumentListResult,
   MindooDBAppDocumentQuery,
   MindooDBAppDocumentScanPreset,
   MindooDBAppHistoricalDocument,
@@ -573,6 +575,10 @@ type MockStoredDocument = MindooDBAppDocument & {
   isDeleted: boolean;
   updatedAt?: string;
   automergeBinary?: Uint8Array;
+  inaccessible?: boolean;
+  decryptionKeyId?: string;
+  authorLabel?: string;
+  createdAt?: string;
 };
 
 function loadMockAutomergeDocument(document: MockStoredDocument): Automerge.Doc<Record<string, unknown>> {
@@ -763,7 +769,7 @@ function runMockDocumentQuery(
     textScore?: number;
   }> = [];
   for (const document of storedDocuments.values()) {
-    if (document.isDeleted) {
+    if (document.isDeleted || document.inaccessible) {
       continue;
     }
     let textScore: number | undefined;
@@ -1105,6 +1111,10 @@ function createDatabaseHandle(
       attachments: seed.attachments ? structuredClone(seed.attachments) : [],
       updatedAt: seed.updatedAt ?? new Date().toISOString(),
       isDeleted: seed.isDeleted ?? false,
+      inaccessible: seed.inaccessible ?? false,
+      decryptionKeyId: seed.decryptionKeyId,
+      authorLabel: seed.authorLabel,
+      createdAt: seed.createdAt,
     });
   }
 
@@ -1229,6 +1239,7 @@ function createDatabaseHandle(
 
       const idPrefix = query?.idPrefix;
       const items = Array.from(storedDocuments.values())
+        .filter((document) => !document.inaccessible)
         .filter((document) =>
           status === "all"
             ? true
@@ -1278,9 +1289,25 @@ function createDatabaseHandle(
         cursor: String(storedDocuments.size),
       };
     },
+    async listInaccessible(
+      query?: MindooDBAppInaccessibleDocumentListQuery,
+    ): Promise<MindooDBAppInaccessibleDocumentListResult> {
+      const idPrefix = query?.idPrefix;
+      const items = Array.from(storedDocuments.values())
+        .filter((document) => document.inaccessible)
+        .filter((document) => matchesMockIdPrefix(document.id, idPrefix))
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((document) => ({
+          id: document.id,
+          createdAt: document.createdAt ?? document.updatedAt ?? new Date(0).toISOString(),
+          decryptionKeyId: document.decryptionKeyId ?? "sealed",
+          authorLabel: document.authorLabel,
+        }));
+      return { items };
+    },
     async get(_docId: string): Promise<MindooDBAppDocument | null> {
       const document = storedDocuments.get(_docId);
-      if (!document || document.isDeleted) {
+      if (!document || document.isDeleted || document.inaccessible) {
         return null;
       }
       return {
@@ -1820,7 +1847,7 @@ function createDatabaseHandle(
     handle: databaseHandle,
     listViewDocuments: () =>
       Array.from(storedDocuments.values())
-        .filter((document) => !document.isDeleted)
+        .filter((document) => !document.isDeleted && !document.inaccessible)
         .map((document) => ({
           origin: definition.info.id,
           docId: document.id,
@@ -2088,7 +2115,12 @@ export interface MockSeedDocument {
   id: string;
   data: Record<string, unknown>;
   updatedAt?: string;
+  createdAt?: string;
   isDeleted?: boolean;
+  /** When true the doc is hidden from `list`/`get` and returned by `listInaccessible`. */
+  inaccessible?: boolean;
+  decryptionKeyId?: string;
+  authorLabel?: string;
   heads?: string[];
   attachments?: MindooDBAppDocument["attachments"];
 }
@@ -2466,6 +2498,12 @@ export function createFakeBridgeHost(
           .getDatabase(String(params.databaseId))
           .documents.list(
             params.query as MindooDBAppDocumentListQuery | undefined,
+          );
+      case "documents.listInaccessible":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.listInaccessible(
+            params.query as MindooDBAppInaccessibleDocumentListQuery | undefined,
           );
       case "documents.getHeadCursor":
         return await state

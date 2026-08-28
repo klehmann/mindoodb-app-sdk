@@ -734,6 +734,70 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     });
   });
 
+  it("forwards documents.listInaccessible in the request params unchanged", async () => {
+    let listParams: unknown = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+          if (message.method === "session.openDatabase") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+            return;
+          }
+          if (message.method === "documents.listInaccessible") {
+            listParams = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { items: [] },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-list-inaccessible",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    await database.documents.listInaccessible({ idPrefix: "dbsettings" });
+
+    expect(listParams).toEqual({
+      databaseId: "main",
+      query: { idPrefix: "dbsettings" },
+    });
+  });
+
   it("sends the revision phase and head list on history reads", async () => {
     const requestParams = new Map<string, unknown>();
     const host = {
