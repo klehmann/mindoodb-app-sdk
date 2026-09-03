@@ -412,6 +412,8 @@ await db.documents.undelete(docId);
 
 Every `MindooDBAppDocument` snapshot also exposes a `heads?: string[]` field. Those heads identify the document's current Automerge version and are the value you pass to `baseHeads` when issuing the next text patch. After Haven applies and merges your patch, the returned document carries the new `heads` you should use for the following edit cycle.
 
+A snapshot also carries `decryptionKeyId?: string` — the named shared key its payload is encrypted with (`"default"` unless the document was created with another key). That is the key someone else needs access to before they can open the document, so show it wherever an app offers sharing. It is absent for person-encrypted documents (created with `recipients`), which have no shareable named key: those are shared by editing the recipient list. It is also absent on Haven versions older than this field.
+
 `documents.list()` is backed by Haven's internal changefeed, not by a positional offset. The query object supports:
 
 | Field                                       | Meaning                                                                        |
@@ -455,7 +457,8 @@ const history = await db.documents.listHistory(docId);
 //   isDeleted,
 //   isCurrent,
 //   summary?,
-//   dependencyIds?
+//   dependencyIds?,
+//   decryptionKeyId?
 // }
 
 // Load the document state at an exact DAG revision
@@ -503,6 +506,8 @@ const merged = await db.documents.getAtHeads(docId, entry.dependencyIds ?? []);
 ```
 
 An id in `dependencyIds` may name a revision the timeline does not list, because a change that left the document state untouched produces no timeline row. Draw only the edges whose endpoints you have; `getAtHeads` still resolves the full list.
+
+`decryptionKeyId` is per revision, so a document whose key changed over its life shows that in the timeline — useful when deciding which key to grant before handing an old version to someone. It follows the same rule as on `documents.get`: absent for person-encrypted revisions.
 
 ### Granular JSON edits
 
@@ -1549,7 +1554,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 
 `list(query?)` accepts the changefeed query options documented above. The `cursor` value is an opaque checkpoint string managed by Haven and should be stored and passed back unchanged.
 
-`listInaccessible(query?)` returns documents that exist locally but the current user cannot decrypt (not a recipient, or missing the document key). Those ids never appear in `list` / `get`. Each row is unsigned store metadata only (`id`, `createdAt`, `decryptionKeyId`, optional `authorLabel`) — the app does not get CAS access. Use it to distinguish an empty database from one sealed to someone else.
+`listInaccessible(query?)` returns documents that exist locally but the current user cannot decrypt (not a recipient, or missing the document key). Those ids never appear in `list` / `get`. Each row is unsigned store metadata only (`id`, `createdAt`, `decryptionKeyId`, optional `authorLabel`) — the app does not get CAS access. Use it to distinguish an empty database from one sealed to someone else. For documents the user *can* open, the same key id is on `documents.get` and on each `listHistory` entry; `documents.list` rows do not carry it.
 
 For `create(input)`, use `MindooDBAppCreateDocumentInput` with shape `{ set: Record<string, unknown>; decryptionKeyId?: string; recipients?: string[]; recipientOptions?: { includeSelf?: boolean }; id?: string }`. Omit both `decryptionKeyId` and `recipients` to use the database default shared key (`getDefaultCreateKeyId()` / `listCreateKeys()`). Pass `recipients` to encrypt the document for specific directory users (the launching user is included unless `recipientOptions.includeSelf` is `false`). Use `includeSelf: false` to write initial `set` values and hand the document to someone else — empty `recipients` with `includeSelf: false` is rejected. Changing that list later is `addRecipients` / `removeRecipients` / `setRecipients` — do not write `_encryptFor` via `update`. The optional `id` lets the app pick the document id instead of letting MindooDB generate an ObjectId; when provided it must match `/^[a-z][a-z0-9_]*$/` (lowercase only, since ids become on-disk filenames) and existing live documents with that id are returned as-is (idempotent create-if-missing). If an existing custom-id document is deleted, `create({ id })` undeletes it and preserves the previous document body. Documents created with the same custom id on different replicas converge correctly when synced.
 

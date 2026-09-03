@@ -579,10 +579,20 @@ type MockStoredDocument = MindooDBAppDocument & {
   updatedAt?: string;
   automergeBinary?: Uint8Array;
   inaccessible?: boolean;
-  decryptionKeyId?: string;
   authorLabel?: string;
   createdAt?: string;
 };
+
+/**
+ * Mirrors the host projection of the encryption key id: a person-encrypted
+ * document (`_encryptFor`) has no shareable named key, so it reports none.
+ */
+function mockDecryptionKeyId(document: MockStoredDocument): { decryptionKeyId?: string } {
+  if (!document.decryptionKeyId || document.data._encryptFor) {
+    return {};
+  }
+  return { decryptionKeyId: document.decryptionKeyId };
+}
 
 function loadMockAutomergeDocument(document: MockStoredDocument): Automerge.Doc<Record<string, unknown>> {
   if (document.automergeBinary) {
@@ -1188,6 +1198,7 @@ function createDatabaseHandle(
         : [],
       isDeleted: false,
       automergeBinary: undefined,
+      decryptionKeyId: existing.decryptionKeyId,
     });
     notifyLiveQueries();
     return updated;
@@ -1321,6 +1332,7 @@ function createDatabaseHandle(
           ? structuredClone(document.attachments)
           : [],
         updatedAt: document.updatedAt,
+        ...mockDecryptionKeyId(document),
       };
     },
     async getRichText(docId, path, _options) {
@@ -1383,6 +1395,7 @@ function createDatabaseHandle(
             ? structuredClone(document.attachments)
             : [],
           updatedAt: document.updatedAt,
+          ...mockDecryptionKeyId(document),
         },
         heads: mergedHeads,
         changesSince,
@@ -1422,6 +1435,7 @@ function createDatabaseHandle(
               ? structuredClone(existing.attachments)
               : [],
             updatedAt: existing.updatedAt,
+            ...mockDecryptionKeyId(existing),
           };
         }
       }
@@ -1457,15 +1471,18 @@ function createDatabaseHandle(
         attachments: [],
         updatedAt: createdAt,
       };
-      storedDocuments.set(created.id, {
+      const stored: MockStoredDocument = {
         ...created,
         data: structuredClone(created.data),
         attachments: [],
         isDeleted: false,
-      });
+        decryptionKeyId: input.decryptionKeyId ?? "default",
+      };
+      storedDocuments.set(created.id, stored);
       notifyLiveQueries();
       return {
         ...created,
+        ...mockDecryptionKeyId(stored),
       };
     },
     async createMany(inputs) {
@@ -1490,7 +1507,7 @@ function createDatabaseHandle(
           : [],
         updatedAt,
       };
-      storedDocuments.set(docId, {
+      const stored: MockStoredDocument = {
         ...updated,
         data: structuredClone(updated.data),
         attachments: updated.attachments
@@ -1498,9 +1515,11 @@ function createDatabaseHandle(
           : [],
         isDeleted: false,
         automergeBinary: undefined,
-      });
+        decryptionKeyId: existing?.decryptionKeyId ?? "default",
+      };
+      storedDocuments.set(docId, stored);
       notifyLiveQueries();
-      return updated;
+      return { ...updated, ...mockDecryptionKeyId(stored) };
     },
     async addRecipients(docId, recipients) {
       const existing = storedDocuments.get(docId);
@@ -2168,6 +2187,7 @@ export interface MockSeedDocument {
   isDeleted?: boolean;
   /** When true the doc is hidden from `list`/`get` and returned by `listInaccessible`. */
   inaccessible?: boolean;
+  /** Key the doc is encrypted with — reported by `get` and by `listInaccessible`. */
   decryptionKeyId?: string;
   authorLabel?: string;
   heads?: string[];

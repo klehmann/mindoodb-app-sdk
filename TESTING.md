@@ -102,7 +102,7 @@ When you pass `databases`, the mock session also exposes them through `session.g
 Each database entry can provide:
 
 - `info`
-- `documents` — seed documents into the mock store (used by `list`/`query` and by evaluating VirtualViews)
+- `documents` — seed documents into the mock store (used by `list`/`query` and by evaluating VirtualViews). A seed's `decryptionKeyId` is reported back by `documents.get`, like a real host; documents created through the mock report `"default"` unless `create` named a key, and person-encrypted documents (`recipients`) report none.
 - `methods.documents`
 - `methods.views` for session-level `createView()` and `openView()` calls (overrides the default evaluating navigator)
 - `methods.attachments`

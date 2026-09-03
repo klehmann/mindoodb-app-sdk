@@ -326,6 +326,13 @@ export interface MindooDBAppDocument {
   attachments?: MindooDBAppAttachmentInfo[];
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Named shared key the document's payload is encrypted with — the key another
+   * user needs access to before they can open it. Absent for person-encrypted
+   * documents (`recipients`), where there is no shareable named key, and on
+   * hosts predating this field.
+   */
+  decryptionKeyId?: string;
 }
 
 /** Opaque persisted id for a document revision in the MindooDB DAG. */
@@ -342,6 +349,12 @@ export interface MindooDBAppDocumentHistoryEntry {
   isDeleted: boolean;
   isCurrent: boolean;
   summary?: string;
+  /**
+   * Named shared key this revision was written with, so a key change along the
+   * timeline stays visible. Absent for person-encrypted revisions and on hosts
+   * predating this field. See {@link MindooDBAppDocument.decryptionKeyId}.
+   */
+  decryptionKeyId?: string;
   /**
    * The revisions this one was written on top of — the edges of the signed
    * change graph, in the same id space as {@link revisionId}. More than one id

@@ -243,6 +243,7 @@ describe("mindoodb-app-sdk/testing", () => {
       heads: expect.any(Array),
       attachments: [],
       updatedAt: expect.any(String),
+      decryptionKeyId: "default",
     });
   });
 
@@ -277,6 +278,55 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(removed.data._encryptFor).toEqual({
       "cn=Bob/o=Acme": { kind: "user" },
     });
+  });
+
+  it("reports the shared key a document is encrypted with", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: { title: "Shared" },
+      decryptionKeyId: "team-key",
+    });
+    expect(created.decryptionKeyId).toBe("team-key");
+
+    const loaded = await database.documents.get(created.id);
+    expect(loaded?.decryptionKeyId).toBe("team-key");
+
+    const updated = await database.documents.update(created.id, { set: { title: "Still shared" } });
+    expect(updated.decryptionKeyId).toBe("team-key");
+  });
+
+  it("reports no shared key for a person-encrypted document", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: { title: "Secret" },
+      recipients: ["cn=Ada/o=Acme"],
+    });
+    expect(created.decryptionKeyId).toBeUndefined();
+
+    const loaded = await database.documents.get(created.id);
+    expect(loaded?.decryptionKeyId).toBeUndefined();
   });
 
   it("rejects an empty recipient list with includeSelf: false", async () => {
