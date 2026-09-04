@@ -3,6 +3,7 @@ import {
   evaluateExpression,
   parseMindooDBFormulaBooleanExpression,
 } from "mindoodb-view-language";
+import { releaseMindooDBAppBridgeSessions } from "../client/createMindooDBAppBridge.js";
 import {
   createEvaluatingViewNavigator,
   type EvaluatingViewDocument,
@@ -10,6 +11,7 @@ import {
 import type {
   MindooDBAppAttachmentApi,
   MindooDBAppBridge,
+  MindooDBAppBridgeBeforeCloseMessage,
   MindooDBAppBridgeConnectMessage,
   MindooDBAppBridgeConnectedMessage,
   MindooDBAppBridgeErrorPayload,
@@ -508,6 +510,7 @@ function createDefaultLaunchContext(
     appVersion: "1.0.0",
     launchId: "test-launch",
     runtime: "iframe",
+    hosting: "external",
     theme: {
       mode: "dark",
       preset: "mindoo",
@@ -1901,6 +1904,7 @@ type MockSessionState = {
   emitViewportChange: (viewport: MindooDBAppViewport) => void;
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
   emitLocaleChange: (locale: string) => void;
+  emitBeforeClose: () => Promise<void>;
 };
 
 function createMockSessionState(
@@ -1913,6 +1917,7 @@ function createMockSessionState(
     (uiPreferences: MindooDBAppUiPreferences) => void
   >();
   const localeListeners = new Set<(locale: string) => void>();
+  const beforeCloseListeners = new Set<() => void | Promise<void>>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewDocumentLists = new Map<string, () => EvaluatingViewDocument[]>();
   const databaseViewApis = new Map<string, MockViewApi>();
@@ -1921,6 +1926,7 @@ function createMockSessionState(
     null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
   const openSealedChannels = new Map<string, string>();
+  const appStorage = new Map<string, string>(Object.entries(options.storage ?? {}));
 
   const requireCapability = (
     databaseId: string,
@@ -2092,6 +2098,41 @@ function createMockSessionState(
       return view;
     },
     menus,
+    storage: {
+      async snapshot(snapshotOptions) {
+        const prefixes = snapshotOptions?.prefixes;
+        const result: Record<string, string> = {};
+        appStorage.forEach((value, key) => {
+          if (!prefixes?.length || prefixes.some((prefix) => key.startsWith(prefix))) {
+            result[key] = value;
+          }
+        });
+        return result;
+      },
+      async get(key) {
+        return appStorage.get(key) ?? null;
+      },
+      async set(key, value) {
+        appStorage.set(key, value);
+      },
+      async remove(key) {
+        appStorage.delete(key);
+      },
+      async keys(keysOptions) {
+        const prefix = keysOptions?.prefix;
+        return [...appStorage.keys()].filter((key) => !prefix || key.startsWith(prefix)).sort();
+      },
+      async clear(clearOptions) {
+        const prefix = clearOptions?.prefix;
+        if (!prefix) {
+          appStorage.clear();
+          return;
+        }
+        [...appStorage.keys()]
+          .filter((key) => key.startsWith(prefix))
+          .forEach((key) => appStorage.delete(key));
+      },
+    },
     onThemeChange(listener) {
       themeListeners.add(listener);
       return () => {
@@ -2114,6 +2155,12 @@ function createMockSessionState(
       localeListeners.add(listener);
       return () => {
         localeListeners.delete(listener);
+      };
+    },
+    onBeforeClose(listener) {
+      beforeCloseListeners.add(listener);
+      return () => {
+        beforeCloseListeners.delete(listener);
       };
     },
     async disconnect() {
@@ -2175,6 +2222,9 @@ function createMockSessionState(
     emitLocaleChange(locale) {
       launchContext = mergeLaunchContext(launchContext, { locale });
       localeListeners.forEach((listener) => listener(launchContext.locale));
+    },
+    async emitBeforeClose() {
+      await Promise.all([...beforeCloseListeners].map(async (listener) => listener()));
     },
   };
 }
@@ -2246,6 +2296,8 @@ export interface CreateMockMindooDBAppSessionOptions {
   databases?: MockMindooDBAppDatabaseDefinition[];
   onDisconnect?: () => MaybePromise<void>;
   sealedChannel?: MockSealedChannelOptions;
+  /** Initial contents of `session.storage`. */
+  storage?: Record<string, string>;
 }
 
 export interface MockMindooDBAppSessionController {
@@ -2262,6 +2314,8 @@ export interface MockMindooDBAppSessionController {
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   emitLocaleChange(locale: string): void;
+  /** Runs the app's `onBeforeClose` listeners, as the host does before a teardown. */
+  emitBeforeClose(): Promise<void>;
 }
 
 export {
@@ -2286,6 +2340,7 @@ export function createMockMindooDBAppSession(
     emitViewportChange: state.emitViewportChange,
     emitUiPreferencesChange: state.emitUiPreferencesChange,
     emitLocaleChange: state.emitLocaleChange,
+    emitBeforeClose: state.emitBeforeClose,
   };
 }
 
@@ -2333,6 +2388,11 @@ export interface FakeBridgeHostController {
   emitQueryResult(subscriptionId: string, result: MindooDBAppQueryResult): void;
   /** Push a navigator view-changed event to connected apps. */
   emitViewChanged(navigatorId: string, stats: MindooDBAppViewUpdateStats): void;
+  /**
+   * Ask connected apps to flush before teardown, as the Haven host does. Resolves `true`
+   * when every port acknowledged and `false` when the grace period ran out.
+   */
+  requestBeforeClose(timeoutMs?: number): Promise<boolean>;
   postPortMessage(
     message: MindooDBAppBridgePortMessage,
     transfer?: Transferable[],
@@ -2350,6 +2410,8 @@ export function createFakeBridgeHost(
   );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
+  const beforeCloseWaiters = new Map<string, () => void>();
+  let beforeCloseCounter = 0;
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
   const readStreams = new Map<string, MindooDBAppReadableAttachmentStream>();
   const writeStreams = new Map<string, MindooDBAppWritableAttachmentStream>();
@@ -2413,6 +2475,9 @@ export function createFakeBridgeHost(
       port.close();
     });
     connectedPorts.clear();
+    // `connect()` memoises one session per launch id. Fake hosts reuse the same launch id
+    // across tests, so a leftover entry would hand the next host a port into this one.
+    releaseMindooDBAppBridgeSessions(state.getLaunchContext().launchId);
     if (previousWindowDescriptor) {
       Object.defineProperty(globalThis, "window", previousWindowDescriptor);
     } else if (previousWindowValue !== undefined) {
@@ -2431,6 +2496,7 @@ export function createFakeBridgeHost(
     if (installed) {
       return;
     }
+    releaseMindooDBAppBridgeSessions(state.getLaunchContext().launchId);
     previousWindowDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
       "window",
@@ -3272,6 +3338,10 @@ export function createFakeBridgeHost(
     if (!message || message.protocol !== PROTOCOL) {
       return;
     }
+    if (message.kind === "before-close-ack") {
+      beforeCloseWaiters.get(message.closeId)?.();
+      return;
+    }
     if (message.kind === "request") {
       requests.push(message);
       try {
@@ -3402,6 +3472,34 @@ export function createFakeBridgeHost(
         stats,
       };
       connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    async requestBeforeClose(timeoutMs = 500) {
+      if (!connectedPorts.size) {
+        return true;
+      }
+      beforeCloseCounter += 1;
+      const closeId = `close-${beforeCloseCounter}`;
+      let pending = connectedPorts.size;
+
+      const acknowledged = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), timeoutMs);
+        beforeCloseWaiters.set(closeId, () => {
+          pending -= 1;
+          if (pending <= 0) {
+            clearTimeout(timer);
+            resolve(true);
+          }
+        });
+        const payload: MindooDBAppBridgeBeforeCloseMessage = {
+          protocol: PROTOCOL,
+          kind: "before-close",
+          closeId,
+        };
+        connectedPorts.forEach((port) => port.postMessage(payload));
+      });
+
+      beforeCloseWaiters.delete(closeId);
+      return acknowledged;
     },
     postPortMessage(message, transfer = []) {
       connectedPorts.forEach((port) => port.postMessage(message, transfer));

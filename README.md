@@ -1472,7 +1472,70 @@ wrangler deploy
 
 Other static hosting options work just as well: Netlify, Vercel, any web server serving your `dist/` folder.
 
-**Haven-hosted bundles** are an alternative: import your built app directly into Haven, where it is served by a service worker on an opaque origin. Haven-hosted apps load without a network connection and receive a stricter sandbox.
+### Haven-hosted bundles
+
+Instead of Haven loading your app from your server on every launch, you can hand Haven the build itself. Haven stores it in its own cache and serves it from a service worker on an opaque origin, so the app loads offline and runs in a stricter sandbox than an external URL gets.
+
+You can upload a build directory by hand, but the useful form is to publish a **bundle manifest** next to your app and let Haven fetch and update it. Add the plugin to your Vite config:
+
+```ts
+import { havenBundle } from "mindoodb-app-sdk/vite";
+
+export default defineConfig({
+  // Haven serves the bundle under a path it picks, so assets must be relative.
+  base: "./",
+  plugins: [havenBundle()],
+});
+```
+
+After `vite build`, `dist/` additionally contains `haven-bundle.json` (app id, version, a SHA-256 for every file, and one for the bundle as a whole) and `haven-bundle.zip` (all of it in one archive). The app's own service worker files are left out — Haven serves the bundle and a second service worker would only fight it for the scope. The user pastes the URL of `haven-bundle.json` into Haven's application settings; Haven downloads the archive, rejects it unless every hash matches the manifest, and installs it.
+
+Haven then owns updates. It re-reads the manifest before launches and on a slow background timer, and installs a new version when the `contentHash` changes — which means an app in hosted mode should **not** run its own update logic:
+
+```ts
+import { isHostedBundleRuntime } from "mindoodb-app-sdk";
+
+if (!isHostedBundleRuntime()) {
+  registerServiceWorker();
+}
+```
+
+Serving the manifest and archive to Haven needs CORS, since Haven is on a different origin than your app:
+
+```
+/haven-bundle.json
+  Access-Control-Allow-Origin: *
+  Cache-Control: no-cache
+
+/haven-bundle.zip
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300
+```
+
+The manifest must not be cached — it is the signal that a new version exists. The archive can be, because the manifest pins it by hash.
+
+#### Storage in hosted mode
+
+An opaque origin has no storage: touching `localStorage` throws a `SecurityError`. The host keeps a small amount of key/value state for the app instead, reachable at `session.storage`:
+
+```ts
+await session.storage.set("my-app.theme", "dark");
+const theme = await session.storage.get("my-app.theme");
+```
+
+That is asynchronous, and most existing app code reads preferences synchronously during render. For those, install a shim before the app boots. It replaces the global `localStorage` with one hydrated from the host, serves reads from memory, and writes keys under the given prefixes back to the host in the background:
+
+```ts
+// entry point, before importing the app
+await installHavenStorageShim({ persistPrefixes: ["my-app-"] });
+await import("./main");
+```
+
+Outside hosted mode this does nothing and the real `localStorage` stays in place. Keys outside `persistPrefixes` still work but live only for the session — a deliberate choice, since the budget is meant for preferences.
+
+Two things are worth knowing when you use it. Writes are coalesced, so a value written on every `pointermove` costs one message rather than sixty per second; still, prefer committing such a value once when the interaction ends. And the budget is finite (256 KB per installed app, 64 KB per value), so `setItem` can throw `QuotaExceededError` just as it can in a browser. Anything larger than a preference belongs in a database.
+
+Haven asks the app to flush pending writes before it tears the iframe down, so a preference set immediately before closing is not lost. The shim answers that on its own.
 
 ## Local development workflow
 
@@ -1510,9 +1573,24 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
 | `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
 | `menus.hide()`                        | `Promise<void>`                      |
+| `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
 | `onViewportChange(listener)`          | `() => void` (unsubscribe)           |
+| `onBeforeClose(listener)`             | `() => void` (unsubscribe)           |
 | `disconnect()`                        | `Promise<void>`                      |
+
+### MindooDBAppStorageApi
+
+Host-kept key/value state, the only durable storage a hosted app has. See [Storage in hosted mode](#storage-in-hosted-mode).
+
+| Method                | Returns                             |
+| --------------------- | ----------------------------------- |
+| `snapshot(options?)`  | `Promise<Record<string, string>>`   |
+| `get(key)`            | `Promise<string \| null>`           |
+| `set(key, value)`     | `Promise<void>`                     |
+| `remove(key)`         | `Promise<void>`                     |
+| `keys(options?)`      | `Promise<string[]>`                 |
+| `clear(options?)`     | `Promise<void>`                     |
 
 ### MindooDBAppDatabase
 
@@ -1642,6 +1720,14 @@ interface MindooDBAppUpdateDocumentInput {
 | `createViewLanguage<T>()`                  | Create a typed expression builder for view definitions                                      |
 | `abbreviateCanonicalName(value)`           | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo`    |
 | `expandAbbreviatedName(value)`             | Convert an abbreviated Notes-style name like `Jane/Dev/Mindoo` to `cn=Jane/ou=Dev/o=Mindoo` |
+| `isHostedBundleRuntime(search?)`           | Whether Haven is serving this app as a hosted bundle rather than from its own URL           |
+| `installHavenStorageShim(options?)`        | Replace `localStorage` with a host-backed shim in hosted mode; a no-op everywhere else      |
+
+The Vite plugin lives behind its own entrypoint:
+
+| Function                | Import from               | Description                                              |
+| ----------------------- | ------------------------- | -------------------------------------------------------- |
+| `havenBundle(options?)` | `mindoodb-app-sdk/vite`   | Emit `haven-bundle.json` and `haven-bundle.zip` on build |
 
 ## Permissions and mappings
 

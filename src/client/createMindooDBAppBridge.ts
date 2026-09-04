@@ -78,6 +78,7 @@ import type {
   MindooDBAppSession,
   MindooDBAppShowMenuInput,
   MindooDBAppShowMenuResult,
+  MindooDBAppStorageApi,
   MindooDBAppScopedDocId,
   MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewDefinition,
@@ -1372,8 +1373,13 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
  */
 class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly menus: MindooDBAppMenuApi;
+  public readonly storage: MindooDBAppStorageApi;
+  private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
 
-  constructor(private readonly rpc: PortRpcClient) {
+  constructor(
+    private readonly rpc: PortRpcClient,
+    private readonly onDisconnect?: () => void,
+  ) {
     this.menus = {
       show: async (input: MindooDBAppShowMenuInput) =>
         await this.rpc.call<MindooDBAppShowMenuResult>("menus.show", input),
@@ -1381,6 +1387,60 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
         await this.rpc.call("menus.hide", {});
       },
     };
+    this.storage = {
+      snapshot: async (options) =>
+        await this.rpc.call<Record<string, string>>("appStorage.snapshot", {
+          prefixes: options?.prefixes,
+        }),
+      get: async (key: string) =>
+        await this.rpc.call<string | null>("appStorage.get", { key }),
+      set: async (key: string, value: string) => {
+        await this.rpc.call("appStorage.set", { key, value });
+      },
+      remove: async (key: string) => {
+        await this.rpc.call("appStorage.remove", { key });
+      },
+      keys: async (options) =>
+        await this.rpc.call<string[]>("appStorage.keys", { prefix: options?.prefix }),
+      clear: async (options) => {
+        await this.rpc.call("appStorage.clear", { prefix: options?.prefix });
+      },
+    };
+    this.rpc.addMessageListener((message) => {
+      if (message.kind === "before-close") {
+        void this.handleBeforeClose(message.closeId);
+      }
+    });
+  }
+
+  /**
+   * Lets every listener finish, then tells the host it may proceed.
+   *
+   * The ack is sent even when a listener fails: the host is going to tear the launch down
+   * either way once its grace period elapses, and answering late only wastes that time.
+   */
+  private async handleBeforeClose(closeId: string) {
+    try {
+      await Promise.all(
+        [...this.beforeCloseListeners].map(async (listener) => {
+          try {
+            await listener();
+          } catch (error) {
+            console.warn("[mindoodb-app-sdk] A before-close listener failed.", error);
+          }
+        }),
+      );
+    } finally {
+      try {
+        this.rpc.postMessage({
+          protocol: PROTOCOL,
+          kind: "before-close-ack",
+          closeId,
+        });
+      } catch (error) {
+        console.warn("[mindoodb-app-sdk] Could not acknowledge before-close.", error);
+      }
+    }
   }
 
   /** Returns the launch context provided by the Haven host. */
@@ -1521,14 +1581,51 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     });
   }
 
+  /** Register work to run before the host tears this launch down. */
+  onBeforeClose(listener: () => void | Promise<void>) {
+    this.beforeCloseListeners.add(listener);
+    return () => {
+      this.beforeCloseListeners.delete(listener);
+    };
+  }
+
   /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
     try {
       await this.rpc.call("session.disconnect", {});
     } finally {
       this.rpc.dispose();
+      this.onDisconnect?.();
     }
   }
+}
+
+/**
+ * One session per launch id, shared across every `createMindooDBAppBridge()` caller.
+ *
+ * Each handshake allocates a `MessagePort` and makes the host register a session record,
+ * so a second `connect()` for the same launch would leave a duplicate session behind on
+ * the host. That matters as soon as anything connects before the app's own entry point
+ * does — the storage shim runs during boot and the app calls `connect()` again later.
+ * Both must end up on the same port.
+ */
+const sessionsByLaunchId = new Map<string, Promise<MindooDBAppSession>>();
+
+/**
+ * Drops memoised sessions so the next `connect()` performs a fresh handshake.
+ *
+ * A real app never needs this: its document dies together with the host. Test harnesses
+ * do, because they stand up several hosts under the same launch id inside one JavaScript
+ * realm, and a cached session would still point at the previous host's port.
+ *
+ * @param launchId Release only this launch. Omit to release all of them.
+ */
+export function releaseMindooDBAppBridgeSessions(launchId?: string): void {
+  if (launchId === undefined) {
+    sessionsByLaunchId.clear();
+    return;
+  }
+  sessionsByLaunchId.delete(launchId);
 }
 
 /**
@@ -1537,6 +1634,10 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
  * The returned object performs the initial postMessage handshake with the
  * Haven host and exposes a session with document, view, and attachment
  * APIs over a dedicated `MessagePort`.
+ *
+ * `connect()` is memoised per launch id: repeated calls resolve to the same session, and
+ * concurrent calls share a single in-flight handshake. The entry is released when the
+ * session disconnects or the handshake fails, so a later `connect()` can retry.
  */
 export function createMindooDBAppBridge(): MindooDBAppBridge {
   return {
@@ -1544,9 +1645,31 @@ export function createMindooDBAppBridge(): MindooDBAppBridge {
       options?: MindooDBAppBridgeConnectOptions,
     ): Promise<MindooDBAppSession> {
       const launchId = resolveLaunchId(options);
-      const port = await waitForConnectedPort(options, launchId);
-      const rpc = new PortRpcClient(port);
-      return new MindooDBAppSessionImpl(rpc);
+      const existing = sessionsByLaunchId.get(launchId);
+      if (existing) {
+        return await existing;
+      }
+
+      const pending = (async () => {
+        const port = await waitForConnectedPort(options, launchId);
+        const rpc = new PortRpcClient(port);
+        return new MindooDBAppSessionImpl(rpc, () => {
+          if (sessionsByLaunchId.get(launchId) === pending) {
+            sessionsByLaunchId.delete(launchId);
+          }
+        });
+      })();
+
+      sessionsByLaunchId.set(launchId, pending);
+
+      try {
+        return await pending;
+      } catch (error) {
+        if (sessionsByLaunchId.get(launchId) === pending) {
+          sessionsByLaunchId.delete(launchId);
+        }
+        throw error;
+      }
     },
   };
 }

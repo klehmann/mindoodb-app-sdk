@@ -57,6 +57,17 @@ export type {
 /** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
 
+/**
+ * How the host delivers the app's assets.
+ *
+ * - `"external"` — loaded from the app's own origin. Normal web platform behaviour.
+ * - `"hosted"` — the host serves the app's build from its own cache into a sandboxed
+ *   iframe without `allow-same-origin`. The document then lives in an opaque origin,
+ *   where `localStorage`, `sessionStorage`, IndexedDB and service worker registration
+ *   are unavailable and throw on access.
+ */
+export type MindooDBAppHostingMode = "external" | "hosted";
+
 /** Theme mode currently active in the Haven host UI. */
 export type MindooDBAppThemeMode = "light" | "dark";
 
@@ -218,6 +229,15 @@ export interface MindooDBAppLaunchContext {
   appVersion?: string;
   launchId: string;
   runtime: MindooDBAppRuntime;
+  /**
+   * How the host delivers this app. `"hosted"` means the host serves the app's own
+   * build from its cache under an opaque origin: `localStorage`/`sessionStorage` throw
+   * on access and the app must not register a service worker of its own. `"external"`
+   * means the app was loaded from its own origin with the usual web platform storage.
+   *
+   * Available synchronously before the bridge connects via {@link isHostedBundleRuntime}.
+   */
+  hosting: MindooDBAppHostingMode;
   theme: MindooDBAppHostTheme;
   viewport: MindooDBAppViewport | null;
   uiPreferences: MindooDBAppUiPreferences;
@@ -1133,6 +1153,30 @@ export interface MindooDBAppBridgeViewChangedMessage {
   stats: MindooDBAppViewUpdateStats;
 }
 
+/**
+ * Host-pushed event announcing that this launch is about to be torn down.
+ *
+ * Removing an iframe from the DOM discards messages its port has not delivered yet, and
+ * `pagehide` does not reliably fire for frames — so an app with queued asynchronous writes
+ * would lose them. The host therefore asks first and waits, briefly, for
+ * {@link MindooDBAppBridgeBeforeCloseAck}.
+ *
+ * The host proceeds after a short timeout regardless, so an app that does not answer is
+ * not able to block the close.
+ */
+export interface MindooDBAppBridgeBeforeCloseMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "before-close";
+  closeId: string;
+}
+
+/** App acknowledgement that it has finished flushing and is ready to be torn down. */
+export interface MindooDBAppBridgeBeforeCloseAck {
+  protocol: "mindoodb-app-bridge";
+  kind: "before-close-ack";
+  closeId: string;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
@@ -1142,7 +1186,9 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeUiPreferencesChangedMessage
   | MindooDBAppBridgeLocaleChangedMessage
   | MindooDBAppBridgeQueryResultMessage
-  | MindooDBAppBridgeViewChangedMessage;
+  | MindooDBAppBridgeViewChangedMessage
+  | MindooDBAppBridgeBeforeCloseMessage
+  | MindooDBAppBridgeBeforeCloseAck;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -2442,6 +2488,35 @@ export interface MindooDBAppSealedChannelRequestInput {
   payload: unknown;
 }
 
+/**
+ * Small key/value store the host keeps on the app's behalf.
+ *
+ * Scoped to the app *registration*, so two registrations of the same app do not see each
+ * other's keys, and the data survives a bundle update. Values are strings; the host
+ * enforces a per-value and a total byte budget and rejects writes beyond it with a
+ * `quota-exceeded` bridge error.
+ *
+ * This exists because a hosted app runs in an opaque origin where `localStorage` is not
+ * available. It is meant for preferences and similar small state — documents belong in a
+ * database, not here.
+ */
+export interface MindooDBAppStorageApi {
+  /**
+   * Read many keys in one round trip. Without `prefixes` it returns everything the app
+   * has stored.
+   *
+   * Apps that replace synchronous `localStorage` access need the whole working set up
+   * front, and doing that as one call instead of N keeps it to a single boot round trip.
+   */
+  snapshot(options?: { prefixes?: string[] }): Promise<Record<string, string>>;
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+  keys(options?: { prefix?: string }): Promise<string[]>;
+  /** Remove every key, or only those starting with `prefix`. */
+  clear(options?: { prefix?: string }): Promise<void>;
+}
+
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   /**
@@ -2523,6 +2598,11 @@ export interface MindooDBAppSession {
   ): Promise<MindooDBAppViewNavigator>;
   menus: MindooDBAppMenuApi;
   /**
+   * Host-backed key/value storage for this app registration. Usable in both hosting
+   * modes; required in `"hosted"` mode, where `localStorage` throws.
+   */
+  storage: MindooDBAppStorageApi;
+  /**
    * Subscribe to host-pushed theme changes (light/dark mode and preset).
    * The initial theme is in `launchContext.theme`. Returns an unsubscribe
    * function.
@@ -2549,6 +2629,17 @@ export interface MindooDBAppSession {
    * new BCP-47 language tag (e.g. `"de"`). Returns an unsubscribe function.
    */
   onLocaleChange(listener: (locale: string) => void): () => void;
+  /**
+   * Run work before the host tears this launch down, e.g. flushing buffered writes.
+   *
+   * The host waits for all registered listeners to settle, but only for a short grace
+   * period — return quickly and do not start new work here. A rejected listener is logged
+   * and does not stop the teardown. Returns an unsubscribe function.
+   *
+   * This does not fire when the browser tab itself goes away; a crash or a killed tab can
+   * still lose whatever was buffered.
+   */
+  onBeforeClose(listener: () => void | Promise<void>): () => void;
   /**
    * Tear down the session: close the bridge port and release all host-side
    * resources of this launch (navigators, live queries, streams). The
