@@ -1488,7 +1488,7 @@ export default defineConfig({
 });
 ```
 
-After `vite build`, `dist/` additionally contains `haven-bundle.json` (app id, version, a SHA-256 for every file, and one for the bundle as a whole) and `haven-bundle.zip` (all of it in one archive). The app's own service worker files are left out — Haven serves the bundle and a second service worker would only fight it for the scope. The user pastes the URL of `haven-bundle.json` into Haven's application settings; Haven downloads the archive, rejects it unless every hash matches the manifest, and installs it.
+After `vite build`, `dist/` additionally contains `haven-bundle.json` (app id, version, a SHA-256 for every file, and one for the bundle as a whole) and `haven-bundle.zip` (all of it in one archive). The app's own service worker files are left out — Haven serves the bundle and a second service worker would only fight it for the scope. The user pastes the app origin into Haven's application settings (the same URL as for external hosting); Haven fetches `/haven-bundle.json` from there, downloads the archive, rejects it unless every hash matches the manifest, and installs it.
 
 Haven then owns updates. It re-reads the manifest before launches and on a slow background timer, and installs a new version when the `contentHash` changes — which means an app in hosted mode should **not** run its own update logic:
 
