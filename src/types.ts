@@ -971,6 +971,12 @@ export interface MindooDBAppBridgeConnectOptions {
   targetOrigin?: string;
   /** How long to wait for the host to answer the handshake before rejecting (default 10000 ms). */
   connectTimeoutMs?: number;
+  /**
+   * When `false`, the SDK does not listen for Haven's host keyboard shortcuts
+   * (workspace / app drawer). Default is on: the same chords Haven handles
+   * on its own pages are reported from inside the iframe.
+   */
+  hostShortcuts?: boolean;
 }
 
 /** Initial postMessage handshake sent from the app to the Haven. */
@@ -1177,6 +1183,33 @@ export interface MindooDBAppBridgeBeforeCloseAck {
   closeId: string;
 }
 
+/** A Haven-owned keyboard chord the iframe should recognise. */
+export type MindooDBAppHostShortcutAction = "open-workspace" | "toggle-app-drawer";
+
+/** One host shortcut, matched against {@link KeyboardEvent.code} plus modifiers. */
+export interface MindooDBAppHostShortcutBinding {
+  action: MindooDBAppHostShortcutAction;
+  /** Physical key, e.g. `"Space"` or `"Enter"`. */
+  code: string;
+  shiftKey: boolean;
+  /** Meta (macOS) or Control (Windows/Linux); Alt is never part of the chord. */
+  metaOrCtrl: boolean;
+}
+
+/** Host-pushed table of chords. The iframe replaces its local copy. */
+export interface MindooDBAppBridgeShortcutsChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "shortcuts-changed";
+  shortcuts: MindooDBAppHostShortcutBinding[];
+}
+
+/** App → host: a host shortcut was pressed inside the iframe. */
+export interface MindooDBAppBridgeShortcutInvokedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "shortcut-invoked";
+  action: MindooDBAppHostShortcutAction;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
@@ -1188,7 +1221,9 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeQueryResultMessage
   | MindooDBAppBridgeViewChangedMessage
   | MindooDBAppBridgeBeforeCloseMessage
-  | MindooDBAppBridgeBeforeCloseAck;
+  | MindooDBAppBridgeBeforeCloseAck
+  | MindooDBAppBridgeShortcutsChangedMessage
+  | MindooDBAppBridgeShortcutInvokedMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =

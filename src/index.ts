@@ -21,6 +21,14 @@ export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
 export { releaseMindooDBAppBridgeSessions } from "./client/createMindooDBAppBridge";
 export {
+  DEFAULT_HAVEN_HOST_SHORTCUTS,
+  applyHostedDocumentOverscrollContain,
+  installHostShortcutCapture,
+  isHostShortcutAction,
+  matchHostShortcut,
+  sanitizeHostShortcutBindings,
+} from "./hostShortcuts";
+export {
   MINDOODB_APP_HOSTING_QUERY_PARAM,
   isHostedBundleRuntime,
   readMindooDBAppHostingMode,

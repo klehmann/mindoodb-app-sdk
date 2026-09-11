@@ -93,7 +93,15 @@ import type {
   MindooDBAppViewUpdateStats,
   MindooDBAppScanAttachmentResult,
   MindooDBAppWritableAttachmentStream,
+  MindooDBAppHostShortcutBinding,
 } from "../types";
+import {
+  applyHostedDocumentOverscrollContain,
+  DEFAULT_HAVEN_HOST_SHORTCUTS,
+  installHostShortcutCapture,
+  isHostShortcutAction,
+  sanitizeHostShortcutBindings,
+} from "../hostShortcuts";
 
 /** Wire protocol identifier shared with the Haven host. */
 const PROTOCOL = "mindoodb-app-bridge";
@@ -1375,10 +1383,13 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly menus: MindooDBAppMenuApi;
   public readonly storage: MindooDBAppStorageApi;
   private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
+  private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
+  private readonly stopHostShortcuts: () => void;
 
   constructor(
     private readonly rpc: PortRpcClient,
     private readonly onDisconnect?: () => void,
+    hostShortcutsEnabled = true,
   ) {
     this.menus = {
       show: async (input: MindooDBAppShowMenuInput) =>
@@ -1410,7 +1421,32 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
       if (message.kind === "before-close") {
         void this.handleBeforeClose(message.closeId);
       }
+      if (message.kind === "shortcuts-changed") {
+        const next = sanitizeHostShortcutBindings(message.shortcuts);
+        if (next) {
+          this.hostShortcuts = next;
+        }
+      }
     });
+    this.stopHostShortcuts = hostShortcutsEnabled
+      ? installHostShortcutCapture({
+          getShortcuts: () => this.hostShortcuts,
+          onInvoke: (action) => {
+            if (!isHostShortcutAction(action)) {
+              return;
+            }
+            try {
+              this.rpc.postMessage({
+                protocol: PROTOCOL,
+                kind: "shortcut-invoked",
+                action,
+              });
+            } catch (error) {
+              console.warn("[mindoodb-app-sdk] Could not report a host shortcut.", error);
+            }
+          },
+        })
+      : () => undefined;
   }
 
   /**
@@ -1591,6 +1627,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
 
   /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
+    this.stopHostShortcuts();
     try {
       await this.rpc.call("session.disconnect", {});
     } finally {
@@ -1652,12 +1689,17 @@ export function createMindooDBAppBridge(): MindooDBAppBridge {
 
       const pending = (async () => {
         const port = await waitForConnectedPort(options, launchId);
+        applyHostedDocumentOverscrollContain();
         const rpc = new PortRpcClient(port);
-        return new MindooDBAppSessionImpl(rpc, () => {
-          if (sessionsByLaunchId.get(launchId) === pending) {
-            sessionsByLaunchId.delete(launchId);
-          }
-        });
+        return new MindooDBAppSessionImpl(
+          rpc,
+          () => {
+            if (sessionsByLaunchId.get(launchId) === pending) {
+              sessionsByLaunchId.delete(launchId);
+            }
+          },
+          options?.hostShortcuts !== false,
+        );
       })();
 
       sessionsByLaunchId.set(launchId, pending);
