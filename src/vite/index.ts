@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -69,7 +69,17 @@ export interface HavenBundleVitePlugin {
   name: string;
   apply: "build";
   configResolved: (config: ResolvedViteConfig) => void;
+  writeBundle: () => Promise<void>;
   closeBundle: () => Promise<void>;
+}
+
+async function directoryExists(dir: string) {
+  try {
+    await access(dir);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sha256(data: Uint8Array | string) {
@@ -153,6 +163,83 @@ async function readPackageMetadata(root: string) {
  */
 export function havenBundle(options: HavenBundleOptions = {}): HavenBundleVitePlugin {
   let resolvedConfig: ResolvedViteConfig | null = null;
+  let emitted = false;
+
+  async function emitBundle() {
+    if (emitted) {
+      return;
+    }
+    if (!resolvedConfig) {
+      throw new Error("[haven-bundle] Plugin ran without a resolved Vite config.");
+    }
+
+    const outDir = path.resolve(resolvedConfig.root, resolvedConfig.build.outDir);
+    // Vite 8 / Rolldown calls closeBundle after transform, before outDir exists.
+    // Throwing here aborts the write and masks the successful transform.
+    if (!(await directoryExists(outDir))) {
+      return;
+    }
+
+    const allPaths = await collectFiles(outDir);
+    const bundlePaths = allPaths.filter((candidate) => !isExcluded(candidate, options));
+
+    if (!bundlePaths.length) {
+      throw new Error(`[haven-bundle] No bundle files found in "${outDir}".`);
+    }
+
+    const entry = resolveEntryPath(bundlePaths, options.entry);
+    const packageMetadata = await readPackageMetadata(resolvedConfig.root);
+    const appId = options.appId ?? packageMetadata.name;
+    const version = options.version ?? packageMetadata.version;
+
+    if (!appId) {
+      throw new Error("[haven-bundle] Unable to determine appId — pass it explicitly.");
+    }
+    if (!version) {
+      throw new Error("[haven-bundle] Unable to determine version — pass it explicitly.");
+    }
+
+    const files: MindooDBAppBundleFileEntry[] = [];
+    const archiveEntries: { path: string; data: Uint8Array }[] = [];
+
+    for (const relativePath of bundlePaths) {
+      const data = await readFile(path.join(outDir, relativePath));
+      files.push({ path: relativePath, hash: sha256(data), size: data.byteLength });
+      archiveEntries.push({ path: relativePath, data });
+    }
+
+    const archive = createZipArchive(archiveEntries);
+    const manifest: MindooDBAppBundleManifest = {
+      format: MINDOODB_APP_BUNDLE_MANIFEST_FORMAT,
+      formatVersion: MINDOODB_APP_BUNDLE_MANIFEST_VERSION,
+      appId,
+      version,
+      entry,
+      archive: {
+        path: MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME,
+        hash: sha256(archive),
+        size: archive.byteLength,
+      },
+      contentHash: sha256(buildMindooDBAppBundleContentHashInput(files)),
+      generatedAt: new Date().toISOString(),
+      files,
+    };
+
+    await writeFile(path.join(outDir, MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME), archive);
+    await writeFile(
+      path.join(outDir, MINDOODB_APP_BUNDLE_MANIFEST_FILE_NAME),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8",
+    );
+
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    console.log(
+      `[haven-bundle] ${files.length} files (${(totalBytes / 1024 / 1024).toFixed(2)} MB) → ` +
+        `${MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME} (${(archive.byteLength / 1024 / 1024).toFixed(2)} MB), ` +
+        `contentHash ${manifest.contentHash.slice(7, 19)}`,
+    );
+    emitted = true;
+  }
 
   return {
     name: "haven-bundle",
@@ -160,70 +247,11 @@ export function havenBundle(options: HavenBundleOptions = {}): HavenBundleVitePl
     configResolved(config) {
       resolvedConfig = config;
     },
+    async writeBundle() {
+      await emitBundle();
+    },
     async closeBundle() {
-      if (!resolvedConfig) {
-        throw new Error("[haven-bundle] Plugin ran without a resolved Vite config.");
-      }
-
-      const outDir = path.resolve(resolvedConfig.root, resolvedConfig.build.outDir);
-      const allPaths = await collectFiles(outDir);
-      const bundlePaths = allPaths.filter((candidate) => !isExcluded(candidate, options));
-
-      if (!bundlePaths.length) {
-        throw new Error(`[haven-bundle] No bundle files found in "${outDir}".`);
-      }
-
-      const entry = resolveEntryPath(bundlePaths, options.entry);
-      const packageMetadata = await readPackageMetadata(resolvedConfig.root);
-      const appId = options.appId ?? packageMetadata.name;
-      const version = options.version ?? packageMetadata.version;
-
-      if (!appId) {
-        throw new Error("[haven-bundle] Unable to determine appId — pass it explicitly.");
-      }
-      if (!version) {
-        throw new Error("[haven-bundle] Unable to determine version — pass it explicitly.");
-      }
-
-      const files: MindooDBAppBundleFileEntry[] = [];
-      const archiveEntries: { path: string; data: Uint8Array }[] = [];
-
-      for (const relativePath of bundlePaths) {
-        const data = await readFile(path.join(outDir, relativePath));
-        files.push({ path: relativePath, hash: sha256(data), size: data.byteLength });
-        archiveEntries.push({ path: relativePath, data });
-      }
-
-      const archive = createZipArchive(archiveEntries);
-      const manifest: MindooDBAppBundleManifest = {
-        format: MINDOODB_APP_BUNDLE_MANIFEST_FORMAT,
-        formatVersion: MINDOODB_APP_BUNDLE_MANIFEST_VERSION,
-        appId,
-        version,
-        entry,
-        archive: {
-          path: MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME,
-          hash: sha256(archive),
-          size: archive.byteLength,
-        },
-        contentHash: sha256(buildMindooDBAppBundleContentHashInput(files)),
-        generatedAt: new Date().toISOString(),
-        files,
-      };
-
-      await writeFile(path.join(outDir, MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME), archive);
-      await writeFile(
-        path.join(outDir, MINDOODB_APP_BUNDLE_MANIFEST_FILE_NAME),
-        `${JSON.stringify(manifest, null, 2)}\n`,
-        "utf8",
-      );
-
-      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-      console.log(
-        `[haven-bundle] ${files.length} files (${(totalBytes / 1024 / 1024).toFixed(2)} MB) → ` +
-          `${MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME} (${(archive.byteLength / 1024 / 1024).toFixed(2)} MB), ` +
-          `contentHash ${manifest.contentHash.slice(7, 19)}`,
-      );
+      await emitBundle();
     },
   };
 }
