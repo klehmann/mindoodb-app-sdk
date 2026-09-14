@@ -173,6 +173,18 @@ function normalizePreview(value: unknown): MindooDBAppDragPreview {
   };
 }
 
+/** Project iframe-local pointer coordinates sent after `drag.start`. */
+export function normalizeDragPointerInput(value: unknown): { x: number; y: number } {
+  if (!value || typeof value !== "object") {
+    throw new MindooDBAppDragInputError("A drag pointer payload is required.");
+  }
+  const candidate = value as { x?: unknown; y?: unknown };
+  return {
+    x: requireFiniteNumber(candidate.x, "pointer.x"),
+    y: requireFiniteNumber(candidate.y, "pointer.y"),
+  };
+}
+
 /** Project and validate a `drag.start` payload. */
 export function normalizeDragStartInput(value: unknown): MindooDBAppDragStartInput {
   if (!value || typeof value !== "object") {
@@ -184,10 +196,7 @@ export function normalizeDragStartInput(value: unknown): MindooDBAppDragStartInp
     pointer?: unknown;
     allowedEffects?: unknown;
   };
-  if (!candidate.pointer || typeof candidate.pointer !== "object") {
-    throw new MindooDBAppDragInputError("pointer is required.");
-  }
-  const pointer = candidate.pointer as { x?: unknown; y?: unknown };
+  const pointer = normalizeDragPointerInput(candidate.pointer);
   let allowedEffects: Array<"copy"> | undefined;
   if (candidate.allowedEffects !== undefined) {
     if (
@@ -202,10 +211,7 @@ export function normalizeDragStartInput(value: unknown): MindooDBAppDragStartInp
   return {
     offers: normalizeOffers(candidate.offers),
     preview: normalizePreview(candidate.preview),
-    pointer: {
-      x: requireFiniteNumber(pointer.x, "pointer.x"),
-      y: requireFiniteNumber(pointer.y, "pointer.y"),
-    },
+    pointer,
     allowedEffects,
   };
 }
@@ -316,10 +322,16 @@ function readPreviewElement(source: HTMLElement, options: MindooDBAppDragBindSou
  * Start a host drag from a pointer gesture. Mouse/pen use a move threshold;
  * touch waits for a long-press so lists can still scroll.
  */
+export type MindooDBAppDragPointerFollow = {
+  move: (x: number, y: number) => void;
+  release: (x: number, y: number) => void;
+};
+
 export function bindDragSource(
   element: HTMLElement,
   options: MindooDBAppDragBindSourceOptions,
   start: (input: MindooDBAppDragStartInput) => Promise<MindooDBAppDragStartResult>,
+  follow?: MindooDBAppDragPointerFollow,
 ): () => void {
   const longPressMs = options.longPressMs ?? DEFAULT_DRAG_LONG_PRESS_MS;
   const thresholdPx = options.pointerThresholdPx ?? DEFAULT_DRAG_POINTER_THRESHOLD_PX;
@@ -339,7 +351,10 @@ export function bindDragSource(
     active = null;
   };
 
-  const beginHostDrag = async (event: PointerEvent) => {
+  let pendingRelease: { x: number; y: number } | null = null;
+  let hostListening = false;
+
+  const beginHostDrag = (event: PointerEvent) => {
     if (!active || active.started) {
       return;
     }
@@ -354,19 +369,38 @@ export function bindDragSource(
       return;
     }
     event.preventDefault();
-    const preview = await active.preview;
+    const pointerId = active.pointerId;
     const hotX = event.clientX - element.getBoundingClientRect().left;
     const hotY = event.clientY - element.getBoundingClientRect().top;
-    await start({
-      offers,
-      preview: {
-        ...preview,
-        hotspotX: hotX,
-        hotspotY: hotY,
-      },
-      pointer: { x: event.clientX, y: event.clientY },
-      allowedEffects: ["copy"],
-    });
+    const pointer = { x: event.clientX, y: event.clientY };
+    void (async () => {
+      const preview = await active?.preview;
+      if (!active || active.pointerId !== pointerId || !preview) {
+        return;
+      }
+      const session = start({
+        offers,
+        preview: {
+          ...preview,
+          hotspotX: hotX,
+          hotspotY: hotY,
+        },
+        pointer,
+        allowedEffects: ["copy"],
+      });
+      hostListening = true;
+      if (pendingRelease) {
+        follow?.release(pendingRelease.x, pendingRelease.y);
+        pendingRelease = null;
+      }
+      try {
+        await session;
+      } finally {
+        hostListening = false;
+        pendingRelease = null;
+        reset();
+      }
+    })();
   };
 
   const onPointerDown = (event: PointerEvent) => {
@@ -374,6 +408,13 @@ export function bindDragSource(
       return;
     }
     reset();
+    pendingRelease = null;
+    hostListening = false;
+    try {
+      element.setPointerCapture(event.pointerId);
+    } catch {
+      // Capture is best-effort; mouse-down still delivers moves to this frame.
+    }
     const previewElement = readPreviewElement(element, options);
     active = {
       pointerId: event.pointerId,
@@ -400,7 +441,11 @@ export function bindDragSource(
   };
 
   const onPointerMove = (event: PointerEvent) => {
-    if (!active || event.pointerId !== active.pointerId || active.started) {
+    if (!active || event.pointerId !== active.pointerId) {
+      return;
+    }
+    if (active.started) {
+      follow?.move(event.clientX, event.clientY);
       return;
     }
     const distance = pointerDistance(active.origin, event);
@@ -417,6 +462,22 @@ export function bindDragSource(
 
   const onPointerUp = (event: PointerEvent) => {
     if (!active || event.pointerId !== active.pointerId) {
+      return;
+    }
+    try {
+      if (typeof element.hasPointerCapture === "function" && element.hasPointerCapture(event.pointerId)) {
+        element.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Ignore elements that never captured.
+    }
+    if (active.started) {
+      const point = { x: event.clientX, y: event.clientY };
+      if (hostListening) {
+        follow?.release(point.x, point.y);
+      } else {
+        pendingRelease = point;
+      }
       return;
     }
     reset();

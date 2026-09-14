@@ -1974,6 +1974,8 @@ function createMockSessionState(
       });
       activeDragResolve = null;
     },
+    async reportPointer() {},
+    async release() {},
     bindSource() {
       return () => undefined;
     },

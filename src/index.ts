@@ -30,6 +30,7 @@ export {
   bindDragSource,
   isMindooDBAppDragType,
   normalizeDragAccepts,
+  normalizeDragPointerInput,
   normalizeDragStartInput,
   snapshotElementToPng,
 } from "./drag";

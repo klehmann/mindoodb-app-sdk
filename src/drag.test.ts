@@ -178,6 +178,55 @@ describe("bindDragSource", () => {
     element.remove();
   });
 
+  it("forwards pointer moves and the button-up after the host drag starts", async () => {
+    const element = mountSource();
+    const move = vi.fn();
+    const release = vi.fn();
+    const start = vi.fn(() => new Promise<never>(() => undefined));
+    const unbind = bindDragSource(
+      element,
+      { offers: [{ type: "text/plain", data: "hi" }] },
+      start,
+      { move, release },
+    );
+    element.dispatchEvent(new PointerEvent("pointerdown", {
+      button: 0,
+      pointerId: 7,
+      pointerType: "mouse",
+      clientX: 12,
+      clientY: 22,
+      bubbles: true,
+    }));
+    window.dispatchEvent(new PointerEvent("pointermove", {
+      pointerId: 7,
+      pointerType: "mouse",
+      clientX: 22,
+      clientY: 22,
+      bubbles: true,
+    }));
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalled();
+    });
+    window.dispatchEvent(new PointerEvent("pointermove", {
+      pointerId: 7,
+      pointerType: "mouse",
+      clientX: 80,
+      clientY: 40,
+      bubbles: true,
+    }));
+    expect(move).toHaveBeenCalledWith(80, 40);
+    window.dispatchEvent(new PointerEvent("pointerup", {
+      pointerId: 7,
+      pointerType: "mouse",
+      clientX: 90,
+      clientY: 44,
+      bubbles: true,
+    }));
+    expect(release).toHaveBeenCalledWith(90, 44);
+    unbind();
+    element.remove();
+  });
+
   it("starts a touch drag only after the long-press", async () => {
     const element = mountSource();
     const start = vi.fn(async () => ({ action: "cancelled" as const, reason: "gap" as const }));

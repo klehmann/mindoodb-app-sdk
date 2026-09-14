@@ -110,6 +110,7 @@ import {
 import {
   bindDragSource,
   normalizeDragAccepts,
+  normalizeDragPointerInput,
   normalizeDragStartInput,
 } from "../drag";
 
@@ -1460,8 +1461,32 @@ class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
     await this.rpc.call("drag.cancel", {});
   }
 
+  async reportPointer(point: { x: number; y: number }): Promise<void> {
+    await this.rpc.call("drag.reportPointer", normalizeDragPointerInput(point));
+  }
+
+  async release(point: { x: number; y: number }): Promise<void> {
+    await this.rpc.call("drag.release", normalizeDragPointerInput(point));
+  }
+
   bindSource(element: HTMLElement, options: MindooDBAppDragBindSourceOptions): () => void {
-    const unbind = bindDragSource(element, options, (input) => this.start(input));
+    const unbind = bindDragSource(
+      element,
+      options,
+      (input) => this.start(input),
+      {
+        move: (x, y) => {
+          void this.reportPointer({ x, y }).catch((error: unknown) => {
+            console.warn("[mindoodb-app-sdk] Could not report a drag pointer.", error);
+          });
+        },
+        release: (x, y) => {
+          void this.release({ x, y }).catch((error: unknown) => {
+            console.warn("[mindoodb-app-sdk] Could not release a drag.", error);
+          });
+        },
+      },
+    );
     this.unbindSources.add(unbind);
     return () => {
       unbind();

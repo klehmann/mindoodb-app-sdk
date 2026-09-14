@@ -1448,9 +1448,17 @@ export interface MindooDBAppDragApi {
   /** Abort a gesture this app started. */
   cancel(): Promise<void>;
   /**
+   * Forward an iframe-local pointer position after `start`. Required because
+   * the source document keeps the pressed pointer (mouse capture).
+   */
+  reportPointer(point: { x: number; y: number }): Promise<void>;
+  /** End the gesture at an iframe-local pointer position. */
+  release(point: { x: number; y: number }): Promise<void>;
+  /**
    * Pointer helper: mouse/pen starts after a small move; touch starts after
    * a long-press. Each element can be bound independently; the returned
-   * function unbinds only that element.
+   * function unbinds only that element. After start, moves and the button-up
+   * stay in this frame and are forwarded to Haven.
    */
   bindSource(element: HTMLElement, options: MindooDBAppDragBindSourceOptions): () => void;
 }

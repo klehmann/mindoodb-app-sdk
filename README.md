@@ -253,7 +253,7 @@ const unbind = session.drag.bindSource(cardEl, {
 });
 ```
 
-`bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
+`bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). After start, the source frame keeps the pressed pointer (browsers do not retarget mouse-capture into Haven) and forwards `pointermove` / `pointerup` to the host. You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview, then `reportPointer` / `release`. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
 
 ### Databases and capabilities
 
@@ -1602,6 +1602,8 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `drag.setProfile(profile)`            | `Promise<void>`                      |
 | `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
 | `drag.cancel()`                       | `Promise<void>`                      |
+| `drag.reportPointer({ x, y })`        | `Promise<void>`                      |
+| `drag.release({ x, y })`              | `Promise<void>`                      |
 | `drag.bindSource(el, options)`        | `() => void` (unbind)                |
 | `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
