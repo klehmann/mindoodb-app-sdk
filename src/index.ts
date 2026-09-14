@@ -18,6 +18,21 @@ export type {
 } from "./appBundleManifest";
 export { canPreviewAttachment } from "./attachmentPreview";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
+export {
+  DEFAULT_DRAG_LONG_PRESS_MS,
+  DEFAULT_DRAG_POINTER_THRESHOLD_PX,
+  MINDOODB_APP_MAX_DRAG_PAYLOAD_BYTES,
+  MINDOODB_APP_MAX_DRAG_PREVIEW_BYTES,
+  MINDOODB_APP_MAX_DRAG_PREVIEW_EDGE,
+  MINDOODB_APP_MAX_DRAG_TYPES,
+  MINIMAL_DRAG_PREVIEW_PNG,
+  MindooDBAppDragInputError,
+  bindDragSource,
+  isMindooDBAppDragType,
+  normalizeDragAccepts,
+  normalizeDragStartInput,
+  snapshotElementToPng,
+} from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
 export { releaseMindooDBAppBridgeSessions } from "./client/createMindooDBAppBridge";
 export {

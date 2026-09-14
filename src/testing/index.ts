@@ -51,6 +51,10 @@ import type {
   MindooDBAppHostTheme,
   MindooDBAppLaunchContext,
   MindooDBAppLiveQuerySubscription,
+  MindooDBAppDragApi,
+  MindooDBAppDragProfile,
+  MindooDBAppDragStartInput,
+  MindooDBAppDragStartResult,
   MindooDBAppMenuApi,
   MindooDBAppQueryResult,
   MindooDBAppQueryRow,
@@ -1905,6 +1909,8 @@ type MockSessionState = {
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
   emitLocaleChange: (locale: string) => void;
   emitBeforeClose: () => Promise<void>;
+  resolveDrag: (result: MindooDBAppDragStartResult) => void;
+  getDragProfile: () => MindooDBAppDragProfile | null;
 };
 
 function createMockSessionState(
@@ -1924,6 +1930,9 @@ function createMockSessionState(
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
     null;
+  let activeDragResolve: ((result: MindooDBAppDragStartResult) => void) | null =
+    null;
+  let dragProfile: MindooDBAppDragProfile | null = null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
   const openSealedChannels = new Map<string, string>();
   const appStorage = new Map<string, string>(Object.entries(options.storage ?? {}));
@@ -1943,6 +1952,32 @@ function createMockSessionState(
     }
   };
 
+  const drag: MindooDBAppDragApi = {
+    async setProfile(profile) {
+      dragProfile = profile;
+    },
+    async start(_input: MindooDBAppDragStartInput) {
+      if (activeDragResolve) {
+        activeDragResolve({
+          action: "cancelled",
+          reason: "replaced",
+        });
+      }
+      return await new Promise<MindooDBAppDragStartResult>((resolve) => {
+        activeDragResolve = resolve;
+      });
+    },
+    async cancel() {
+      activeDragResolve?.({
+        action: "cancelled",
+        reason: "source_cancelled",
+      });
+      activeDragResolve = null;
+    },
+    bindSource() {
+      return () => undefined;
+    },
+  };
   const menus: MindooDBAppMenuApi = {
     async show(_input: MindooDBAppShowMenuInput) {
       if (activeMenuResolve) {
@@ -2098,6 +2133,7 @@ function createMockSessionState(
       return view;
     },
     menus,
+    drag,
     storage: {
       async snapshot(snapshotOptions) {
         const prefixes = snapshotOptions?.prefixes;
@@ -2226,6 +2262,13 @@ function createMockSessionState(
     async emitBeforeClose() {
       await Promise.all([...beforeCloseListeners].map(async (listener) => listener()));
     },
+    resolveDrag(result) {
+      activeDragResolve?.(result);
+      activeDragResolve = null;
+    },
+    getDragProfile() {
+      return dragProfile;
+    },
   };
 }
 
@@ -2316,6 +2359,8 @@ export interface MockMindooDBAppSessionController {
   emitLocaleChange(locale: string): void;
   /** Runs the app's `onBeforeClose` listeners, as the host does before a teardown. */
   emitBeforeClose(): Promise<void>;
+  resolveDrag(result: MindooDBAppDragStartResult): void;
+  getDragProfile(): MindooDBAppDragProfile | null;
 }
 
 export {
@@ -2341,6 +2386,8 @@ export function createMockMindooDBAppSession(
     emitUiPreferencesChange: state.emitUiPreferencesChange,
     emitLocaleChange: state.emitLocaleChange,
     emitBeforeClose: state.emitBeforeClose,
+    resolveDrag: state.resolveDrag,
+    getDragProfile: state.getDragProfile,
   };
 }
 

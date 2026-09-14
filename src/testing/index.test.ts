@@ -688,6 +688,27 @@ describe("mindoodb-app-sdk/testing", () => {
     host.dispose();
   });
 
+  it("lets tests resolve a hanging mock drag.start", async () => {
+    const mockSession = createMockMindooDBAppBridge();
+    await mockSession.session.drag.setProfile({
+      accepts: ["text/plain"],
+    });
+    expect(mockSession.getDragProfile()?.accepts).toEqual(["text/plain"]);
+    const pending = mockSession.session.drag.start({
+      offers: [{ type: "text/plain", data: "hi" }],
+      preview: {
+        png: new ArrayBuffer(8),
+        width: 10,
+        height: 10,
+        hotspotX: 1,
+        hotspotY: 1,
+      },
+      pointer: { x: 0, y: 0 },
+    });
+    mockSession.resolveDrag({ action: "copied" });
+    await expect(pending).resolves.toEqual({ action: "copied" });
+  });
+
   it("answers summary queries with filters, sorting, and paging in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{

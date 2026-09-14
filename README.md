@@ -229,6 +229,32 @@ Important constraints:
 - Call `session.menus.hide()` if your app needs to explicitly dismiss a pending host menu.
 - Host-rendered menus are intended for `runtime === "iframe"`. Window-mode apps can usually show local menus instead.
 
+### Host-owned drag
+
+When two apps run as visible workspace chicklets, native HTML5 drag dies at the iframe boundary. The SDK therefore hands the gesture to Haven: the source starts it, Haven draws a PNG ghost above every frame, and the target hit-tests the drop.
+
+```ts
+await session.drag.setProfile({
+  accepts: ["text/plain", "text/markdown", "application/json", "application/x-mindoo-document"],
+  onOver: (event) => {
+    const zone = document.elementFromPoint(event.x, event.y)?.closest("[data-drop-zone]");
+    return { accept: Boolean(zone), effect: zone ? "copy" : "forbidden" };
+  },
+  onDrop: (event) => {
+    console.log(event.items["text/markdown"]);
+  },
+});
+
+const unbind = session.drag.bindSource(cardEl, {
+  offers: () => [
+    { type: "text/plain", data: "Hello" },
+    { type: "text/markdown", data: "**Hello**" },
+  ],
+});
+```
+
+`bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
+
 ### Databases and capabilities
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
@@ -1573,6 +1599,10 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
 | `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
 | `menus.hide()`                        | `Promise<void>`                      |
+| `drag.setProfile(profile)`            | `Promise<void>`                      |
+| `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
+| `drag.cancel()`                       | `Promise<void>`                      |
+| `drag.bindSource(el, options)`        | `() => void` (unbind)                |
 | `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
 | `onViewportChange(listener)`          | `() => void` (unsubscribe)           |

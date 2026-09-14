@@ -69,6 +69,11 @@ import type {
   MindooDBAppTimestampApi,
   MindooDBAppLaunchContext,
   MindooDBAppLiveQuerySubscription,
+  MindooDBAppDragApi,
+  MindooDBAppDragBindSourceOptions,
+  MindooDBAppDragProfile,
+  MindooDBAppDragStartInput,
+  MindooDBAppDragStartResult,
   MindooDBAppMenuApi,
   MindooDBAppQueryResult,
   MindooDBAppReadableAttachmentStream,
@@ -102,6 +107,11 @@ import {
   isHostShortcutAction,
   sanitizeHostShortcutBindings,
 } from "../hostShortcuts";
+import {
+  bindDragSource,
+  normalizeDragAccepts,
+  normalizeDragStartInput,
+} from "../drag";
 
 /** Wire protocol identifier shared with the Haven host. */
 const PROTOCOL = "mindoodb-app-bridge";
@@ -218,6 +228,24 @@ function isLocaleChangedMessage(
   message: MindooDBAppBridgePortMessage,
 ): message is MindooDBAppBridgeLocaleChangedMessage {
   return message.kind === "locale-changed";
+}
+
+function isDragOverMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is Extract<MindooDBAppBridgePortMessage, { kind: "drag-over" }> {
+  return message.kind === "drag-over";
+}
+
+function isDragLeaveMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is Extract<MindooDBAppBridgePortMessage, { kind: "drag-leave" }> {
+  return message.kind === "drag-leave";
+}
+
+function isDragDropMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is Extract<MindooDBAppBridgePortMessage, { kind: "drag-drop" }> {
+  return message.kind === "drag-drop";
 }
 
 /** Converts a stream error payload into a normal `Error`. */
@@ -1379,8 +1407,78 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
  * - `disconnect()` -- sends a disconnect RPC, then unconditionally disposes
  *   the port client.
  */
+class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
+  private profile: MindooDBAppDragProfile | null = null;
+  private readonly unbindSources = new Set<() => void>();
+
+  constructor(private readonly rpc: PortRpcClient) {
+    this.rpc.addMessageListener((message) => {
+      if (isDragOverMessage(message)) {
+        const result = this.profile?.onOver?.({
+          x: message.x,
+          y: message.y,
+          types: message.types,
+        });
+        const accept = result?.accept ?? true;
+        void this.rpc.call("drag.reportHover", {
+          accept,
+          effect: accept ? (result?.effect ?? "copy") : "forbidden",
+        }).catch((error: unknown) => {
+          console.warn("[mindoodb-app-sdk] Could not report a drag hover.", error);
+        });
+        return;
+      }
+      if (isDragLeaveMessage(message)) {
+        this.profile?.onLeave?.();
+        return;
+      }
+      if (isDragDropMessage(message)) {
+        this.profile?.onDrop?.({
+          x: message.x,
+          y: message.y,
+          items: message.items,
+        });
+      }
+    });
+  }
+
+  async setProfile(profile: MindooDBAppDragProfile): Promise<void> {
+    this.profile = profile;
+    await this.rpc.call("drag.setProfile", {
+      accepts: normalizeDragAccepts(profile.accepts),
+    });
+  }
+
+  async start(input: MindooDBAppDragStartInput): Promise<MindooDBAppDragStartResult> {
+    return await this.rpc.call<MindooDBAppDragStartResult>(
+      "drag.start",
+      normalizeDragStartInput(input),
+    );
+  }
+
+  async cancel(): Promise<void> {
+    await this.rpc.call("drag.cancel", {});
+  }
+
+  bindSource(element: HTMLElement, options: MindooDBAppDragBindSourceOptions): () => void {
+    const unbind = bindDragSource(element, options, (input) => this.start(input));
+    this.unbindSources.add(unbind);
+    return () => {
+      unbind();
+      this.unbindSources.delete(unbind);
+    };
+  }
+
+  dispose() {
+    this.unbindSources.forEach((unbind) => unbind());
+    this.unbindSources.clear();
+    this.profile = null;
+  }
+}
+
 class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly menus: MindooDBAppMenuApi;
+  public readonly drag: MindooDBAppDragApiImpl;
   public readonly storage: MindooDBAppStorageApi;
   private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
   private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
@@ -1398,6 +1496,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
         await this.rpc.call("menus.hide", {});
       },
     };
+    this.drag = new MindooDBAppDragApiImpl(this.rpc);
     this.storage = {
       snapshot: async (options) =>
         await this.rpc.call<Record<string, string>>("appStorage.snapshot", {
@@ -1628,6 +1727,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
     this.stopHostShortcuts();
+    this.drag.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
     } finally {

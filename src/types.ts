@@ -1223,7 +1223,10 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeBeforeCloseMessage
   | MindooDBAppBridgeBeforeCloseAck
   | MindooDBAppBridgeShortcutsChangedMessage
-  | MindooDBAppBridgeShortcutInvokedMessage;
+  | MindooDBAppBridgeShortcutInvokedMessage
+  | MindooDBAppBridgeDragOverMessage
+  | MindooDBAppBridgeDragLeaveMessage
+  | MindooDBAppBridgeDragDropMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -1331,6 +1334,151 @@ export type MindooDBAppShowMenuResult =
  * data-only (no HTML/CSS/script crosses the bridge). Intended for
  * `runtime === "iframe"`; window-mode apps can usually render local menus.
  */
+/** Well-known copy payloads for host-owned cross-iframe drag. */
+export const MINDOODB_APP_WELL_KNOWN_DRAG_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "application/json",
+  "application/x-mindoo-document",
+] as const;
+
+/** One of the documented interchange types apps should prefer. */
+export type MindooDBAppWellKnownDragType = (typeof MINDOODB_APP_WELL_KNOWN_DRAG_TYPES)[number];
+
+/** Copy is the only effect in v1. `forbidden` is a hover result, not an offer. */
+export type MindooDBAppDragEffect = "copy" | "forbidden";
+
+/** One typed string snapshot offered at `drag.start`. */
+export interface MindooDBAppDragOffer {
+  type: string;
+  data: string;
+}
+
+/** PNG ghost sent to Haven. Haven never receives HTML. */
+export interface MindooDBAppDragPreview {
+  png: ArrayBuffer;
+  width: number;
+  height: number;
+  hotspotX: number;
+  hotspotY: number;
+}
+
+/** Iframe-viewport pointer at the moment the host should take over. */
+export interface MindooDBAppDragPointer {
+  x: number;
+  y: number;
+}
+
+/** Input for a host-owned drag gesture. Iframe-only, copy-only. */
+export interface MindooDBAppDragStartInput {
+  offers: MindooDBAppDragOffer[];
+  preview: MindooDBAppDragPreview;
+  pointer: MindooDBAppDragPointer;
+  allowedEffects?: Array<"copy">;
+}
+
+/** Why a host drag ended without a copy. */
+export type MindooDBAppDragCancelReason =
+  | "escape"
+  | "pointercancel"
+  | "gap"
+  | "replaced"
+  | "hide"
+  | "source_cancelled";
+
+/** Result of `session.drag.start`. */
+export type MindooDBAppDragStartResult =
+  | { action: "copied" }
+  | { action: "cancelled"; reason: MindooDBAppDragCancelReason };
+
+/** Coordinates and offered types pushed to a potential drop target. */
+export interface MindooDBAppDragOverEvent {
+  x: number;
+  y: number;
+  types: string[];
+}
+
+/** Target answer after hit-testing a `drag-over`. */
+export interface MindooDBAppDragHoverResult {
+  accept: boolean;
+  effect?: MindooDBAppDragEffect;
+}
+
+/** Copy payloads delivered to the target on drop. */
+export interface MindooDBAppDragDropEvent {
+  x: number;
+  y: number;
+  items: Record<string, string>;
+}
+
+/**
+ * What this launch can receive, plus in-app callbacks. `accepts` is sent to
+ * Haven; the callbacks stay in the SDK and run from host push events.
+ */
+export interface MindooDBAppDragProfile {
+  accepts: string[];
+  onOver?: (event: MindooDBAppDragOverEvent) => MindooDBAppDragHoverResult | void;
+  onLeave?: () => void;
+  onDrop?: (event: MindooDBAppDragDropEvent) => void;
+}
+
+/** Options for `session.drag.bindSource`. */
+export interface MindooDBAppDragBindSourceOptions {
+  offers: MindooDBAppDragOffer[] | (() => MindooDBAppDragOffer[]);
+  /** Touch only: hold this long before Haven takes over. Default 400. */
+  longPressMs?: number;
+  /** Mouse/pen move, or the scroll-cancel slop on touch. Default 8. */
+  pointerThresholdPx?: number;
+  /** Element to snapshot; defaults to the bound source element. */
+  preview?: HTMLElement | (() => HTMLElement);
+}
+
+/**
+ * Host-owned drag across iframe chicklets. Haven renders the ghost above
+ * every frame; apps only start the gesture and hit-test drops.
+ */
+export interface MindooDBAppDragApi {
+  /** Tell Haven which types this launch can receive. */
+  setProfile(profile: MindooDBAppDragProfile): Promise<void>;
+  /**
+   * Hand the gesture to Haven. Resolves when the copy completes or the
+   * user cancels. Iframe-only.
+   */
+  start(input: MindooDBAppDragStartInput): Promise<MindooDBAppDragStartResult>;
+  /** Abort a gesture this app started. */
+  cancel(): Promise<void>;
+  /**
+   * Pointer helper: mouse/pen starts after a small move; touch starts after
+   * a long-press. Each element can be bound independently; the returned
+   * function unbinds only that element.
+   */
+  bindSource(element: HTMLElement, options: MindooDBAppDragBindSourceOptions): () => void;
+}
+
+/** Host → target: pointer is over this iframe. */
+export interface MindooDBAppBridgeDragOverMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-over";
+  x: number;
+  y: number;
+  types: string[];
+}
+
+/** Host → previous target: pointer left this iframe. */
+export interface MindooDBAppBridgeDragLeaveMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-leave";
+}
+
+/** Host → target: copy payloads for the types this launch accepts. */
+export interface MindooDBAppBridgeDragDropMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-drop";
+  x: number;
+  y: number;
+  items: Record<string, string>;
+}
+
 export interface MindooDBAppMenuApi {
   /**
    * Show a host-rendered menu at the given anchor (iframe-relative
@@ -2632,6 +2780,8 @@ export interface MindooDBAppSession {
     options?: MindooDBAppViewNavigatorOpenOptions,
   ): Promise<MindooDBAppViewNavigator>;
   menus: MindooDBAppMenuApi;
+  /** Host-owned cross-iframe drag. Iframe-only; copy-only in v1. */
+  drag: MindooDBAppDragApi;
   /**
    * Host-backed key/value storage for this app registration. Usable in both hosting
    * modes; required in `"hosted"` mode, where `localStorage` throws.

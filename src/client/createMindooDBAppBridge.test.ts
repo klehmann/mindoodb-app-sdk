@@ -1521,4 +1521,114 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     expect(hideCalled).toBe(true);
     await session.disconnect();
   });
+
+  it("routes host-owned drag requests over the bridge", async () => {
+    const { MINIMAL_DRAG_PREVIEW_PNG } = await import("../drag");
+    let capturedStart: unknown = null;
+    let capturedProfile: unknown = null;
+    let hoverReported = false;
+
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort | undefined;
+        if (!port) {
+          throw new Error("Expected bridge connection port transfer.");
+        }
+
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request") {
+            return;
+          }
+
+          if (message.method === "drag.setProfile") {
+            capturedProfile = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: null,
+            });
+            return;
+          }
+
+          if (message.method === "drag.start") {
+            capturedStart = message.params;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { action: "copied" },
+            });
+            return;
+          }
+
+          if (message.method === "drag.reportHover") {
+            hoverReported = true;
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: null,
+            });
+            return;
+          }
+
+          if (message.method === "session.disconnect") {
+            port.postMessage({
+              protocol: "mindoodb-app-bridge",
+              kind: "success",
+              id: message.id,
+              result: { ok: true },
+            });
+          }
+        });
+        port.start();
+        port.postMessage({
+          protocol: "mindoodb-app-bridge",
+          type: "mindoodb-app:connected",
+        });
+      },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        parent: host,
+        opener: null,
+        location: {
+          search: "?mindoodbAppLaunchId=launch-drag",
+        },
+        setTimeout,
+        clearTimeout,
+      },
+      configurable: true,
+    });
+
+    const session = await createMindooDBAppBridge().connect();
+    const drops: Array<Record<string, string>> = [];
+    await session.drag.setProfile({
+      accepts: ["text/plain", "text/markdown"],
+      onDrop: (event) => {
+        drops.push(event.items);
+      },
+    });
+    await expect(session.drag.start({
+      offers: [{ type: "text/plain", data: "hello" }],
+      preview: {
+        png: MINIMAL_DRAG_PREVIEW_PNG.buffer.slice(0),
+        width: 80,
+        height: 32,
+        hotspotX: 4,
+        hotspotY: 4,
+      },
+      pointer: { x: 10, y: 12 },
+    })).resolves.toEqual({ action: "copied" });
+    expect(capturedProfile).toEqual({ accepts: ["text/plain", "text/markdown"] });
+    expect(capturedStart).toMatchObject({
+      offers: [{ type: "text/plain", data: "hello" }],
+      pointer: { x: 10, y: 12 },
+    });
+    expect(hoverReported).toBe(false);
+    await session.disconnect();
+  });
 });
