@@ -54,6 +54,8 @@ export type {
   MindooDBAppViewVariableExpression,
 } from "mindoodb-view-language";
 
+import type { MindooDBAppDefinitionRegistrationPermission } from "./appDefinition";
+
 /** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
 
@@ -260,6 +262,17 @@ export interface MindooDBAppLaunchContext {
     username: string;
   };
   licensedProducts?: string[];
+  /**
+   * Permissions granted to the app as a whole rather than to one database — currently
+   * only `"proposeapps"`. Read this before offering a feature that needs one: the
+   * corresponding bridge call is refused without it, and finding that out after the
+   * user has done the work is worse than hiding the button. Per-database permissions
+   * live on {@link MindooDBAppDatabaseInfo.capabilities}.
+   *
+   * Absent on hosts predating this field; treat that as "no registration-level
+   * permissions".
+   */
+  appPermissions?: MindooDBAppDefinitionRegistrationPermission[];
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
@@ -2708,6 +2721,37 @@ export interface MindooDBAppStorageApi {
   clear(options?: { prefix?: string }): Promise<void>;
 }
 
+export interface MindooDBAppProposeAppInput {
+  /**
+   * Origin of the app to install, or the full `haven-app.json` URL. Haven reads the
+   * definition from there itself.
+   */
+  url: string;
+  /** Suggested label. The user sees the publisher's own label alongside it. */
+  label?: string;
+}
+
+export type MindooDBAppProposeAppResult =
+  | {
+      ok: true;
+      /** The app id Haven registered. */
+      appId: string;
+      /** The registration instance id, stable across later updates of this app. */
+      appInstanceId: string;
+      label: string;
+      /**
+       * Non-fatal problems from the install, such as a database that could not be
+       * created. The app is registered; these still need the user's attention.
+       */
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      /** `declined` — the user said no. `unavailable` — the definition could not be read. */
+      reason: "declined" | "unavailable";
+      message?: string;
+    };
+
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   /**
@@ -2787,6 +2831,22 @@ export interface MindooDBAppSession {
     viewId: string,
     options?: MindooDBAppViewNavigatorOpenOptions,
   ): Promise<MindooDBAppViewNavigator>;
+  /**
+   * Ask Haven to install another app from its own origin.
+   *
+   * Requires the registration-level `proposeapps` permission, and even then this
+   * only *asks*: Haven fetches `haven-app.json` from `url` itself, shows the user
+   * the origin, the permissions, the network allowlist and the databases the app
+   * would get, and installs nothing unless they confirm.
+   *
+   * The app passes a URL and nothing else. It cannot supply the definition inline,
+   * choose the tenant, or name a physical database — which is what keeps a proposer
+   * from describing one app and installing another.
+   *
+   * Resolves with `ok: false` when the user declines or the definition could not be
+   * read — ordinary outcomes, not errors.
+   */
+  proposeApp(input: MindooDBAppProposeAppInput): Promise<MindooDBAppProposeAppResult>;
   menus: MindooDBAppMenuApi;
   /** Host-owned cross-iframe drag. Iframe-only; copy-only in v1. */
   drag: MindooDBAppDragApi;

@@ -8,3 +8,6 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# pnpm pack output used by sibling apps with LOCAL_MINDOODB=1.
+*.tgz

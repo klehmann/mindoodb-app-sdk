@@ -56,6 +56,8 @@ import type {
   MindooDBAppDragStartInput,
   MindooDBAppDragStartResult,
   MindooDBAppMenuApi,
+  MindooDBAppProposeAppInput,
+  MindooDBAppProposeAppResult,
   MindooDBAppQueryResult,
   MindooDBAppQueryRow,
   MindooDBAppQuerySortKey,
@@ -389,6 +391,7 @@ function mergeLaunchContext(
       viewport: current.viewport ? { ...current.viewport } : null,
       uiPreferences: { ...current.uiPreferences },
       user: { ...current.user },
+      appPermissions: [...(current.appPermissions ?? [])],
       launchParameters: { ...current.launchParameters },
       databases: current.databases.map((database) => ({
         ...database,
@@ -439,6 +442,7 @@ function mergeLaunchContext(
       ? { ...current.uiPreferences, ...patch.uiPreferences }
       : { ...current.uiPreferences },
     user: patch.user ? { ...current.user, ...patch.user } : { ...current.user },
+    appPermissions: [...(patch.appPermissions ?? current.appPermissions ?? [])],
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
       : { ...current.launchParameters },
@@ -533,6 +537,7 @@ function createDefaultLaunchContext(
       username: "Test User",
     },
     licensedProducts: [],
+    appPermissions: [],
     launchParameters: {},
     databases: [],
     views: [],
@@ -1895,6 +1900,7 @@ type MockSessionState = {
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
   getLicensedProducts: () => string[];
+  proposedApps: MindooDBAppProposeAppInput[];
   createViewNavigator: (
     input: MindooDBAppCreateViewNavigatorInput,
   ) => Promise<MindooDBAppViewNavigator>;
@@ -1935,6 +1941,7 @@ function createMockSessionState(
   let dragProfile: MindooDBAppDragProfile | null = null;
   let databaseInfos: MindooDBAppDatabaseInfo[] = [];
   const openSealedChannels = new Map<string, string>();
+  const proposedApps: MindooDBAppProposeAppInput[] = [];
   const appStorage = new Map<string, string>(Object.entries(options.storage ?? {}));
 
   const requireCapability = (
@@ -2075,6 +2082,13 @@ function createMockSessionState(
     },
     async getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
+    },
+    async proposeApp(input) {
+      proposedApps.push({ ...input });
+      // Declining by default: in the real host a human has to approve, so a test
+      // that never says otherwise should see the answer it would get if nobody did.
+      const outcome = options.proposeApp?.(input);
+      return outcome ?? { ok: false, reason: "declined" };
     },
     async listDatabases() {
       return databaseInfos.map((entry) => ({
@@ -2237,6 +2251,7 @@ function createMockSessionState(
     getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
     },
+    proposedApps,
     createViewNavigator: session.createViewNavigator,
     openViewNavigator: session.openViewNavigator,
     bridge,
@@ -2341,6 +2356,11 @@ export interface CreateMockMindooDBAppSessionOptions {
   databases?: MockMindooDBAppDatabaseDefinition[];
   onDisconnect?: () => MaybePromise<void>;
   sealedChannel?: MockSealedChannelOptions;
+  /**
+   * Answer for `session.proposeApp`, standing in for the user's decision in the
+   * real host's consent dialog. Omitted means declined.
+   */
+  proposeApp?: (input: MindooDBAppProposeAppInput) => MindooDBAppProposeAppResult;
   /** Initial contents of `session.storage`. */
   storage?: Record<string, string>;
 }
@@ -2353,6 +2373,8 @@ export interface MockMindooDBAppSessionController {
     patch?: Partial<MindooDBAppLaunchContext>,
   ): MindooDBAppLaunchContext;
   getLicensedProducts(): string[];
+  /** Every `proposeApp` call the app under test made, in order. */
+  proposedApps: MindooDBAppProposeAppInput[];
   listDatabases(): MindooDBAppDatabaseInfo[];
   setDatabases(definitions: MockMindooDBAppDatabaseDefinition[]): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
@@ -2381,6 +2403,7 @@ export function createMockMindooDBAppSession(
     getLaunchContext: state.getLaunchContext,
     setLaunchContext: state.setLaunchContext,
     getLicensedProducts: state.getLicensedProducts,
+    proposedApps: state.proposedApps,
     listDatabases: state.listDatabaseInfos,
     setDatabases: state.setDatabases,
     emitThemeChange: state.emitThemeChange,
@@ -2427,6 +2450,8 @@ export interface FakeBridgeHostController {
   session: MindooDBAppSession;
   readonly launchId: string;
   readonly requests: ReadonlyArray<MindooDBAppBridgeRpcRequest>;
+  /** Every `apps.propose` call the app under test made, in order. */
+  readonly proposedApps: ReadonlyArray<MindooDBAppProposeAppInput>;
   install(): void;
   dispose(): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
@@ -2710,6 +2735,8 @@ export function createFakeBridgeHost(
       case "sealedChannel.close":
         await state.session.closeSealedChannel(String(params.channelId));
         return { ok: true };
+      case "apps.propose":
+        return await state.session.proposeApp(params as unknown as MindooDBAppProposeAppInput);
       case "documents.list":
         return await state
           .getDatabase(String(params.databaseId))
@@ -3456,6 +3483,9 @@ export function createFakeBridgeHost(
     },
     get requests() {
       return requests;
+    },
+    get proposedApps() {
+      return state.proposedApps;
     },
     install,
     dispose() {

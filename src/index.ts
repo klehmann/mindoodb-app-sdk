@@ -16,6 +16,22 @@ export type {
   MindooDBAppBundleManifest,
   MindooDBAppBundleManifestValidation,
 } from "./appBundleManifest";
+export {
+  MINDOODB_APP_DEFINITION_FILE_NAME,
+  MINDOODB_APP_DEFINITION_FORMAT,
+  MINDOODB_APP_DEFINITION_PERMISSIONS,
+  MINDOODB_APP_DEFINITION_REGISTRATION_PERMISSIONS,
+  MINDOODB_APP_DEFINITION_VERSION,
+  resolveMindooDBAppDefinitionUrl,
+  validateMindooDBAppDefinition,
+} from "./appDefinition";
+export type {
+  MindooDBAppDefinition,
+  MindooDBAppDefinitionDatabase,
+  MindooDBAppDefinitionPermission,
+  MindooDBAppDefinitionRegistrationPermission,
+  MindooDBAppDefinitionValidation,
+} from "./appDefinition";
 export { canPreviewAttachment } from "./attachmentPreview";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 export {

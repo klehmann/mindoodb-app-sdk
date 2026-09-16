@@ -90,6 +90,47 @@ describe("mindoodb-app-sdk/testing", () => {
     mock.dispose();
   });
 
+  it("declines proposeApp by default and records what was asked", async () => {
+    const mock = createFakeBridgeHost();
+    mock.install();
+    const session = await createMindooDBAppBridge().connect();
+
+    // The real host needs a human to approve, so an unconfigured test sees the
+    // answer it would get if nobody did.
+    await expect(session.proposeApp({ url: "https://new-app.example.com" })).resolves.toEqual({
+      ok: false,
+      reason: "declined",
+    });
+    expect(mock.proposedApps).toEqual([{ url: "https://new-app.example.com" }]);
+    mock.dispose();
+  });
+
+  it("returns the configured proposeApp outcome", async () => {
+    const mock = createFakeBridgeHost({
+      proposeApp: (input) => ({
+        ok: true,
+        appId: "new-app",
+        appInstanceId: "instance-1",
+        label: input.label ?? "New App",
+        warnings: [],
+      }),
+    });
+    mock.install();
+    const session = await createMindooDBAppBridge().connect();
+
+    await expect(
+      session.proposeApp({ url: "https://new-app.example.com", label: "My App" }),
+    ).resolves.toEqual({
+      ok: true,
+      appId: "new-app",
+      appInstanceId: "instance-1",
+      label: "My App",
+      warnings: [],
+    });
+    expect(mock.requests.some((request) => request.method === "apps.propose")).toBe(true);
+    mock.dispose();
+  });
+
   it("stores and returns full-text setup on mock database handles", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [

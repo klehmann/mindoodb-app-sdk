@@ -75,6 +75,8 @@ import type {
   MindooDBAppDragStartInput,
   MindooDBAppDragStartResult,
   MindooDBAppMenuApi,
+  MindooDBAppProposeAppInput,
+  MindooDBAppProposeAppResult,
   MindooDBAppQueryResult,
   MindooDBAppReadableAttachmentStream,
   MindooDBAppSealedChannelOpenInput,
@@ -1634,6 +1636,14 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Returns the product names currently licensed in the Haven host. */
   async getLicensedProducts(): Promise<string[]> {
     return await this.rpc.call("session.getLicensedProducts", {});
+  }
+
+  /**
+   * Asks the host to install another app. Only a URL crosses the bridge: the host
+   * reads that origin's `haven-app.json` itself and asks the user.
+   */
+  async proposeApp(input: MindooDBAppProposeAppInput): Promise<MindooDBAppProposeAppResult> {
+    return await this.rpc.call<MindooDBAppProposeAppResult>("apps.propose", input);
   }
 
   /** Lists the databases that the host has made available for this app session. */
