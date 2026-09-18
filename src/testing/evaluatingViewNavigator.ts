@@ -60,20 +60,17 @@ function toFormulaBoolean(value: unknown): boolean {
 function matchesFilter(
   mindoodb: MindoodbVirtualViews,
   definition: MindooDBAppViewDefinition,
-  doc: Record<string, unknown>,
-  origin: string,
-  createdAt?: string | null,
-  lastModifiedAt?: string | null,
-  witnessed?: boolean,
-  awaitingWitness?: boolean,
+  document: EvaluatingViewDocument,
 ): boolean {
   void mindoodb;
   if (!definition.filter) return true;
+  const { data: doc, origin, docId, createdAt, lastModifiedAt, witnessed, awaitingWitness } = document;
   return toFormulaBoolean(
     evaluateExpression(definition.filter.expression, {
       doc,
       values: doc,
       origin,
+      docId,
       createdAt,
       lastModifiedAt,
       witnessed,
@@ -85,13 +82,9 @@ function matchesFilter(
 
 function computeColumnValues(
   definition: MindooDBAppViewDefinition,
-  doc: Record<string, unknown>,
-  origin: string,
-  createdAt?: string | null,
-  lastModifiedAt?: string | null,
-  witnessed?: boolean,
-  awaitingWitness?: boolean,
+  document: EvaluatingViewDocument,
 ): Record<string, unknown> {
+  const { data: doc, origin, docId, createdAt, lastModifiedAt, witnessed, awaitingWitness } = document;
   const values: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(doc)) {
     if (!key.startsWith("_")) values[key] = value;
@@ -105,6 +98,7 @@ function computeColumnValues(
             doc,
             values,
             origin,
+            docId,
             createdAt,
             lastModifiedAt,
             witnessed,
@@ -243,34 +237,12 @@ async function buildVirtualView(
   const view = await builder.build();
   const changes = new Map<string, import("mindoodb").VirtualViewDataChange>();
   for (const document of documents) {
-    if (
-      !matchesFilter(
-        mindoodb,
-        definition,
-        document.data,
-        document.origin,
-        document.createdAt,
-        document.lastModifiedAt,
-        document.witnessed,
-        document.awaitingWitness,
-      )
-    ) {
+    if (!matchesFilter(mindoodb, definition, document)) {
       continue;
     }
     const change =
       changes.get(document.origin) ?? new mindoodb.VirtualViewDataChange(document.origin);
-    change.addEntry(
-      document.docId,
-      computeColumnValues(
-        definition,
-        document.data,
-        document.origin,
-        document.createdAt,
-        document.lastModifiedAt,
-        document.witnessed,
-        document.awaitingWitness,
-      ),
-    );
+    change.addEntry(document.docId, computeColumnValues(definition, document));
     changes.set(document.origin, change);
   }
   for (const change of changes.values()) {

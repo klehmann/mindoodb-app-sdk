@@ -1648,8 +1648,86 @@ export interface MindooDBAppExtractionSetup {
  * `'v.and(v.eq(v.field("type"), "invoice"), v.gt(v.field("total"), 100))'`),
  * which the SDK parses locally; only JSON travels across the bridge.
  */
+/**
+ * Cardinality of a {@link MindooDBAppQueryInclude}: whether the slot
+ * resolves to a single related document or a list of them. Always
+ * explicit — a lookup that silently picks the first of several matches is
+ * a bug waiting to happen.
+ */
+export type MindooDBAppQueryIncludeCardinality = "one" | "many";
+
+/**
+ * One nested lookup ("join") of a {@link MindooDBAppDocumentQuery}: the
+ * related documents are fetched alongside the matching rows and attached
+ * under {@link MindooDBAppQueryRow.includes}.
+ *
+ * Mirrors mindoodb's `MindooQueryInclude` with one substitution: core
+ * takes a live `MindooDB` instance, which cannot cross the bridge, so a
+ * related database is named by its logical {@link databaseId} instead.
+ *
+ * ```typescript
+ * await database.documents.query({
+ *   filter: 'v.eq(v.field("type"), "invoice")',
+ *   include: {
+ *     customer: { databaseId: "customers", cardinality: "one", localKey: "customerId" },
+ *     lines: { cardinality: "many", filter: 'v.eq(v.field("invoiceId"), v.parentDocId())' },
+ *   },
+ * });
+ * ```
+ */
+export interface MindooDBAppQueryInclude {
+  /**
+   * The database the related documents live in, addressed by the same
+   * logical id `openDatabase()` takes. Omit for the database the query
+   * itself runs against. The app must be mapped to it with read access.
+   */
+  databaseId?: string;
+  cardinality: MindooDBAppQueryIncludeCardinality;
+  /**
+   * Field of the PARENT document holding the related document's id —
+   * sugar for `v.eq(v.docId(), v.parent("<localKey>"))`. An array value
+   * joins every element.
+   */
+  localKey?: string;
+  /**
+   * Join condition, as an expression or formula source text. Exactly one
+   * equality must relate the related document to the parent row
+   * (`v.parentDocId()` for the parent's id, `v.parent(path)` for one of
+   * its fields); any further conditions narrow the related documents.
+   */
+  filter?: MindooDBAppBooleanExpression | string;
+  /** Projection for the related rows. Defaults to all summary fields. */
+  fields?: string[];
+  /** Ordering of the related rows. Only valid for `cardinality: "many"`. */
+  sortBy?: MindooDBAppQuerySortKey[];
+  /**
+   * Maximum number of related rows per parent row. Only valid for
+   * `cardinality: "many"`; the host enforces a cap.
+   */
+  limit?: number;
+  /** Nested lookups on the related documents. */
+  include?: Record<string, MindooDBAppQueryInclude>;
+}
+
+/**
+ * The related documents attached to a row, keyed by include slot name: a
+ * single row (or `null`) for `cardinality: "one"`, an array — possibly
+ * empty, never `null` — for `"many"`.
+ */
+export type MindooDBAppQueryIncludeSlots = Record<
+  string,
+  MindooDBAppQueryRow | MindooDBAppQueryRow[] | null
+>;
+
 export interface MindooDBAppDocumentQuery {
   filter?: MindooDBAppBooleanExpression | string;
+  /**
+   * Nested lookups, keyed by the slot name the related documents appear
+   * under in {@link MindooDBAppQueryRow.includes}. Resolved for the
+   * returned page only, at one scan per slot rather than one query per
+   * row.
+   */
+  include?: Record<string, MindooDBAppQueryInclude>;
   /**
    * Full-text clause: additionally require documents to match this
    * full-text search (combined with `filter` as a logical AND). Adds a
@@ -1673,7 +1751,9 @@ export interface MindooDBAppDocumentQuery {
 }
 
 /** One result row of a summary-backed document query. */
-export interface MindooDBAppQueryRow {
+export interface MindooDBAppQueryRow<
+  TIncludes extends MindooDBAppQueryIncludeSlots = MindooDBAppQueryIncludeSlots,
+> {
   docId: string;
   fields: Record<string, unknown>;
   lastModified: number;
@@ -1682,6 +1762,15 @@ export interface MindooDBAppQueryRow {
    * Only present when the query had a `text` clause.
    */
   textScore?: number;
+  /**
+   * Related documents fetched through the query's `include` clause, keyed
+   * by slot name. Absent when the query carried no `include`, so results
+   * of plain queries keep exactly the shape they always had.
+   *
+   * Included rows are ordinary rows, so a nested lookup reads as
+   * `row.includes.customer.includes.address`.
+   */
+  includes?: TIncludes;
 }
 
 /**
@@ -1691,9 +1780,24 @@ export interface MindooDBAppQueryRow {
  */
 export type MindooDBAppQueryCoverage = "full" | "rebuilding" | "full-scan";
 
-/** Result of a summary-backed document query. */
-export interface MindooDBAppQueryResult {
-  rows: MindooDBAppQueryRow[];
+/**
+ * Result of a summary-backed document query.
+ *
+ * Slot types of an `include` clause are not inferred from the query
+ * object; callers who want them pass them explicitly:
+ *
+ * ```typescript
+ * const result = await database.documents.query<{
+ *   customer: MindooDBAppQueryRow | null;
+ *   lines: MindooDBAppQueryRow[];
+ * }>({ ... });
+ * result.rows[0]?.includes?.lines[0]?.fields.amount;
+ * ```
+ */
+export interface MindooDBAppQueryResult<
+  TIncludes extends MindooDBAppQueryIncludeSlots = MindooDBAppQueryIncludeSlots,
+> {
+  rows: MindooDBAppQueryRow<TIncludes>[];
   /** Number of matching documents before `offset`/`limit` were applied. */
   total: number;
   coverage: MindooDBAppQueryCoverage;
@@ -1726,17 +1830,26 @@ export interface MindooDBAppDocumentApi {
    * `query-not-supported` error. A `text` clause requires full-text
    * indexing to be enabled for the database, otherwise the query is
    * rejected with `fulltext-not-enabled`.
+   *
+   * An `include` clause additionally fetches related documents, from this
+   * or another mapped database; pass the slot types as `TIncludes` to
+   * type `row.includes`.
    */
-  query(query?: MindooDBAppDocumentQuery): Promise<MindooDBAppQueryResult>;
+  query<TIncludes extends MindooDBAppQueryIncludeSlots = MindooDBAppQueryIncludeSlots>(
+    query?: MindooDBAppDocumentQuery,
+  ): Promise<MindooDBAppQueryResult<TIncludes>>;
   /**
    * Live variant of {@link query}: delivers the initial result, then keeps
    * watching the database and calls `onResult` again whenever the result
    * actually changed (membership, order, or row content). Updates are
    * coalesced on the host, so bursts of writes produce a single push.
+   *
+   * With an `include` clause the subscription also watches every related
+   * database, so a change to a joined document pushes a new result too.
    */
-  liveQuery(
+  liveQuery<TIncludes extends MindooDBAppQueryIncludeSlots = MindooDBAppQueryIncludeSlots>(
     query: MindooDBAppDocumentQuery,
-    onResult: (result: MindooDBAppQueryResult) => void,
+    onResult: (result: MindooDBAppQueryResult<TIncludes>) => void,
   ): Promise<MindooDBAppLiveQuerySubscription>;
   /**
    * Page through the database's changefeed. Pass the returned `nextCursor`

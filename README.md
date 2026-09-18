@@ -1084,6 +1084,43 @@ if (handled) {
 }
 ```
 
+**Nested lookups (`include`)** fetch related documents alongside the matching rows — from the same database or from any other database the app is mapped to. The host resolves a slot with **one scan per slot**, not one query per row, so a list with its related records is a single round trip:
+
+```ts
+const result = await db.documents.query<{
+  customer: MindooDBAppQueryRow | null;
+  lines: MindooDBAppQueryRow[];
+}>({
+  filter: 'v.eq(v.field("type"), "invoice")',
+  fields: ["total", "customerId"],
+  include: {
+    customer: {
+      databaseId: "customers",     // another mapped database; omit for this one
+      cardinality: "one",          // → a row or null
+      localKey: "customerId",      // this row's field holds the customer's id
+      fields: ["name"],
+    },
+    lines: {
+      cardinality: "many",         // → an array (possibly empty, never null)
+      filter: 'v.eq(v.field("invoiceId"), v.parentDocId())',
+      sortBy: [{ field: "position", direction: "ascending" }],
+      limit: 50,
+    },
+  },
+});
+
+for (const row of result.rows) {
+  console.log(row.fields.total, row.includes?.customer?.fields.name);
+  console.log(row.includes?.lines.length);
+}
+```
+
+- Related documents live under `row.includes[slot]`, never as sibling keys, so a slot name can never collide with `docId` / `fields` / `lastModified`. Pass the slot types to `query<TIncludes>()` to have them typed.
+- The join condition relates the related document to the parent row: `v.parentDocId()` for the parent's id, `v.parent("<path>")` for one of its fields. `localKey` is shorthand for "this row's field holds the related document's id" (an array value joins every element). Exactly one such equality is allowed per slot — further conditions may narrow the related documents but must not mention the parent.
+- Slots nest (`row.includes.customer.includes.address`) up to three levels.
+- `databaseId` is checked like any other database parameter: the app must be mapped to it with the `read` capability, at every level. Unmapped or view-only ids are rejected with `database-not-found`, a missing capability with `forbidden`.
+- Hydration happens after sorting and paging, so only the returned rows are joined and `total` stays the unpaged match count. Per-slot `limit` is capped at 1000, and a query may carry at most 10 slots in total.
+
 **Live queries** keep a query result up to date. The callback receives the initial result and runs again whenever the result actually changed — the host coalesces bursts of writes and fingerprints results, so you only hear about real changes:
 
 ```ts
@@ -1101,7 +1138,7 @@ await subscription.refresh();
 await subscription.dispose();
 ```
 
-Live query results are pushed from the host over the bridge port — no polling. Subscriptions are cleaned up automatically when the app disconnects, but dispose them explicitly when the UI that consumes them unmounts.
+Live query results are pushed from the host over the bridge port — no polling. Subscriptions are cleaned up automatically when the app disconnects, but dispose them explicitly when the UI that consumes them unmounts. A live query with `include` also watches every related database, so a change to a joined document delivers a new result too.
 
 ### Incremental sync
 
@@ -1638,8 +1675,8 @@ Host-kept key/value state, the only durable storage a hosted app has. See [Stora
 
 | Method                             | Returns                                      |
 | ---------------------------------- | -------------------------------------------- |
-| `query(query?)`                    | `Promise<MindooDBAppQueryResult>`            |
-| `liveQuery(query, onResult)`       | `Promise<MindooDBAppLiveQuerySubscription>`  |
+| `query<TIncludes>(query?)`         | `Promise<MindooDBAppQueryResult<TIncludes>>` |
+| `liveQuery<TIncludes>(query, onResult)` | `Promise<MindooDBAppLiveQuerySubscription>` |
 | `list(query?)`                     | `Promise<MindooDBAppDocumentListResult>`     |
 | `listInaccessible(query?)`         | `Promise<MindooDBAppInaccessibleDocumentListResult>` |
 | `get(docId)`                       | `Promise<MindooDBAppDocument \| null>`       |

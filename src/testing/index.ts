@@ -1,6 +1,7 @@
 import * as Automerge from "@automerge/automerge";
 import {
   evaluateExpression,
+  formatMindooDBFormulaExpression,
   parseMindooDBFormulaBooleanExpression,
 } from "mindoodb-view-language";
 import { releaseMindooDBAppBridgeSessions } from "../client/createMindooDBAppBridge.js";
@@ -58,6 +59,10 @@ import type {
   MindooDBAppMenuApi,
   MindooDBAppProposeAppInput,
   MindooDBAppProposeAppResult,
+  MindooDBAppBooleanExpression,
+  MindooDBAppExpression,
+  MindooDBAppQueryInclude,
+  MindooDBAppQueryIncludeSlots,
   MindooDBAppQueryResult,
   MindooDBAppQueryRow,
   MindooDBAppQuerySortKey,
@@ -773,6 +778,7 @@ function runMockDocumentQuery(
   storedDocuments: Map<string, MockStoredDocument>,
   databaseId: string,
   query?: MindooDBAppDocumentQuery,
+  resolveDatabase?: MockIncludeDatabaseResolver,
 ): MindooDBAppQueryResult {
   const filter =
     typeof query?.filter === "string"
@@ -808,6 +814,7 @@ function runMockDocumentQuery(
       doc: document.data,
       values: {},
       origin: databaseId,
+      docId: document.id,
       variables: {},
     };
     if (filter && !mockExpressionToBoolean(evaluateExpression(filter, context))) {
@@ -843,23 +850,506 @@ function runMockDocumentQuery(
 
   const offset = Math.max(0, query?.offset ?? 0);
   const limit = Math.max(1, query?.limit ?? 200);
-  const rows: MindooDBAppQueryRow[] = matches
-    .slice(offset, offset + limit)
-    .map(({ document, textScore }) => ({
-      docId: document.id,
-      fields: query?.fields
-        ? Object.fromEntries(
-            query.fields.map((field) => [
-              field,
-              getFieldValue(document.data, field),
-            ]),
-          )
-        : structuredClone(document.data),
-      lastModified: document.updatedAt ? Date.parse(document.updatedAt) || 0 : 0,
-      ...(textScore === undefined ? {} : { textScore }),
-    }));
+  const page = matches.slice(offset, offset + limit);
+  const rows: MindooDBAppQueryRow[] = page.map(({ document, textScore }) => ({
+    docId: document.id,
+    fields: projectMockFields(document.data, query?.fields),
+    lastModified: mockLastModified(document),
+    ...(textScore === undefined ? {} : { textScore }),
+  }));
+
+  if (query?.include) {
+    // Like the host, related documents are joined onto the paged rows only,
+    // after sorting and paging — `total` stays the unpaged match count.
+    hydrateMockIncludes({
+      includes: query.include,
+      parents: page.map(({ document }, index) => ({
+        row: rows[index],
+        docId: document.id,
+        data: document.data,
+      })),
+      parentDatabaseId: databaseId,
+      parentDocuments: storedDocuments,
+      resolveDatabase,
+      depth: 1,
+      slotPath: "",
+    });
+  }
 
   return { rows, total: matches.length, coverage: "full" };
+}
+
+function projectMockFields(
+  data: Record<string, unknown>,
+  fields: string[] | undefined,
+): Record<string, unknown> {
+  return fields
+    ? Object.fromEntries(fields.map((field) => [field, getFieldValue(data, field)]))
+    : structuredClone(data);
+}
+
+function mockLastModified(document: MockStoredDocument): number {
+  return document.updatedAt ? Date.parse(document.updatedAt) || 0 : 0;
+}
+
+/**
+ * Nested lookups in the mock host.
+ *
+ * Mirrors the core engine closely enough that a test written against the
+ * mock keeps passing against Haven: same join rules (exactly one parent
+ * equality per slot), same cardinality behaviour, same error messages.
+ */
+
+/** Maximum include nesting the host allows, counting the query's own `include` as level 1. */
+const MOCK_MAX_INCLUDE_DEPTH = 3;
+/** Related rows per parent when a `"many"` slot does not set a limit. */
+const MOCK_DEFAULT_INCLUDE_LIMIT = 200;
+
+/** Looks another mocked database up by its logical id. */
+type MockIncludeDatabaseResolver = (
+  databaseId: string,
+) => Map<string, MockStoredDocument> | undefined;
+
+/** One parent row an include slot is hydrated for. */
+type MockIncludeParent = {
+  row: MindooDBAppQueryRow;
+  docId: string;
+  /** The parent's full document data — join keys are read here, not from the projected fields. */
+  data: Record<string, unknown>;
+};
+
+/** What a join equality reads on one side. */
+type MockJoinSide = { kind: "docId" } | { kind: "field"; path: string };
+
+type MockJoinPlan = {
+  child: MockJoinSide;
+  parent: MockJoinSide;
+  /** The conjuncts that do not mention the parent, applied while scanning. */
+  residualFilter: MindooDBAppBooleanExpression | null;
+};
+
+function mockIncludeFilter(
+  include: MindooDBAppQueryInclude,
+): MindooDBAppBooleanExpression | undefined {
+  return typeof include.filter === "string"
+    ? parseMindooDBFormulaBooleanExpression(include.filter)
+    : include.filter;
+}
+
+function flattenMockConjuncts(expression: MindooDBAppExpression): MindooDBAppExpression[] {
+  return expression.kind === "operation" && expression.op === "and"
+    ? expression.args.flatMap((arg) => flattenMockConjuncts(arg))
+    : [expression];
+}
+
+/** Whether an expression reads anything from the parent row. */
+function mockReferencesParent(expression: MindooDBAppExpression): boolean {
+  if (expression.kind === "parent") {
+    return true;
+  }
+  if (expression.kind === "operation") {
+    return (
+      expression.op === "parentDocId" ||
+      expression.args.some((arg) => mockReferencesParent(arg))
+    );
+  }
+  if (expression.kind === "if") {
+    return [expression.condition, expression.whenTrue, expression.whenFalse].some((part) =>
+      mockReferencesParent(part),
+    );
+  }
+  if (expression.kind === "let") {
+    return (
+      Object.values(expression.bindings).some((value) => mockReferencesParent(value)) ||
+      mockReferencesParent(expression.result)
+    );
+  }
+  return false;
+}
+
+function mockChildJoinSide(expression: MindooDBAppExpression): MockJoinSide | null {
+  if (expression.kind === "field") {
+    return { kind: "field", path: expression.path };
+  }
+  if (expression.kind === "operation" && expression.op === "docId") {
+    return { kind: "docId" };
+  }
+  return null;
+}
+
+function mockParentJoinSide(expression: MindooDBAppExpression): MockJoinSide | null {
+  if (expression.kind === "parent") {
+    return { kind: "field", path: expression.path };
+  }
+  if (expression.kind === "operation" && expression.op === "parentDocId") {
+    return { kind: "docId" };
+  }
+  return null;
+}
+
+function combineMockConjuncts(
+  conjuncts: MindooDBAppExpression[],
+): MindooDBAppBooleanExpression | null {
+  if (conjuncts.length === 0) {
+    return null;
+  }
+  if (conjuncts.length === 1) {
+    return conjuncts[0] as MindooDBAppBooleanExpression;
+  }
+  return {
+    kind: "operation",
+    op: "and",
+    args: conjuncts,
+  } as MindooDBAppBooleanExpression;
+}
+
+/** Reduces a slot to the one join equality the mock executes, plus the parent-free rest. */
+function planMockInclude(
+  label: string,
+  include: MindooDBAppQueryInclude,
+  filter: MindooDBAppBooleanExpression | undefined,
+): MockJoinPlan {
+  if (include.localKey !== undefined) {
+    if (filter && mockReferencesParent(filter)) {
+      throw new Error(
+        `Include "${label}" combines localKey with a filter that also references the parent document. ` +
+          "Use either localKey or a parent join condition, not both.",
+      );
+    }
+    return {
+      child: { kind: "docId" },
+      parent: { kind: "field", path: include.localKey },
+      residualFilter: filter ?? null,
+    };
+  }
+
+  const conjuncts = flattenMockConjuncts(filter!);
+  const parentConjuncts = conjuncts.filter((conjunct) => mockReferencesParent(conjunct));
+  const parentFree = conjuncts.filter((conjunct) => !mockReferencesParent(conjunct));
+
+  if (parentConjuncts.length === 0) {
+    throw new Error(
+      `Include "${label}" cannot be joined because it does not reference the parent document. ` +
+        'Add the join condition v.eq(v.field("<child field>"), v.parentDocId()) (or use localKey).',
+    );
+  }
+  if (parentConjuncts.length > 1) {
+    throw new Error(
+      `Include "${label}" cannot be joined because it references the parent document in ` +
+        `${parentConjuncts.length} separate conditions. ` +
+        "Exactly one parent equality can be used as the join key.",
+    );
+  }
+
+  const join = parentConjuncts[0];
+  if (join.kind !== "operation" || join.op !== "eq" || join.args.length !== 2) {
+    throw new Error(
+      `Include "${label}" cannot be joined because the condition referencing the parent is not an ` +
+        `equality: ${formatMindooDBFormulaExpression(join)}. ` +
+        'Only v.eq(v.field("<child field>"), v.parentDocId()) and friends can be used as the join key.',
+    );
+  }
+
+  const [left, right] = join.args;
+  const sides =
+    mockJoinSides(left, right) ?? mockJoinSides(right, left) ?? null;
+  if (!sides) {
+    throw new Error(
+      `Include "${label}" cannot be joined because the join equality compares ` +
+        `${formatMindooDBFormulaExpression(join)}. ` +
+        "One side must read the related document (v.field(...) or v.docId()), " +
+        "the other the parent (v.parent(...) or v.parentDocId()).",
+    );
+  }
+  return { ...sides, residualFilter: combineMockConjuncts(parentFree) };
+}
+
+function mockJoinSides(
+  childCandidate: MindooDBAppExpression,
+  parentCandidate: MindooDBAppExpression,
+): Pick<MockJoinPlan, "child" | "parent"> | null {
+  const child = mockChildJoinSide(childCandidate);
+  const parent = mockParentJoinSide(parentCandidate);
+  return child && parent ? { child, parent } : null;
+}
+
+/** A join value may be a list, in which case every element joins on its own. */
+function mockJoinValues(value: unknown): unknown[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  return (Array.isArray(value) ? value : [value]).filter(
+    (item) => item !== undefined && item !== null,
+  );
+}
+
+function validateMockInclude(
+  slot: string,
+  label: string,
+  include: MindooDBAppQueryInclude,
+  depth: number,
+): void {
+  if (slot.trim() === "") {
+    throw new Error("Include slot names must not be empty.");
+  }
+  if (depth > MOCK_MAX_INCLUDE_DEPTH) {
+    throw new Error(
+      `Include "${label}" nests ${depth} levels deep, more than the maximum of ${MOCK_MAX_INCLUDE_DEPTH}.`,
+    );
+  }
+  if (include.cardinality !== "one" && include.cardinality !== "many") {
+    throw new Error(
+      `Include "${label}" needs an explicit cardinality of "one" or "many" ` +
+        `(got ${JSON.stringify(include.cardinality)}).`,
+    );
+  }
+  if (include.localKey === undefined && include.filter === undefined) {
+    throw new Error(
+      `Include "${label}" needs a localKey or a filter to relate documents to the parent row.`,
+    );
+  }
+  if (include.localKey !== undefined && include.localKey.trim() === "") {
+    throw new Error(`Include "${label}" has an empty localKey.`);
+  }
+  if (include.cardinality === "one") {
+    if (include.sortBy !== undefined) {
+      throw new Error(
+        `Include "${label}" has cardinality "one", which resolves to a single row — sortBy is meaningless there.`,
+      );
+    }
+    if (include.limit !== undefined) {
+      throw new Error(
+        `Include "${label}" has cardinality "one", which resolves to a single row — limit is meaningless there.`,
+      );
+    }
+  }
+  if (include.limit !== undefined && (!Number.isFinite(include.limit) || include.limit < 0)) {
+    throw new Error(`Include "${label}" has an invalid limit (${include.limit}).`);
+  }
+  for (const sortKey of include.sortBy ?? []) {
+    if (sortKey.special === "textScore") {
+      throw new Error(
+        `Include "${label}" sorts by textScore, but includes have no text clause to score against.`,
+      );
+    }
+  }
+}
+
+/** One related document that survived the scan of a slot. */
+type MockIncludeCandidate = {
+  docId: string;
+  data: Record<string, unknown>;
+  row: MindooDBAppQueryRow;
+  sortValues: unknown[];
+};
+
+/**
+ * Hydrates one level of include slots onto already-paged parent rows: one
+ * scan of the target database per slot, never one query per parent row.
+ */
+function hydrateMockIncludes(params: {
+  includes: Record<string, MindooDBAppQueryInclude>;
+  parents: MockIncludeParent[];
+  parentDatabaseId: string;
+  parentDocuments: Map<string, MockStoredDocument>;
+  resolveDatabase?: MockIncludeDatabaseResolver;
+  depth: number;
+  slotPath: string;
+}): void {
+  const { includes, parents, parentDocuments, resolveDatabase, depth, slotPath } = params;
+
+  for (const [slot, include] of Object.entries(includes)) {
+    const label = slotPath ? `${slotPath}.${slot}` : slot;
+    validateMockInclude(slot, label, include, depth);
+
+    const filter = mockIncludeFilter(include);
+    const plan = planMockInclude(label, include, filter);
+
+    const childDatabaseId = include.databaseId ?? params.parentDatabaseId;
+    let childDocuments = parentDocuments;
+    if (include.databaseId !== undefined) {
+      const resolved = resolveDatabase?.(include.databaseId);
+      if (!resolved) {
+        throw new Error(
+          `Include "${label}" refers to the database "${include.databaseId}", which this app is not mapped to.`,
+        );
+      }
+      childDocuments = resolved;
+    }
+
+    if (parents.length === 0) {
+      continue;
+    }
+
+    const parentsByKey = new Map<unknown, MockIncludeParent[]>();
+    for (const parent of parents) {
+      const parentValue =
+        plan.parent.kind === "docId"
+          ? parent.docId
+          : getFieldValue(parent.data, plan.parent.path);
+      for (const key of mockJoinValues(parentValue)) {
+        const bucket = parentsByKey.get(key);
+        if (bucket) {
+          bucket.push(parent);
+        } else {
+          parentsByKey.set(key, [parent]);
+        }
+      }
+    }
+
+    const sortBy = include.sortBy ?? [];
+    const childrenByKey = new Map<unknown, MockIncludeCandidate[]>();
+    if (parentsByKey.size > 0) {
+      for (const document of childDocuments.values()) {
+        if (document.isDeleted || document.inaccessible) {
+          continue;
+        }
+        const childValue =
+          plan.child.kind === "docId"
+            ? document.id
+            : getFieldValue(document.data, plan.child.path);
+        const matchedKeys = mockJoinValues(childValue).filter((key) => parentsByKey.has(key));
+        if (matchedKeys.length === 0) {
+          continue;
+        }
+        const context = {
+          doc: document.data,
+          values: {},
+          origin: childDatabaseId,
+          docId: document.id,
+          variables: {},
+        };
+        if (
+          plan.residualFilter &&
+          !mockExpressionToBoolean(evaluateExpression(plan.residualFilter, context))
+        ) {
+          continue;
+        }
+        const candidate: MockIncludeCandidate = {
+          docId: document.id,
+          data: document.data,
+          row: {
+            docId: document.id,
+            fields: projectMockFields(document.data, include.fields),
+            lastModified: mockLastModified(document),
+          },
+          sortValues: sortBy.map((key) =>
+            key.expression
+              ? evaluateExpression(key.expression, context)
+              : getFieldValue(document.data, key.field ?? ""),
+          ),
+        };
+        for (const key of matchedKeys) {
+          const bucket = childrenByKey.get(key);
+          if (bucket) {
+            bucket.push(candidate);
+          } else {
+            childrenByKey.set(key, [candidate]);
+          }
+        }
+      }
+    }
+
+    const childParents = attachMockIncludeSlot(
+      slot,
+      label,
+      include,
+      plan,
+      parents,
+      childrenByKey,
+      sortBy,
+    );
+
+    if (include.include && childParents.length > 0) {
+      hydrateMockIncludes({
+        includes: include.include,
+        parents: childParents,
+        parentDatabaseId: childDatabaseId,
+        parentDocuments: childDocuments,
+        resolveDatabase,
+        depth: depth + 1,
+        slotPath: label,
+      });
+    }
+  }
+}
+
+/**
+ * Writes the grouped children into `row.includes[slot]` and returns them as
+ * the parent bindings of the next nesting level. Every attachment is its own
+ * row object, so a nested slot of one parent never shows up on another.
+ */
+function attachMockIncludeSlot(
+  slot: string,
+  label: string,
+  include: MindooDBAppQueryInclude,
+  plan: MockJoinPlan,
+  parents: MockIncludeParent[],
+  childrenByKey: Map<unknown, MockIncludeCandidate[]>,
+  sortBy: MindooDBAppQuerySortKey[],
+): MockIncludeParent[] {
+  const limit = include.limit ?? MOCK_DEFAULT_INCLUDE_LIMIT;
+  const nextParents: MockIncludeParent[] = [];
+
+  for (const parent of parents) {
+    const parentValue =
+      plan.parent.kind === "docId"
+        ? parent.docId
+        : getFieldValue(parent.data, plan.parent.path);
+    const seen = new Set<string>();
+    const matches: MockIncludeCandidate[] = [];
+    for (const key of mockJoinValues(parentValue)) {
+      for (const candidate of childrenByKey.get(key) ?? []) {
+        if (seen.has(candidate.docId)) {
+          continue;
+        }
+        seen.add(candidate.docId);
+        matches.push(candidate);
+      }
+    }
+
+    const slots: MindooDBAppQueryIncludeSlots = (parent.row.includes ??= {});
+
+    if (include.cardinality === "one") {
+      if (matches.length > 1) {
+        const sample = matches.slice(0, 3).map((match) => match.docId).join(", ");
+        throw new Error(
+          `Include "${label}" has cardinality "one", but document "${parent.docId}" matched ` +
+            `${matches.length} related documents (${sample}${matches.length > 3 ? ", …" : ""}). ` +
+            'Use cardinality "many" if several matches are expected.',
+        );
+      }
+      if (matches.length === 0) {
+        slots[slot] = null;
+        continue;
+      }
+      const match = matches[0];
+      const row = structuredClone(match.row);
+      slots[slot] = row;
+      nextParents.push({ row, docId: match.docId, data: match.data });
+      continue;
+    }
+
+    matches.sort((left, right) => {
+      for (let i = 0; i < sortBy.length; i++) {
+        const result = compareMockQueryValues(left.sortValues[i], right.sortValues[i]);
+        if (result !== 0) {
+          return sortBy[i].direction === "descending" ? -result : result;
+        }
+      }
+      return left.docId.localeCompare(right.docId);
+    });
+
+    const rows: MindooDBAppQueryRow[] = [];
+    for (const candidate of matches.slice(0, limit)) {
+      const row = structuredClone(candidate.row);
+      rows.push(row);
+      nextParents.push({ row, docId: candidate.docId, data: candidate.data });
+    }
+    slots[slot] = rows;
+  }
+
+  return nextParents;
 }
 
 function createDefaultViewNavigator(): MindooDBAppViewNavigator {
@@ -1096,6 +1586,17 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
   };
 }
 
+/**
+ * The view every mocked database has of its siblings. Cross-database
+ * `include` slots read their documents through `getDocuments`, and a write
+ * anywhere refreshes every database's live queries because a joined row may
+ * have changed.
+ */
+type MockDatabasePeers = {
+  getDocuments: MockIncludeDatabaseResolver;
+  refreshAllLiveQueries: () => void;
+};
+
 type MockDatabaseMethods = {
   documents?: Partial<MindooDBAppDocumentApi>;
   views?: Partial<MockViewApi>;
@@ -1119,9 +1620,12 @@ async function mockSha256Hex(value: string): Promise<string | null> {
 
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
+  peers: MockDatabasePeers,
 ): {
   handle: MindooDBAppDatabase;
   listViewDocuments: () => EvaluatingViewDocument[];
+  documents: Map<string, MockStoredDocument>;
+  notifyLiveQueries: () => void;
 } {
   let createCounter = 0;
   let changeCounter = 0;
@@ -1151,15 +1655,16 @@ function createDatabaseHandle(
   const liveQuerySubscriptions = new Set<MockLiveQuerySubscription>();
 
   /**
-   * Re-evaluates all live queries after a mutation and pushes results whose
+   * Re-evaluates this database's live queries and pushes results whose
    * content actually changed — mirroring the host's fingerprint coalescing.
    */
-  const notifyLiveQueries = () => {
+  const refreshLiveQueries = () => {
     for (const subscription of liveQuerySubscriptions) {
       const result = runMockDocumentQuery(
         storedDocuments,
         definition.info.id,
         subscription.query,
+        peers.getDocuments,
       );
       const resultJson = JSON.stringify(result);
       if (resultJson !== subscription.lastResultJson) {
@@ -1167,6 +1672,15 @@ function createDatabaseHandle(
         subscription.onResult(result);
       }
     }
+  };
+
+  /**
+   * Called after every mutation. A write here can change a live query of
+   * ANY database, because an `include` slot may join this one — so, like
+   * the host, all of them are re-evaluated and only changed results push.
+   */
+  const notifyLiveQueries = () => {
+    peers.refreshAllLiveQueries();
   };
 
   function mockEncryptForMap(names: string[]): Record<string, { kind: "user" }> {
@@ -1217,25 +1731,33 @@ function createDatabaseHandle(
   }
 
   const defaultDocuments: MindooDBAppDocumentApi = {
-    async query(query?: MindooDBAppDocumentQuery) {
-      return runMockDocumentQuery(storedDocuments, definition.info.id, query);
+    async query<TIncludes extends MindooDBAppQueryIncludeSlots>(
+      query?: MindooDBAppDocumentQuery,
+    ) {
+      return runMockDocumentQuery(
+        storedDocuments,
+        definition.info.id,
+        query,
+        peers.getDocuments,
+      ) as MindooDBAppQueryResult<TIncludes>;
     },
-    async liveQuery(
+    async liveQuery<TIncludes extends MindooDBAppQueryIncludeSlots>(
       query: MindooDBAppDocumentQuery,
-      onResult: (result: MindooDBAppQueryResult) => void,
+      onResult: (result: MindooDBAppQueryResult<TIncludes>) => void,
     ): Promise<MindooDBAppLiveQuerySubscription> {
       const initial = runMockDocumentQuery(
         storedDocuments,
         definition.info.id,
         query,
+        peers.getDocuments,
       );
       const subscription: MockLiveQuerySubscription = {
         query,
-        onResult,
+        onResult: onResult as (result: MindooDBAppQueryResult) => void,
         lastResultJson: JSON.stringify(initial),
       };
       liveQuerySubscriptions.add(subscription);
-      onResult(initial);
+      onResult(initial as MindooDBAppQueryResult<TIncludes>);
       return {
         refresh: async () => {
           if (!liveQuerySubscriptions.has(subscription)) {
@@ -1245,9 +1767,10 @@ function createDatabaseHandle(
             storedDocuments,
             definition.info.id,
             query,
+            peers.getDocuments,
           );
           subscription.lastResultJson = JSON.stringify(result);
-          onResult(result);
+          onResult(result as MindooDBAppQueryResult<TIncludes>);
         },
         dispose: async () => {
           liveQuerySubscriptions.delete(subscription);
@@ -1888,6 +2411,8 @@ function createDatabaseHandle(
           data: structuredClone(document.data),
           createdAt: document.updatedAt ?? null,
         })),
+    documents: storedDocuments,
+    notifyLiveQueries: refreshLiveQueries,
   };
 }
 
@@ -1932,6 +2457,16 @@ function createMockSessionState(
   const beforeCloseListeners = new Set<() => void | Promise<void>>();
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewDocumentLists = new Map<string, () => EvaluatingViewDocument[]>();
+  const databaseDocumentStores = new Map<string, Map<string, MockStoredDocument>>();
+  const databaseLiveQueryRefreshers = new Map<string, () => void>();
+  const databasePeers: MockDatabasePeers = {
+    getDocuments: (databaseId) => databaseDocumentStores.get(databaseId),
+    refreshAllLiveQueries: () => {
+      for (const refresh of databaseLiveQueryRefreshers.values()) {
+        refresh();
+      }
+    },
+  };
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
@@ -2012,14 +2547,18 @@ function createMockSessionState(
     databaseHandles.clear();
     databaseViewDocumentLists.clear();
     databaseViewApis.clear();
+    databaseDocumentStores.clear();
+    databaseLiveQueryRefreshers.clear();
     databaseInfos = definitions.map((definition) => ({
       ...definition.info,
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
-      const created = createDatabaseHandle(definition);
+      const created = createDatabaseHandle(definition, databasePeers);
       databaseHandles.set(definition.info.id, created.handle);
       databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
+      databaseDocumentStores.set(definition.info.id, created.documents);
+      databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
       databaseViewApis.set(definition.info.id, {
         async create(input: MindooDBAppCreateViewNavigatorInput) {
           const documents = input.databaseIds.flatMap((databaseId) => {

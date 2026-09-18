@@ -183,6 +183,41 @@ await db.documents.create({ set: { type: "invoice", total: 50 } });
 await sub.dispose();
 ```
 
+Nested lookups (`include`) work too, including slots that name another mocked
+database by its id, and they mirror the host's rules — one parent equality per
+slot, `cardinality: "one"` failing loudly when several documents match, per-slot
+`sortBy`/`limit`, and nesting. A write to a joined database re-fires the live
+queries that join it, so cross-database joins can be tested end to end:
+
+```ts
+const mock = createMockMindooDBAppBridge({
+  databases: [
+    {
+      info: { id: "billing", title: "Billing", capabilities: ["read", "create"] },
+      documents: [{ id: "inv_1", data: { type: "invoice", customerId: "cust_1" } }],
+    },
+    {
+      info: { id: "customers", title: "Customers", capabilities: ["read"] },
+      documents: [{ id: "cust_1", data: { name: "Acme" } }],
+    },
+  ],
+});
+
+const session = await mock.bridge.connect();
+const billing = await session.openDatabase("billing");
+
+const result = await billing.documents.query<{ customer: MindooDBAppQueryRow | null }>({
+  filter: 'v.eq(v.field("type"), "invoice")',
+  include: {
+    customer: { databaseId: "customers", cardinality: "one", localKey: "customerId" },
+  },
+});
+expect(result.rows[0].includes?.customer?.fields.name).toBe("Acme");
+```
+
+An include slot naming a database that was not seeded fails, the same way Haven
+rejects a database the app is not mapped to.
+
 ## Level 2 example
 
 This pattern keeps the real `createMindooDBAppBridge()` code path and replaces only the host side.

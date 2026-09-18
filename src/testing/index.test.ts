@@ -7,6 +7,7 @@ import {
   createFakeBridgeHost,
   createMockMindooDBAppBridge,
 } from "./index";
+import type { MindooDBAppQueryResult, MindooDBAppQueryRow } from "../types";
 
 describe("mindoodb-app-sdk/testing", () => {
   afterEach(() => {
@@ -786,6 +787,179 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(paged.total).toBe(3);
     expect(paged.rows).toHaveLength(1);
     expect(paged.rows[0].fields).toEqual({ customer: "acme" });
+  });
+
+  it("joins related documents through include slots in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: { id: "billing", title: "Billing", capabilities: ["read", "create"] },
+          documents: [
+            { id: "inv_1", data: { type: "invoice", total: 250, customerId: "cust_1" } },
+            { id: "inv_2", data: { type: "invoice", total: 80, customerId: "cust_2" } },
+            { id: "line_1", data: { type: "line", invoiceId: "inv_1", amount: 100 } },
+            { id: "line_2", data: { type: "line", invoiceId: "inv_1", amount: 150 } },
+            { id: "line_3", data: { type: "line", invoiceId: "inv_2", amount: 80 } },
+          ],
+        },
+        {
+          info: { id: "customers", title: "Customers", capabilities: ["read"] },
+          documents: [
+            { id: "cust_1", data: { name: "Acme", countryId: "de" } },
+            { id: "cust_2", data: { name: "Globex", countryId: "us" } },
+          ],
+        },
+        {
+          info: { id: "geo", title: "Geo", capabilities: ["read"] },
+          documents: [{ id: "de", data: { label: "Germany" } }],
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+    const billing = await session.openDatabase("billing");
+
+    const result = await billing.documents.query<{
+      customer: MindooDBAppQueryRow | null;
+      lines: MindooDBAppQueryRow[];
+    }>({
+      filter: 'v.eq(v.field("type"), "invoice")',
+      fields: ["total"],
+      sortBy: [{ field: "total", direction: "descending" }],
+      include: {
+        // Cross-database lookup by the parent's foreign key, plus a nested
+        // slot on the related document itself.
+        customer: {
+          databaseId: "customers",
+          cardinality: "one",
+          localKey: "customerId",
+          fields: ["name"],
+          include: {
+            country: {
+              databaseId: "geo",
+              cardinality: "one",
+              localKey: "countryId",
+              fields: ["label"],
+            },
+          },
+        },
+        // Same-database back-reference, ordered and projected.
+        lines: {
+          cardinality: "many",
+          filter: 'v.eq(v.field("invoiceId"), v.parentDocId())',
+          fields: ["amount"],
+          sortBy: [{ field: "amount", direction: "descending" }],
+        },
+      },
+    });
+
+    expect(result.rows.map((row) => row.docId)).toEqual(["inv_1", "inv_2"]);
+
+    const [first, second] = result.rows;
+    expect(first.includes?.customer?.fields).toEqual({ name: "Acme" });
+    expect(first.includes?.customer?.includes?.country).toMatchObject({
+      docId: "de",
+      fields: { label: "Germany" },
+    });
+    expect(first.includes?.lines.map((line) => line.fields.amount)).toEqual([150, 100]);
+
+    expect(second.includes?.customer?.fields).toEqual({ name: "Globex" });
+    // The nested slot of one parent must not leak onto another.
+    expect(second.includes?.customer?.includes?.country).toBeNull();
+    expect(second.includes?.lines.map((line) => line.docId)).toEqual(["line_3"]);
+  });
+
+  it("mirrors the host's include errors in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: { id: "billing", title: "Billing", capabilities: ["read"] },
+          documents: [
+            { id: "inv_1", data: { type: "invoice" } },
+            { id: "line_1", data: { type: "line", invoiceId: "inv_1" } },
+            { id: "line_2", data: { type: "line", invoiceId: "inv_1" } },
+          ],
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+    const billing = await session.openDatabase("billing");
+    const invoices = { filter: 'v.eq(v.field("type"), "invoice")' };
+
+    // Several matches where a single related document was declared.
+    await expect(
+      billing.documents.query({
+        ...invoices,
+        include: {
+          line: { cardinality: "one", filter: 'v.eq(v.field("invoiceId"), v.parentDocId())' },
+        },
+      }),
+    ).rejects.toThrow(/cardinality "one", but document "inv_1" matched 2 related documents/);
+
+    // A filter that never relates the two documents would be a full scan per row.
+    await expect(
+      billing.documents.query({
+        ...invoices,
+        include: {
+          lines: { cardinality: "many", filter: 'v.eq(v.field("type"), "line")' },
+        },
+      }),
+    ).rejects.toThrow(/cannot be joined because it does not reference the parent document/);
+
+    // A database the app was not given.
+    await expect(
+      billing.documents.query({
+        ...invoices,
+        include: {
+          customer: { databaseId: "customers", cardinality: "one", localKey: "customerId" },
+        },
+      }),
+    ).rejects.toThrow(/which this app is not mapped to/);
+  });
+
+  it("re-fires a live query with includes when the joined database changes", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: { id: "billing", title: "Billing", capabilities: ["read"] },
+          documents: [{ id: "inv_1", data: { type: "invoice", customerId: "cust_1" } }],
+        },
+        {
+          info: { id: "customers", title: "Customers", capabilities: ["read", "update"] },
+          documents: [{ id: "cust_1", data: { name: "Acme" } }],
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+    const billing = await session.openDatabase("billing");
+    const customers = await session.openDatabase("customers");
+
+    const results: MindooDBAppQueryResult<{ customer: MindooDBAppQueryRow | null }>[] = [];
+    const subscription = await billing.documents.liveQuery<{
+      customer: MindooDBAppQueryRow | null;
+    }>(
+      {
+        filter: 'v.eq(v.field("type"), "invoice")',
+        include: {
+          customer: { databaseId: "customers", cardinality: "one", localKey: "customerId" },
+        },
+      },
+      (result) => {
+        results.push(result);
+      },
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].rows[0].includes?.customer?.fields.name).toBe("Acme");
+
+    await customers.documents.update("cust_1", { set: { name: "Acme Inc." } });
+
+    expect(results).toHaveLength(2);
+    expect(results[1].rows[0].includes?.customer?.fields.name).toBe("Acme Inc.");
+
+    await subscription.dispose();
   });
 
   it("narrows documents.list by idPrefix (boundary-aware) in the mock bridge", async () => {

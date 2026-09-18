@@ -4,3 +4,11 @@ minimumReleaseAgeExclude:
   - mindoodb
   - mindoodb-app-sdk
   - mindoodb-view-language
+
+# mindoodb-view-language 0.0.16 declares `mindoodb: ^0.0.53`, which pins the
+# patch for a 0.0.x range, so it would drag a second, older core copy in and
+# its re-exported formula parser would not know `v.docId()`/`v.parentDocId()`.
+# Drop this override once view-language 0.0.17 (which requires >=0.0.64) is
+# published and the dependency here is bumped.
+overrides:
+  mindoodb: ">=0.0.64"

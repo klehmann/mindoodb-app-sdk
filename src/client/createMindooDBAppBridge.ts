@@ -63,8 +63,11 @@ import type {
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
   MindooDBAppDirectoryApi,
+  MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
+  MindooDBAppQueryInclude,
+  MindooDBAppQueryIncludeSlots,
   MindooDBAppIdentityApi,
   MindooDBAppTimestampApi,
   MindooDBAppLaunchContext,
@@ -184,6 +187,9 @@ function isViewChangedFor(
 /**
  * Prepares a document query for the wire: formula-string filters are parsed
  * locally into the expression AST, so only JSON crosses the bridge.
+ *
+ * Include slots are walked at every level — a join condition is as likely
+ * to be written as formula text as a top-level filter is.
  */
 function normalizeDocumentQuery(
   query?: MindooDBAppDocumentQuery,
@@ -191,18 +197,36 @@ function normalizeDocumentQuery(
   if (!query) {
     return {};
   }
-  const { filter, ...rest } = query;
+  const { filter, include, ...rest } = query;
   return {
     ...rest,
-    ...(filter !== undefined
-      ? {
-          filter:
-            typeof filter === "string"
-              ? parseMindooDBFormulaBooleanExpression(filter)
-              : filter,
-        }
-      : {}),
+    ...(filter !== undefined ? { filter: normalizeQueryFilter(filter) } : {}),
+    ...(include !== undefined ? { include: normalizeQueryIncludes(include) } : {}),
   };
+}
+
+function normalizeQueryFilter(
+  filter: MindooDBAppBooleanExpression | string,
+): MindooDBAppBooleanExpression {
+  return typeof filter === "string"
+    ? parseMindooDBFormulaBooleanExpression(filter)
+    : filter;
+}
+
+/** Recursively parses the formula-string filters of an include tree. */
+function normalizeQueryIncludes(
+  includes: Record<string, MindooDBAppQueryInclude>,
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  for (const [slot, include] of Object.entries(includes)) {
+    const { filter, include: nested, ...rest } = include;
+    normalized[slot] = {
+      ...rest,
+      ...(filter !== undefined ? { filter: normalizeQueryFilter(filter) } : {}),
+      ...(nested !== undefined ? { include: normalizeQueryIncludes(nested) } : {}),
+    };
+  }
+  return normalized;
 }
 
 /** Narrows a port message to a host theme change event. */
@@ -939,15 +963,20 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           query: query ?? {},
         }),
-      query: async (query) =>
-        await this.rpc.call("documents.query", {
+      query: async <TIncludes extends MindooDBAppQueryIncludeSlots>(
+        query?: MindooDBAppDocumentQuery,
+      ) =>
+        await this.rpc.call<MindooDBAppQueryResult<TIncludes>>("documents.query", {
           databaseId: this.databaseId,
           query: normalizeDocumentQuery(query),
         }),
-      liveQuery: async (query, onResult) => {
+      liveQuery: async <TIncludes extends MindooDBAppQueryIncludeSlots>(
+        query: MindooDBAppDocumentQuery,
+        onResult: (result: MindooDBAppQueryResult<TIncludes>) => void,
+      ) => {
         const { subscriptionId, result } = await this.rpc.call<{
           subscriptionId: string;
-          result: MindooDBAppQueryResult;
+          result: MindooDBAppQueryResult<TIncludes>;
         }>("documents.liveQuery.subscribe", {
           databaseId: this.databaseId,
           query: normalizeDocumentQuery(query),
@@ -958,7 +987,7 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         let disposed = false;
         const unsubscribe = this.rpc.addMessageListener((message) => {
           if (!disposed && isQueryResultFor(subscriptionId, message)) {
-            onResult(message.result);
+            onResult(message.result as MindooDBAppQueryResult<TIncludes>);
           }
         });
         onResult(result);
