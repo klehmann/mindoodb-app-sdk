@@ -1226,6 +1226,41 @@ export interface MindooDBAppBridgeShortcutInvokedMessage {
   action: MindooDBAppHostShortcutAction;
 }
 
+/** App → host: the user pressed inside this app, so Haven should focus its tile. */
+export interface MindooDBAppBridgeWorkspaceFocusRequestedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "workspace-focus-requested";
+}
+
+/** Host → app: whether this launch is the surface the user is looking at. */
+export interface MindooDBAppBridgeHostFocusChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "host-focus-changed";
+  focused: boolean;
+}
+
+/** Severity of a notice Haven shows for an app. */
+export type MindooDBAppNotificationSeverity = "info" | "warning" | "error";
+
+/** One notice the app asks Haven to show. The headline is the app's registration label. */
+export interface MindooDBAppNotifyInput {
+  /** When set, Haven updates that notice instead of adding another row. */
+  id?: string;
+  severity: MindooDBAppNotificationSeverity;
+  text: string;
+  /**
+   * How long the notice stays up, in milliseconds. Omit it and the notice stays
+   * until the user dismisses it or clicks it. Haven clamps a provided value to
+   * a short range so a progress step cannot pin itself on screen.
+   */
+  durationMs?: number;
+}
+
+/** The id Haven stored for this notice. Pass it again to update the same row. */
+export interface MindooDBAppNotifyResult {
+  id: string;
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
@@ -1240,6 +1275,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeBeforeCloseAck
   | MindooDBAppBridgeShortcutsChangedMessage
   | MindooDBAppBridgeShortcutInvokedMessage
+  | MindooDBAppBridgeWorkspaceFocusRequestedMessage
+  | MindooDBAppBridgeHostFocusChangedMessage
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage;
@@ -3009,6 +3046,34 @@ export interface MindooDBAppSession {
    * still lose whatever was buffered.
    */
   onBeforeClose(listener: () => void | Promise<void>): () => void;
+  /**
+   * Ask Haven to treat this launch as the focused surface.
+   *
+   * A click inside the iframe already does this. Call it when the app should
+   * take focus without a click, for example after the user picks this app
+   * from an in-app list.
+   */
+  requestHostFocus(): Promise<void>;
+  /**
+   * True only when this launch is the surface the user is looking at: the
+   * focused tile on the active workspace page, or this launch open as a
+   * standalone runner. A background tile, another page, or another app is
+   * false. Use this before `notify()` so a long task stays quiet while the
+   * user is already looking at the app.
+   */
+  hasHostFocus(): Promise<boolean>;
+  /**
+   * Fires when {@link hasHostFocus} would change, so a long task can decide
+   * whether to notify without polling. Returns an unsubscribe function.
+   */
+  onHostFocusChange(listener: (focused: boolean) => void): () => void;
+  /**
+   * Ask Haven to show a notice. The headline is the app name Haven already
+   * knows; `text` is the body. Pass the same `id` to update that notice in
+   * place. Omit `id` to add a new notice. A notice from this launch cannot
+   * replace one from another launch.
+   */
+  notify(input: MindooDBAppNotifyInput): Promise<MindooDBAppNotifyResult>;
   /**
    * Tear down the session: close the bridge port and release all host-side
    * resources of this launch (navigators, live queries, streams). The

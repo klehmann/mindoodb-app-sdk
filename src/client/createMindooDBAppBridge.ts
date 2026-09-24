@@ -104,7 +104,10 @@ import type {
   MindooDBAppScanAttachmentResult,
   MindooDBAppWritableAttachmentStream,
   MindooDBAppHostShortcutBinding,
+  MindooDBAppNotifyInput,
+  MindooDBAppNotifyResult,
 } from "../types";
+import { installHostFocusCapture } from "../hostFocus";
 import {
   applyHostedDocumentOverscrollContain,
   DEFAULT_HAVEN_HOST_SHORTCUTS,
@@ -1539,6 +1542,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
   private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
   private readonly stopHostShortcuts: () => void;
+  private readonly stopHostFocus: () => void;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -1602,6 +1606,18 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
           },
         })
       : () => undefined;
+    this.stopHostFocus = installHostFocusCapture({
+      onPointerDown: () => {
+        try {
+          this.rpc.postMessage({
+            protocol: PROTOCOL,
+            kind: "workspace-focus-requested",
+          });
+        } catch (error) {
+          console.warn("[mindoodb-app-sdk] Could not request host focus.", error);
+        }
+      },
+    });
   }
 
   /**
@@ -1780,6 +1796,31 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     });
   }
 
+  /** Ask Haven to treat this launch as the focused surface. */
+  async requestHostFocus(): Promise<void> {
+    await this.rpc.call("session.requestHostFocus", {});
+  }
+
+  /** Whether this launch is the surface the user is looking at. */
+  async hasHostFocus(): Promise<boolean> {
+    const result = await this.rpc.call<{ focused?: boolean }>("session.hasHostFocus", {});
+    return result?.focused === true;
+  }
+
+  /** Fires when the host-focus answer for this launch changes. */
+  onHostFocusChange(listener: (focused: boolean) => void) {
+    return this.rpc.addMessageListener((message) => {
+      if (message.kind === "host-focus-changed") {
+        listener(message.focused);
+      }
+    });
+  }
+
+  /** Ask Haven to show or update a notice for this launch. */
+  async notify(input: MindooDBAppNotifyInput): Promise<MindooDBAppNotifyResult> {
+    return await this.rpc.call<MindooDBAppNotifyResult>("notifications.show", input);
+  }
+
   /** Register work to run before the host tears this launch down. */
   onBeforeClose(listener: () => void | Promise<void>) {
     this.beforeCloseListeners.add(listener);
@@ -1791,6 +1832,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
     this.stopHostShortcuts();
+    this.stopHostFocus();
     this.drag.dispose();
     try {
       await this.rpc.call("session.disconnect", {});

@@ -57,6 +57,8 @@ import type {
   MindooDBAppDragStartInput,
   MindooDBAppDragStartResult,
   MindooDBAppMenuApi,
+  MindooDBAppNotifyInput,
+  MindooDBAppBridgeHostFocusChangedMessage,
   MindooDBAppProposeAppInput,
   MindooDBAppProposeAppResult,
   MindooDBAppBooleanExpression,
@@ -2440,6 +2442,7 @@ type MockSessionState = {
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
   emitLocaleChange: (locale: string) => void;
   emitBeforeClose: () => Promise<void>;
+  setHostFocused: (focused: boolean) => void;
   resolveDrag: (result: MindooDBAppDragStartResult) => void;
   getDragProfile: () => MindooDBAppDragProfile | null;
 };
@@ -2449,6 +2452,8 @@ function createMockSessionState(
 ): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
+  const hostFocusListeners = new Set<(focused: boolean) => void>();
+  let hostFocused = false;
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
   const uiPreferencesListeners = new Set<
     (uiPreferences: MindooDBAppUiPreferences) => void
@@ -2754,6 +2759,23 @@ function createMockSessionState(
         beforeCloseListeners.delete(listener);
       };
     },
+    async requestHostFocus() {
+      hostFocused = true;
+      hostFocusListeners.forEach((listener) => listener(true));
+    },
+    async hasHostFocus() {
+      return hostFocused;
+    },
+    onHostFocusChange(listener) {
+      hostFocusListeners.add(listener);
+      return () => {
+        hostFocusListeners.delete(listener);
+      };
+    },
+    async notify(input) {
+      const id = input.id?.trim() || crypto.randomUUID();
+      return { id };
+    },
     async disconnect() {
       await options.onDisconnect?.();
     },
@@ -2817,6 +2839,10 @@ function createMockSessionState(
     },
     async emitBeforeClose() {
       await Promise.all([...beforeCloseListeners].map(async (listener) => listener()));
+    },
+    setHostFocused(focused: boolean) {
+      hostFocused = focused;
+      hostFocusListeners.forEach((listener) => listener(focused));
     },
     resolveDrag(result) {
       activeDragResolve?.(result);
@@ -2922,6 +2948,8 @@ export interface MockMindooDBAppSessionController {
   emitLocaleChange(locale: string): void;
   /** Runs the app's `onBeforeClose` listeners, as the host does before a teardown. */
   emitBeforeClose(): Promise<void>;
+  /** Sets whether this mock launch has host focus and notifies listeners. */
+  emitHostFocusChange(focused: boolean): void;
   resolveDrag(result: MindooDBAppDragStartResult): void;
   getDragProfile(): MindooDBAppDragProfile | null;
 }
@@ -2950,6 +2978,9 @@ export function createMockMindooDBAppSession(
     emitUiPreferencesChange: state.emitUiPreferencesChange,
     emitLocaleChange: state.emitLocaleChange,
     emitBeforeClose: state.emitBeforeClose,
+    emitHostFocusChange(focused: boolean) {
+      state.setHostFocused(focused);
+    },
     resolveDrag: state.resolveDrag,
     getDragProfile: state.getDragProfile,
   };
@@ -2997,6 +3028,7 @@ export interface FakeBridgeHostController {
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   emitLocaleChange(locale: string): void;
+  emitHostFocusChange(focused: boolean): void;
   /** Push a live-query result to connected apps, as the Haven host would. */
   emitQueryResult(subscriptionId: string, result: MindooDBAppQueryResult): void;
   /** Push a navigator view-changed event to connected apps. */
@@ -3260,6 +3292,15 @@ export function createFakeBridgeHost(
       case "menus.hide":
         await state.session.menus.hide();
         return { ok: true };
+      case "session.requestHostFocus":
+        await state.session.requestHostFocus();
+        return null;
+      case "session.hasHostFocus":
+        return { focused: await state.session.hasHostFocus() };
+      case "notifications.show":
+        return await state.session.notify(
+          request.params as unknown as MindooDBAppNotifyInput,
+        );
       case "session.disconnect":
         await state.session.disconnect();
         return { ok: true };
@@ -3957,6 +3998,16 @@ export function createFakeBridgeHost(
       beforeCloseWaiters.get(message.closeId)?.();
       return;
     }
+    if (message.kind === "workspace-focus-requested") {
+      state.setHostFocused(true);
+      const payload: MindooDBAppBridgeHostFocusChangedMessage = {
+        protocol: PROTOCOL,
+        kind: "host-focus-changed",
+        focused: true,
+      };
+      port.postMessage(payload);
+      return;
+    }
     if (message.kind === "request") {
       requests.push(message);
       try {
@@ -4070,6 +4121,15 @@ export function createFakeBridgeHost(
         protocol: PROTOCOL,
         kind: "locale-changed",
         locale,
+      };
+      connectedPorts.forEach((port) => port.postMessage(payload));
+    },
+    emitHostFocusChange(focused) {
+      state.setHostFocused(focused);
+      const payload: MindooDBAppBridgeHostFocusChangedMessage = {
+        protocol: PROTOCOL,
+        kind: "host-focus-changed",
+        focused,
       };
       connectedPorts.forEach((port) => port.postMessage(payload));
     },

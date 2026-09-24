@@ -229,6 +229,35 @@ Important constraints:
 - Call `session.menus.hide()` if your app needs to explicitly dismiss a pending host menu.
 - Host-rendered menus are intended for `runtime === "iframe"`. Window-mode apps can usually show local menus instead.
 
+### Host focus and notifications
+
+A click inside the iframe already asks Haven to focus this launch. Call `requestHostFocus()` when the app should take focus without a click.
+
+`hasHostFocus()` is true only when this launch is the surface the user is looking at: the focused tile on the active workspace page, or this launch open as a standalone runner. A background tile, another page, or another app is false. `onHostFocusChange()` fires when that answer changes, so a long task can decide whether to notify without polling.
+
+```ts
+const stop = session.onHostFocusChange((focused) => {
+  if (!focused) {
+    void session.notify({
+      id: "sync",
+      severity: "info",
+      text: "Sync finished",
+    });
+  }
+});
+
+await session.notify({
+  id: "progress",
+  severity: "info",
+  text: "10%",
+  durationMs: 1500,
+});
+```
+
+Show a notice when the app does not have host focus, or when a long task finishes and the user may have looked away. Do not notify while `hasHostFocus()` is true and the user is already looking at the app.
+
+Haven uses the app's registration label as the headline and ignores any title from the app. Pass the same `id` to update that notice in place. Omit `id` to add another notice. An id only matches notices from this launch. Omit `durationMs` and the notice stays until the user dismisses it or clicks it. A duration is clamped to about 1–8 seconds, which fits a short progress step such as "10%". Clicking the notice brings that launch back. The close button only dismisses it.
+
 ### Host-owned drag
 
 When two apps run as visible workspace chicklets, native HTML5 drag dies at the iframe boundary. The SDK therefore hands the gesture to Haven: the source starts it, Haven draws a PNG ghost above every frame, and the target hit-tests the drop.
@@ -1636,6 +1665,10 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
 | `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
 | `menus.hide()`                        | `Promise<void>`                      |
+| `requestHostFocus()`                  | `Promise<void>`                      |
+| `hasHostFocus()`                      | `Promise<boolean>`                   |
+| `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
+| `notify(input)`                       | `Promise<{ id: string }>`            |
 | `drag.setProfile(profile)`            | `Promise<void>`                      |
 | `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
 | `drag.cancel()`                       | `Promise<void>`                      |
