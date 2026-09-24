@@ -13,11 +13,13 @@ import type {
 export const DEFAULT_HAVEN_HOST_SHORTCUTS: readonly MindooDBAppHostShortcutBinding[] = [
   { action: "open-workspace", code: "Enter", shiftKey: true, metaOrCtrl: true },
   { action: "toggle-app-drawer", code: "Space", shiftKey: true, metaOrCtrl: true },
+  { action: "toggle-workspace-maximize", code: "KeyM", shiftKey: true, metaOrCtrl: true },
 ];
 
 const HOST_SHORTCUT_ACTIONS = new Set<MindooDBAppHostShortcutAction>([
   "open-workspace",
   "toggle-app-drawer",
+  "toggle-workspace-maximize",
 ]);
 
 /** Numpad Enter is the same chord as the main Enter for "back to workspace". */

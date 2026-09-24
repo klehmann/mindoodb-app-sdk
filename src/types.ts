@@ -1197,7 +1197,10 @@ export interface MindooDBAppBridgeBeforeCloseAck {
 }
 
 /** A Haven-owned keyboard chord the iframe should recognise. */
-export type MindooDBAppHostShortcutAction = "open-workspace" | "toggle-app-drawer";
+export type MindooDBAppHostShortcutAction =
+  | "open-workspace"
+  | "toggle-app-drawer"
+  | "toggle-workspace-maximize";
 
 /** One host shortcut, matched against {@link KeyboardEvent.code} plus modifiers. */
 export interface MindooDBAppHostShortcutBinding {

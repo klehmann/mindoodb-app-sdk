@@ -26,6 +26,9 @@ describe("matchHostShortcut", () => {
       matchHostShortcut(chord({ code: "Space", shiftKey: true, metaKey: true })),
     ).toBe("toggle-app-drawer");
     expect(
+      matchHostShortcut(chord({ code: "KeyM", shiftKey: true, metaKey: true })),
+    ).toBe("toggle-workspace-maximize");
+    expect(
       matchHostShortcut(chord({ code: "NumpadEnter", shiftKey: true, metaKey: true })),
     ).toBe("open-workspace");
   });
