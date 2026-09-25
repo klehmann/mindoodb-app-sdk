@@ -1950,14 +1950,25 @@ export interface MindooDBAppDocumentApi {
   /**
    * Merge raw Automerge change bytes into the canonical document on Haven.
    *
-   * **Discouraged** — prefer `documents.update` patch operations. Escape hatch
-   * for apps that host a local Automerge replica when JSON patches are insufficient.
    * Include `replicaHeads` to receive incremental `changesSince` in the response.
+   * Word chunk journals use {@link applyAutomergeChangesBatch} so one save can
+   * write several small documents. Prefer `documents.update` when a JSON patch
+   * already expresses the edit.
    */
   applyAutomergeChanges(
     docId: string,
     patch: MindooDBAppAutomergeChangesPatch,
   ): Promise<MindooDBAppAutomergePatchResult>;
+  /**
+   * Merge Automerge change bytes for several documents in one call.
+   *
+   * Supported path for Word chunk journals: each chunk is its own document,
+   * and a save sends only the chunks that changed. Hosts without this method
+   * are served by sequential {@link applyAutomergeChanges} calls.
+   */
+  applyAutomergeChangesBatch(
+    items: Array<{ docId: string; patch: MindooDBAppAutomergeChangesPatch }>,
+  ): Promise<MindooDBAppAutomergePatchResult[]>;
   /**
    * Create a new document from `input.set` (or return the existing one
    * when a caller-provided `input.id` already exists — idempotent create,

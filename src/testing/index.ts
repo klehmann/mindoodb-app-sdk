@@ -1938,6 +1938,13 @@ function createDatabaseHandle(
         changesSince,
       };
     },
+    async applyAutomergeChangesBatch(items) {
+      const results = [];
+      for (const item of items) {
+        results.push(await this.applyAutomergeChanges(item.docId, item.patch));
+      }
+      return results;
+    },
     async create(input) {
       // Honor caller-provided ids: when `input.id` is present and a document
       // already exists, return the existing document (mirrors MindooDB's

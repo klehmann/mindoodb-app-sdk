@@ -40,6 +40,7 @@
 import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
 import { PortRpcClient } from "./portRpcClient";
 import type {
+  MindooDBAppAutomergePatchResult,
   MindooDBAppAttachmentApi,
   MindooDBAppAttachmentChunk,
   MindooDBAppBridge,
@@ -1045,6 +1046,26 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           docId,
           patch,
         }),
+      applyAutomergeChangesBatch: async (items) => {
+        if (items.length === 0) return [];
+        try {
+          return await this.rpc.call<MindooDBAppAutomergePatchResult[]>("documents.automerge.applyChangesBatch", {
+            databaseId: this.databaseId,
+            items,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) throw error;
+          const results: MindooDBAppAutomergePatchResult[] = [];
+          for (const item of items) {
+            results.push(await this.rpc.call<MindooDBAppAutomergePatchResult>("documents.automerge.applyChanges", {
+              databaseId: this.databaseId,
+              docId: item.docId,
+              patch: item.patch,
+            }));
+          }
+          return results;
+        }
+      },
       create: async (input) =>
         await this.rpc.call("documents.create", {
           databaseId: this.databaseId,

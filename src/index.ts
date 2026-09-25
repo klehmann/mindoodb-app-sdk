@@ -82,3 +82,4 @@ export type {
 export { createMindooDBTextBuffer, MindooDBTextBuffer } from "./textBuffer";
 export type { CreateMindooDBTextBufferOptions, MindooDBTextBufferFlushResult } from "./textBuffer";
 export { createViewLanguage, queryDocuments } from "./viewLanguage";
+export { inheritDocumentEncryption, watchWordChunks } from "./wordChunks";
