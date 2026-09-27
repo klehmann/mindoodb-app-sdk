@@ -3172,6 +3172,8 @@ export type FakeBridgePortMessageHandler = (
 export interface CreateFakeBridgeHostOptions extends CreateMockMindooDBAppSessionOptions {
   windowMode?: "parent" | "opener";
   requestHandlers?: Record<string, FakeBridgeRequestHandler>;
+  /** Called for every RPC request the app sends, before it is answered. */
+  onRequest?: (request: MindooDBAppBridgeRpcRequest) => void;
   onPortMessage?: FakeBridgePortMessageHandler;
 }
 
@@ -3183,6 +3185,13 @@ export interface FakeBridgeHostController {
   /** Every `apps.propose` call the app under test made, in order. */
   readonly proposedApps: ReadonlyArray<MindooDBAppProposeAppInput>;
   install(): void;
+  /**
+   * Answers a `mindoodb-app:connect` handshake received some other way than through
+   * `install()` — in a real browser, from the app frame's `message` event
+   * (`host.acceptConnection(event.data, event.ports)`). Returns `false` for messages
+   * that are not a handshake for this launch.
+   */
+  acceptConnection(message: unknown, transfer?: readonly Transferable[]): boolean;
   dispose(): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
@@ -3232,39 +3241,51 @@ export function createFakeBridgeHost(
     typeof window === "undefined" ? undefined : window;
   let installed = false;
 
+  /**
+   * Answers one `mindoodb-app:connect` handshake. Shared by the jsdom `install()` path
+   * (a fake parent window) and the browser test host (a real `message` event).
+   */
+  function acceptConnection(
+    message: unknown,
+    transfer?: readonly Transferable[],
+  ): boolean {
+    const payload = message as MindooDBAppBridgeConnectMessage | undefined;
+    if (
+      !payload ||
+      payload.protocol !== PROTOCOL ||
+      payload.type !== "mindoodb-app:connect"
+    ) {
+      return false;
+    }
+    if (payload.launchId !== state.getLaunchContext().launchId) {
+      return false;
+    }
+    const port = transfer?.[0] as MessagePort | undefined;
+    if (!port) {
+      throw new Error(
+        "Expected the bridge connection to transfer a MessagePort.",
+      );
+    }
+    connectedPorts.add(port);
+    port.addEventListener("message", (event: MessageEvent<unknown>) => {
+      void handlePortMessage(port, event.data);
+    });
+    port.start();
+    const connected: MindooDBAppBridgeConnectedMessage = {
+      protocol: PROTOCOL,
+      type: "mindoodb-app:connected",
+    };
+    port.postMessage(connected);
+    return true;
+  }
+
   const hostWindow = {
     postMessage(
       message: unknown,
       _targetOrigin?: string,
       transfer?: Transferable[],
     ) {
-      const payload = message as MindooDBAppBridgeConnectMessage | undefined;
-      if (
-        !payload ||
-        payload.protocol !== PROTOCOL ||
-        payload.type !== "mindoodb-app:connect"
-      ) {
-        return;
-      }
-      if (payload.launchId !== state.getLaunchContext().launchId) {
-        return;
-      }
-      const port = transfer?.[0] as MessagePort | undefined;
-      if (!port) {
-        throw new Error(
-          "Expected the bridge connection to transfer a MessagePort.",
-        );
-      }
-      connectedPorts.add(port);
-      port.addEventListener("message", (event: MessageEvent<unknown>) => {
-        void handlePortMessage(port, event.data);
-      });
-      port.start();
-      const connected: MindooDBAppBridgeConnectedMessage = {
-        protocol: PROTOCOL,
-        type: "mindoodb-app:connected",
-      };
-      port.postMessage(connected);
+      acceptConnection(message, transfer);
     },
   };
 
@@ -4204,6 +4225,7 @@ export function createFakeBridgeHost(
     }
     if (message.kind === "request") {
       requests.push(message);
+      options.onRequest?.(message);
       try {
         const customHandler = customRequestHandlers.get(message.method);
         if (customHandler) {
@@ -4272,8 +4294,13 @@ export function createFakeBridgeHost(
       return state.proposedApps;
     },
     install,
+    acceptConnection,
     dispose() {
       restoreWindow();
+      connectedPorts.forEach((port) => {
+        port.close();
+      });
+      connectedPorts.clear();
       viewSessions.clear();
       readStreams.clear();
       writeStreams.clear();
@@ -4386,3 +4413,4 @@ export function createFakeBridgeHost(
 
   return controller;
 }
+export * from "./browserTestHost";
