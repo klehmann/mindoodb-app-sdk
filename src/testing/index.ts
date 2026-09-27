@@ -33,6 +33,7 @@ import type {
   MindooDBAppDirectoryApi,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
+  MindooDBAppSummarySetup,
   MindooDBAppIdentityApi,
   MindooDBAppRevisionVerification,
   MindooDBAppSignStatementInput,
@@ -2504,6 +2505,8 @@ function createDatabaseHandle(
     definition.fulltextSetup ?? null;
   let extractionSetup: MindooDBAppExtractionSetup | null =
     definition.extractionSetup ?? null;
+  let summarySetup: MindooDBAppSummarySetup | null =
+    definition.summarySetup ?? null;
 
   const databaseHandle: MindooDBAppDatabase = {
     async info() {
@@ -2543,6 +2546,12 @@ function createDatabaseHandle(
     },
     async setExtractionSetup(config) {
       extractionSetup = config === null ? null : { ...config };
+    },
+    async getSummarySetup() {
+      return summarySetup === null ? null : structuredClone(summarySetup);
+    },
+    async setSummarySetup(config) {
+      summarySetup = config === null ? null : structuredClone(config);
     },
   };
 
@@ -3037,6 +3046,13 @@ export interface MockMindooDBAppDatabaseDefinition {
    * their setup/bootstrap logic.
    */
   extractionSetup?: MindooDBAppExtractionSetup | null;
+  /**
+   * Initial summary buffer configuration returned by `getSummarySetup()`.
+   * `setSummarySetup()` overwrites it for the lifetime of the handle. The
+   * mock's `query()` reads the seeded documents directly and ignores this
+   * config — it exists so apps can test their setup/bootstrap logic.
+   */
+  summarySetup?: MindooDBAppSummarySetup | null;
 }
 
 /**
@@ -3501,6 +3517,19 @@ export function createFakeBridgeHost(
           .getDatabase(String(params.databaseId))
           .setExtractionSetup(
             (params.config ?? null) as MindooDBAppExtractionSetup | null,
+          );
+        return { ok: true };
+      case "database.getSummarySetup":
+        return {
+          config: await state
+            .getDatabase(String(params.databaseId))
+            .getSummarySetup(),
+        };
+      case "database.setSummarySetup":
+        await state
+          .getDatabase(String(params.databaseId))
+          .setSummarySetup(
+            (params.config ?? null) as MindooDBAppSummarySetup | null,
           );
         return { ok: true };
       case "documents.query":

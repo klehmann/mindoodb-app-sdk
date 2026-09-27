@@ -1715,6 +1715,37 @@ export interface MindooDBAppFulltextSetup {
 }
 
 /**
+ * Document summary buffer configuration of a database, stored in the synced
+ * `dbsetup` document (`summarySetup` field) — the app-SDK mirror of
+ * MindooDB's `SummaryConfig`. It decides which document fields
+ * {@link MindooDBAppDocumentApi.query} and summary-backed views can read
+ * without materializing documents. Read/write it via
+ * {@link MindooDBAppDatabase.getSummarySetup} /
+ * {@link MindooDBAppDatabase.setSummarySetup}.
+ */
+export interface MindooDBAppSummarySetup {
+  /**
+   * Copy every non-underscore top-level field whose value is a scalar or an
+   * array of scalars (up to {@link maxValueBytes}). Default: `true`.
+   */
+  autoInclude?: boolean;
+  /** Size cap (approximate, JSON length) for auto-included values. Default: `1024`. */
+  maxValueBytes?: number;
+  /**
+   * Dot-separated paths to include explicitly. Unlike auto-include these may
+   * be nested or non-scalar (e.g. an array of objects) and bypass the size
+   * cap.
+   */
+  include?: string[];
+  /** Dot-separated paths to exclude; wins over auto-include and `include`. */
+  exclude?: string[];
+  /** Store a slim `_attachments` projection. Default: `true`. */
+  includeAttachments?: boolean;
+  /** Store a slim `_encryptFor` projection. Default: `true`. */
+  includeRecipients?: boolean;
+}
+
+/**
  * Attachment text extraction configuration of a database, stored in the
  * synced `dbsetup` document (`extractionSetup` field) — the app-SDK
  * mirror of MindooDB's `ExtractionConfig`. Enables host-side extraction
@@ -2905,6 +2936,28 @@ export interface MindooDBAppDatabase {
    * {@link setFulltextSetup}.
    */
   setExtractionSetup(config: MindooDBAppExtractionSetup | null): Promise<void>;
+  /**
+   * Read the database's document summary buffer configuration from the
+   * synced `dbsetup` document. Resolves to `null` when it has never been
+   * configured (the host then uses the default auto-include config).
+   * Requires the `read` capability.
+   */
+  getSummarySetup(): Promise<MindooDBAppSummarySetup | null>;
+  /**
+   * Write the database's document summary buffer configuration (persisted
+   * in the synced `dbsetup` document, so it applies on every replica). A
+   * change triggers a resumable background re-extraction; documents are
+   * never rewritten, and queries report `coverage: "rebuilding"` until it
+   * finishes. Pass `null` to fall back to the default auto-include config.
+   *
+   * Typical use: `include` nested fields a list UI needs (e.g. an array of
+   * objects), so `documents.query` can return them instead of the app
+   * calling `documents.get` per document.
+   *
+   * Requires the `update` capability; idempotent like
+   * {@link setFulltextSetup}.
+   */
+  setSummarySetup(config: MindooDBAppSummarySetup | null): Promise<void>;
 }
 
 /** Request to open a host-owned encrypted channel to a tenant-joined service. */

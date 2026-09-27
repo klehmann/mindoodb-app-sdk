@@ -107,6 +107,7 @@ Each database entry can provide:
 - `methods.views` for session-level `createView()` and `openView()` calls (overrides the default evaluating navigator)
 - `methods.attachments`
 - `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.
+- `summarySetup` — the initial config returned by `db.getSummarySetup()`; `db.setSummarySetup()` overwrites it for the lifetime of the handle. The mock's `query()` reads seeded documents directly and ignores this config; use it to test your app's summary bootstrap logic.
 
 ### Evaluating VirtualViews
 

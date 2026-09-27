@@ -63,6 +63,7 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
+  MindooDBAppSummarySetup,
   MindooDBAppDirectoryApi,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
@@ -1461,6 +1462,23 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   /** Writes (or removes, with `null`) the attachment extraction configuration. */
   async setExtractionSetup(config: MindooDBAppExtractionSetup | null): Promise<void> {
     await this.rpc.call("database.setExtractionSetup", {
+      databaseId: this.databaseId,
+      config,
+    });
+  }
+
+  /** Reads the summary buffer configuration from the synced `dbsetup` document. */
+  async getSummarySetup(): Promise<MindooDBAppSummarySetup | null> {
+    const result = await this.rpc.call<{ config: MindooDBAppSummarySetup | null }>(
+      "database.getSummarySetup",
+      { databaseId: this.databaseId },
+    );
+    return result.config;
+  }
+
+  /** Writes (or removes, with `null`) the summary buffer configuration. */
+  async setSummarySetup(config: MindooDBAppSummarySetup | null): Promise<void> {
+    await this.rpc.call("database.setSummarySetup", {
       databaseId: this.databaseId,
       config,
     });

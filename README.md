@@ -1192,6 +1192,18 @@ const setup = await db.getFulltextSetup(); // null when never configured
 - `attachments: true` indexes attachment text under the synthetic `_attachments` field using the host's extractors (Haven ships anydoc for Office/PDF/… plus plain-text extractors). Restrict a query to attachment content with `text: { query, fields: ["_attachments"] }`.
 - Changing the configuration (including `language`) rebuilds the index in the background; queries during the rebuild report `coverage: "rebuilding"`.
 
+**Making nested fields queryable** — `query()` only sees fields in the database's summary buffer. By default that is every top-level scalar or array of scalars up to 1 KB; nested objects and arrays of objects are skipped. Include what your list UIs need so they don't have to `documents.get` each document:
+
+```ts
+// Idempotent, synced via the `dbsetup` document. Requires the `update` capability.
+const current = await db.getSummarySetup(); // null = default auto-include
+const include = [...new Set([...(current?.include ?? []), "phases"])];
+await db.setSummarySetup({ ...current, include });
+```
+
+- `include` paths may be nested (`"meta.author"`) or non-scalar and bypass the size cap; `exclude` wins over both.
+- A change re-extracts all documents in the background; queries report `coverage: "rebuilding"` until the backfill finishes, so keep a fallback for missing fields.
+
 **Extracting text from bytes you already have** (requires `attachments`):
 
 ```ts
@@ -1806,6 +1818,8 @@ Host-kept key/value state, the only durable storage a hosted app has. See [Stora
 | `attachments`                | `MindooDBAppAttachmentApi`                     |
 | `getFulltextSetup()`         | `Promise<MindooDBAppFulltextSetup \| null>`    |
 | `setFulltextSetup(config)`   | `Promise<void>`                                |
+| `getSummarySetup()`          | `Promise<MindooDBAppSummarySetup \| null>`     |
+| `setSummarySetup(config)`    | `Promise<void>`                                |
 
 ### MindooDBAppDocumentApi
 

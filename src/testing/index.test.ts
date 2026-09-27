@@ -174,6 +174,46 @@ describe("mindoodb-app-sdk/testing", () => {
     });
   });
 
+  it("stores and returns summary setup on mock database handles", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        {
+          info: {
+            id: "plain",
+            title: "Plain",
+            capabilities: ["read", "update"],
+          },
+        },
+        {
+          info: {
+            id: "preconfigured",
+            title: "Preconfigured",
+            capabilities: ["read"],
+          },
+          summarySetup: { include: ["phases"], maxValueBytes: 2048 },
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+
+    const plain = await session.openDatabase("plain");
+    await expect(plain.getSummarySetup()).resolves.toBeNull();
+    await plain.setSummarySetup({ include: ["phases", "meta.author"], exclude: ["body"] });
+    await expect(plain.getSummarySetup()).resolves.toEqual({
+      include: ["phases", "meta.author"],
+      exclude: ["body"],
+    });
+    await plain.setSummarySetup(null);
+    await expect(plain.getSummarySetup()).resolves.toBeNull();
+
+    const preconfigured = await session.openDatabase("preconfigured");
+    await expect(preconfigured.getSummarySetup()).resolves.toEqual({
+      include: ["phases"],
+      maxValueBytes: 2048,
+    });
+  });
+
   it("stores and returns extraction setup on mock database handles", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [
