@@ -219,6 +219,30 @@ expect(result.rows[0].includes?.customer?.fields.name).toBe("Acme");
 An include slot naming a database that was not seeded fails, the same way Haven
 rejects a database the app is not mapped to.
 
+### Host focus and notifications
+
+A mock launch starts without host focus. `session.requestHostFocus()` sets it
+and fires `onHostFocusChange` listeners; `mock.emitHostFocusChange(focused)`
+simulates Haven moving focus to or away from the launch, so you can test code
+that only notifies while the user is looking elsewhere. `session.notify()` shows
+nothing and resolves with the passed `id`, or a fresh one when `id` is omitted:
+
+```ts
+const mock = createMockMindooDBAppSession();
+
+const seen: boolean[] = [];
+const stop = mock.session.onHostFocusChange((focused) => seen.push(focused));
+
+await mock.session.requestHostFocus();
+mock.emitHostFocusChange(false);
+expect(await mock.session.hasHostFocus()).toBe(false);
+expect(seen).toEqual([true, false]);
+stop();
+
+const { id } = await mock.session.notify({ id: "sync", severity: "info", text: "Sync finished" });
+expect(id).toBe("sync");
+```
+
 ## Level 2 example
 
 This pattern keeps the real `createMindooDBAppBridge()` code path and replaces only the host side.
@@ -288,6 +312,7 @@ Useful Level 2 methods:
 - `emitViewportChange()`
 - `emitQueryResult()` — push a `query-result` message to live query subscribers
 - `emitViewChanged()` — push a `view-changed` message to navigator `onDidUpdate` listeners
+- `emitHostFocusChange()` — set host focus and push a `host-focus-changed` message to `session.onHostFocusChange()` listeners
 - `setRequestHandler()`
 - `clearRequestHandler()`
 - `postPortMessage()`
