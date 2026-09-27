@@ -8,6 +8,7 @@ import {
   createMockMindooDBAppBridge,
 } from "./index";
 import type { MindooDBAppQueryResult, MindooDBAppQueryRow } from "../types";
+import { MindooDBAppValue } from "../values";
 
 describe("mindoodb-app-sdk/testing", () => {
   afterEach(() => {
@@ -490,6 +491,97 @@ describe("mindoodb-app-sdk/testing", () => {
     });
 
     expect((updated.data.bodyDoc as any).blocksById.p1.text).toBe("Hello world");
+  });
+
+  it("creates and increments counters in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: { title: "Poll", votes: { yes: MindooDBAppValue.counter(0) } },
+    });
+    const updated = await database.documents.update(created.id, {
+      json: {
+        counterIncrement: [
+          { path: ["votes", "yes"], delta: 2 },
+          { path: ["votes", "no"], delta: 1 },
+        ],
+      },
+    });
+
+    expect(updated.data.votes).toEqual({ yes: 2, no: 1 });
+    await expect(database.documents.update(created.id, {
+      json: { counterIncrement: [{ path: ["title"], delta: 1 }] },
+    })).rejects.toThrow(/non-counter/);
+  });
+
+  it("stores typed values like Haven returns them", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: { title: "Task", status: MindooDBAppValue.atomic("open") },
+    });
+    expect(created.data.status).toBe("open");
+
+    const updated = await database.documents.update(created.id, {
+      set: { dueAt: MindooDBAppValue.timestamp("2026-10-01T12:00:00Z") },
+      json: {
+        set: [{ path: ["meta", "createdAt"], value: MindooDBAppValue.timestamp(1700000000000) }],
+        listInsert: [{ path: ["tags"], index: 0, values: [MindooDBAppValue.atomic("urgent")] }],
+      },
+    });
+
+    expect(updated.data.status).toBe("open");
+    expect(updated.data.dueAt).toBe("2026-10-01T12:00:00.000Z");
+    expect(updated.data.meta).toEqual({ createdAt: "2023-11-14T22:13:20.000Z" });
+    expect(updated.data.tags).toEqual(["urgent"]);
+    expect(() => MindooDBAppValue.timestamp("someday")).toThrow(/ISO 8601/);
+    await expect(database.documents.update(created.id, {
+      json: { set: [{ path: ["x"], value: { $mindoo: "unknown" } }] },
+    })).rejects.toThrow(/reserved/);
+  });
+
+  it("creates and resolves text cursors in the mock bridge", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({ set: { body: "hello world", count: 1 } });
+
+    const { cursors } = await database.documents.getTextCursors(created.id, ["body"], [6, "start", "end", 99]);
+    expect(cursors).toHaveLength(4);
+    const resolved = await database.documents.resolveTextCursors(created.id, ["body"], cursors);
+    expect(resolved.positions).toEqual([6, 0, 11, 11]);
+    await expect(
+      database.documents.getTextCursors(created.id, ["count"], [0]),
+    ).rejects.toThrow(/text field/);
   });
 
   it("flushes buffered text edits through the mock bridge", async () => {

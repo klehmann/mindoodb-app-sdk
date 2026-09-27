@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./values";
 export {
   MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME,
   MINDOODB_APP_BUNDLE_MANIFEST_FILE_NAME,

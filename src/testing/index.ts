@@ -91,7 +91,9 @@ import type {
   MindooDBAppUiPreferences,
   MindooDBAppUpdateDocumentInput,
   MindooDBAppWritableAttachmentStream,
+  MindooDBAppTextCursorPosition,
 } from "../types";
+import { MINDOODB_APP_VALUE_TAG } from "../values";
 
 const PROTOCOL = "mindoodb-app-bridge";
 
@@ -141,7 +143,7 @@ function applyDocumentUpdatePatch(
 ) {
   const next = {
     ...structuredClone(current),
-    ...(patch.set ? structuredClone(patch.set) : {}),
+    ...(patch.set ? (readMockTypedValues(patch.set) as Record<string, unknown>) : {}),
   };
   for (const key of patch.unset ?? []) {
     Reflect.deleteProperty(next, key);
@@ -168,7 +170,7 @@ function applyMockJsonPatch(
     return;
   }
   for (const operation of patch.set ?? []) {
-    setValueAtPath(target, operation.path, structuredClone(operation.value));
+    setValueAtPath(target, operation.path, readMockTypedValues(operation.value));
   }
   for (const operation of patch.unset ?? []) {
     unsetValueAtPath(target, operation.path);
@@ -178,8 +180,14 @@ function applyMockJsonPatch(
     list.splice(operation.index, operation.deleteCount);
   }
   for (const operation of patch.listInsert ?? []) {
+    // Like Haven, an insert into a missing field creates the list.
+    const parent = ensureParentAtPath(target, operation.path);
+    const leaf = operation.path[operation.path.length - 1];
+    if (parent[leaf] == null) {
+      parent[leaf] = [];
+    }
     const list = readListAtPath(target, operation.path);
-    list.splice(operation.index, 0, ...structuredClone(operation.values));
+    list.splice(operation.index, 0, ...(readMockTypedValues(operation.values) as unknown[]));
   }
   for (const operation of patch.textSplice ?? []) {
     applyMockTextPatch(target, operation.path, [{
@@ -193,6 +201,96 @@ function applyMockJsonPatch(
   }
   for (const operation of patch.textUnmark ?? []) {
     applyMockTextMarks(target, operation.path, operation.index, operation.length, Object.fromEntries(operation.names.map((name) => [name, null])), true);
+  }
+  // The mock stores counters as plain numbers, which is also how Haven
+  // returns them in `document.data`.
+  for (const operation of patch.counterIncrement ?? []) {
+    assertMockCounterAmount(operation.delta, "JSON counterIncrement delta");
+    const parent = ensureParentAtPath(target, operation.path);
+    const leaf = operation.path[operation.path.length - 1];
+    const current = parent[leaf];
+    if (current == null) {
+      parent[leaf] = operation.delta;
+    } else if (typeof current === "number") {
+      parent[leaf] = current + operation.delta;
+    } else {
+      throw new Error(
+        `Cannot increment non-counter value at ${operation.path.map(String).join(".")}`,
+      );
+    }
+  }
+}
+
+const MOCK_CURSOR_PREFIX = "mock-cursor:";
+
+function readMockCursorText(data: Record<string, unknown>, path: Array<string | number>): string {
+  let value: unknown = data;
+  for (const segment of path) {
+    value = (value as Record<string | number, unknown> | null | undefined)?.[segment];
+  }
+  if (typeof value !== "string") {
+    throw new Error(
+      `Text cursors require an Automerge text field at '${path.map(String).join(".")}'`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The mock keeps plain JSON only, so typed values are stored the way Haven
+ * returns them: atomic strings as strings, counters as numbers and timestamps
+ * as ISO 8601 strings. Also deep-copies `value` like `structuredClone`.
+ */
+function readMockTypedValues(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return value.slice();
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => readMockTypedValues(entry));
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, MINDOODB_APP_VALUE_TAG)) {
+    switch (record[MINDOODB_APP_VALUE_TAG]) {
+      case "atomic":
+        if (typeof record.value !== "string") {
+          throw new Error('Typed value "atomic" needs a string value');
+        }
+        return record.value;
+      case "counter":
+        assertMockCounterAmount(record.value, 'Typed value "counter"');
+        return record.value;
+      case "timestamp":
+        return toMockTimestamp(record.value);
+      default:
+        throw new Error(
+          `Unknown typed value ${JSON.stringify(record[MINDOODB_APP_VALUE_TAG])}; the "${MINDOODB_APP_VALUE_TAG}" key is reserved`,
+        );
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, readMockTypedValues(entry)]),
+  );
+}
+
+function toMockTimestamp(value: unknown): string {
+  const date =
+    typeof value === "number" || (typeof value === "string" && value.trim() !== "")
+      ? new Date(value)
+      : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    throw new Error(
+      'Typed value "timestamp" must be epoch milliseconds or an ISO 8601 date-time string',
+    );
+  }
+  return date.toISOString();
+}
+
+function assertMockCounterAmount(amount: unknown, label: string) {
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount)) {
+    throw new Error(`${label} must be a safe integer`);
   }
 }
 
@@ -1883,6 +1981,45 @@ function createDatabaseHandle(
         spans: structuredClone(readRichTextSpansAtPath(document.data, path)),
       };
     },
+    // Mock cursors store the index they were created at and do not follow
+    // later edits; Haven's Automerge-backed cursors do.
+    async getTextCursors(docId, path, positions, options) {
+      const document = storedDocuments.get(docId);
+      if (!document || document.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      const text = readMockCursorText(document.data, path);
+      return {
+        path: [...path],
+        heads: options?.heads ? [...options.heads] : [...(document.heads ?? [])],
+        cursors: positions.map((position) => {
+          if (position === "start") return `${MOCK_CURSOR_PREFIX}0`;
+          if (position === "end") return `${MOCK_CURSOR_PREFIX}end`;
+          if (typeof position !== "number" || !Number.isFinite(position)) {
+            throw new Error('Text cursor positions must be numbers, "start" or "end"');
+          }
+          return `${MOCK_CURSOR_PREFIX}${Math.max(0, Math.min(Math.trunc(position), text.length))}`;
+        }),
+      };
+    },
+    async resolveTextCursors(docId, path, cursors, options) {
+      const document = storedDocuments.get(docId);
+      if (!document || document.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      const text = readMockCursorText(document.data, path);
+      return {
+        path: [...path],
+        heads: options?.heads ? [...options.heads] : [...(document.heads ?? [])],
+        positions: cursors.map((cursor) => {
+          if (typeof cursor !== "string" || !cursor.startsWith(MOCK_CURSOR_PREFIX)) {
+            throw new Error(`Unknown text cursor ${String(cursor)}`);
+          }
+          const raw = cursor.slice(MOCK_CURSOR_PREFIX.length);
+          return raw === "end" ? text.length : Math.min(Number(raw), text.length);
+        }),
+      };
+    },
     async getAutomergeSnapshot(docId, _options) {
       const document = storedDocuments.get(docId);
       if (!document || document.isDeleted) {
@@ -2006,7 +2143,7 @@ function createDatabaseHandle(
       const created = {
         id,
         data: {
-          ...input.set,
+          ...(readMockTypedValues(input.set ?? {}) as Record<string, unknown>),
           ...(Array.isArray(input.recipients)
             ? { _encryptFor: mockEncryptForMap(input.recipients) }
             : {}),
@@ -3420,6 +3557,27 @@ export function createFakeBridgeHost(
           .documents.getRichText(
             String(params.docId),
             params.path as Array<string | number>,
+          );
+      case "documents.textCursors.get":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.getTextCursors(
+            String(params.docId),
+            params.path as Array<string | number>,
+            params.positions as MindooDBAppTextCursorPosition[],
+            {
+              heads: params.heads as string[] | undefined,
+              move: params.move as "before" | "after" | undefined,
+            },
+          );
+      case "documents.textCursors.resolve":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.resolveTextCursors(
+            String(params.docId),
+            params.path as Array<string | number>,
+            params.cursors as string[],
+            { heads: params.heads as string[] | undefined },
           );
       case "documents.automerge.getSnapshot":
         return await state

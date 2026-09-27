@@ -804,6 +804,46 @@ export interface MindooDBAppRichTextSnapshot {
   spans: MindooDBAppRichTextSpan[];
 }
 
+/**
+ * Where a text cursor should be created: a character index (clamped to the
+ * text length), or the start/end of the text.
+ */
+export type MindooDBAppTextCursorPosition = number | "start" | "end";
+
+/** Options for `documents.getTextCursors()` and `documents.resolveTextCursors()`. */
+export interface MindooDBAppTextCursorOptions {
+  /**
+   * Address the text as it was at these heads (e.g. the `heads` of the
+   * document version your editor rendered) instead of the current version.
+   */
+  heads?: string[];
+  /**
+   * Only for `getTextCursors()`: where a cursor goes when the character it
+   * points at is deleted. `"after"` (default) or `"before"`.
+   */
+  move?: "before" | "after";
+  /** Read a historical revision from `documents.listHistory()` instead. */
+  revisionId?: MindooDBAppDocumentRevisionId;
+}
+
+/** Result of `documents.getTextCursors()`. */
+export interface MindooDBAppTextCursorsResult {
+  path: Array<string | number>;
+  /** Heads of the document version the positions were read against. */
+  heads: string[];
+  /** One opaque cursor string per requested position, in request order. */
+  cursors: string[];
+}
+
+/** Result of `documents.resolveTextCursors()`. */
+export interface MindooDBAppTextCursorPositionsResult {
+  path: Array<string | number>;
+  /** Heads of the document version the cursors were resolved against. */
+  heads: string[];
+  /** One character index per requested cursor, in request order. */
+  positions: number[];
+}
+
 export interface MindooDBAppRichTextGetOptions {
   /** Stable revision id previously obtained from `documents.listHistory()`. */
   revisionId?: MindooDBAppDocumentRevisionId;
@@ -857,6 +897,10 @@ export interface MindooDBAppAutomergePatchResult {
  * Creates the field if it does not exist, or replaces the existing value.
  * `path` addresses a property using object keys and list indices, for example
  * `["workbook", "worksheetsById", "ws-1", "title"]`.
+ *
+ * Strings become collaborative text. Use `MindooDBAppValue.atomic()`,
+ * `.counter()` or `.timestamp()` for values that need another type; they may
+ * also be nested inside objects and arrays.
  */
 export interface MindooDBAppJsonSetPatch {
   path: Array<string | number>;
@@ -927,6 +971,23 @@ export interface MindooDBAppJsonTextUnmarkPatch {
   names: string[];
 }
 
+/**
+ * Adds `delta` (negative to decrement) to the counter at `path`.
+ *
+ * Increments made concurrently on different devices are summed when they
+ * merge, so two users who each add 1 end at +2 instead of one overwriting the
+ * other, which is what a `set` of a plain number would do. A missing field is
+ * initialized as a counter holding `delta`; create shared counters up front
+ * with `MindooDBAppValue.counter()` instead, because two devices that create
+ * the same counter concurrently keep only one creation. Incrementing a field
+ * that holds a plain number (not a counter) is rejected by the host. `delta` must be a
+ * safe integer.
+ */
+export interface MindooDBAppJsonCounterIncrementPatch {
+  path: Array<string | number>;
+  delta: number;
+}
+
 export interface MindooDBAppJsonPatch {
   /**
    * Automerge heads of the document snapshot this JSON patch was authored
@@ -941,6 +1002,8 @@ export interface MindooDBAppJsonPatch {
   textSplice?: MindooDBAppJsonTextSplicePatch[];
   textMark?: MindooDBAppJsonTextMarkPatch[];
   textUnmark?: MindooDBAppJsonTextUnmarkPatch[];
+  /** Increment collaborative counters. Applied last. */
+  counterIncrement?: MindooDBAppJsonCounterIncrementPatch[];
 }
 
 /**
@@ -1936,6 +1999,36 @@ export interface MindooDBAppDocumentApi {
     path: Array<string | number>,
     options?: MindooDBAppRichTextGetOptions,
   ): Promise<MindooDBAppRichTextSnapshot>;
+  /**
+   * Create stable cursors for character positions in the text field at
+   * `path`. A cursor identifies a character rather than an index, so it keeps
+   * pointing at the same spot while other users insert or delete text before
+   * it. A cursor names the character at its index: anchor a range on its first
+   * and last character and add 1 to the resolved end. Store cursors in the
+   * document (preferably as `MindooDBAppValue.atomic()`)
+   * to anchor comments, highlights or bookmarks, and turn them back into
+   * indexes with {@link resolveTextCursors}. The field must be collaborative
+   * text (a string written with `set`/text patches, or rich text).
+   * Requires the `read` capability.
+   */
+  getTextCursors(
+    docId: string,
+    path: Array<string | number>,
+    positions: MindooDBAppTextCursorPosition[],
+    options?: MindooDBAppTextCursorOptions,
+  ): Promise<MindooDBAppTextCursorsResult>;
+  /**
+   * Resolve cursors from {@link getTextCursors} to current character indexes
+   * (or, with `options.heads` / `options.revisionId`, to indexes in that
+   * version). A cursor whose character was deleted resolves to where the
+   * character used to be. Requires the `read` capability.
+   */
+  resolveTextCursors(
+    docId: string,
+    path: Array<string | number>,
+    cursors: string[],
+    options?: Omit<MindooDBAppTextCursorOptions, "move">,
+  ): Promise<MindooDBAppTextCursorPositionsResult>;
   /**
    * Export the full internal Automerge document as binary.
    *

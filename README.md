@@ -487,7 +487,7 @@ A snapshot also carries `decryptionKeyId?: string` — the named shared key its 
 
 - `set` -- assign top-level fields (shallow JSON merge).
 - `unset` -- remove top-level fields entirely.
-- `json` -- a **granular JSON patch** of `set` / `unset` / `listInsert` / `listDelete` operations applied at specific paths inside `document.data`, against a `baseHeads` version. See [Granular JSON edits](#granular-json-edits) below.
+- `json` -- a **granular JSON patch** of `set` / `unset` / `listInsert` / `listDelete` operations (plus text splices/marks and `counterIncrement`) applied at specific paths inside `document.data`, against a `baseHeads` version. See [Granular JSON edits](#granular-json-edits) and [Typed values](#typed-values-atomic-strings-counters-timestamps) below.
 - `text` -- one or more **granular text patches** applied to specific string paths. Each patch carries the `baseHeads` version it was authored against and is merged on the Haven side with any concurrent changes that arrived since. This is the recommended way to edit collaborative text fields like a markdown body. See [Collaborative text editing](#collaborative-text-editing) below.
 - `richText` -- one or more **rich-text span snapshots** for formatted-document fields (Word/.docx style). See [Collaborative rich-text editing](#collaborative-rich-text-editing) below.
 
@@ -642,6 +642,109 @@ await db.documents.update(docId, {
 Haven applies the patch causally at `baseHeads` and merges it with any concurrent changes that arrived since, the same way the text and rich-text APIs do. List inserts authored against the same `baseHeads` interleave cleanly via Automerge's list CRDT instead of overwriting each other — which is exactly what makes two users inserting different rows on the same worksheet at the same time merge into a consistent grid rather than a last-writer-wins.
 
 Patch flavors compose. `set`/`unset` (top-level fields), `json`, `text`, and `richText` can all appear in the same `documents.update()` call and are applied atomically to one new document revision. Prefer small, intentional operations over whole-document rewrites so MindooDB change tracking stays meaningful and Automerge produces cleaner merges.
+
+### Typed values: atomic strings, counters, timestamps
+
+`document.data` is JSON, and JSON has one kind of string and one kind of number. For collaborative data that is not enough, so the SDK adds three **typed values**. You create them with `MindooDBAppValue` and use them anywhere you write a value: `documents.create({ set })`, `documents.update({ set })`, and `set` / `listInsert` values of a JSON patch, also nested inside objects and arrays.
+
+```ts
+import { MindooDBAppValue } from "mindoodb-app-sdk";
+
+const task = await db.documents.create({
+  set: {
+    title: "Write release notes",                    // collaborative text
+    status: MindooDBAppValue.atomic("open"),          // atomic string
+    votes: MindooDBAppValue.counter(0),               // counter
+    dueAt: MindooDBAppValue.timestamp("2026-10-01T12:00:00Z"),
+    assignee: { userId: MindooDBAppValue.atomic("u-42"), name: "Ada" },
+  },
+});
+
+task.data.status; // "open"
+task.data.votes;  // 0
+task.data.dueAt;  // "2026-10-01T12:00:00.000Z"
+```
+
+| Helper | Use it for | Reads back as |
+|---|---|---|
+| `MindooDBAppValue.atomic(string)` | ids, status and enum values, URLs, hashes, stored text cursors | `string` |
+| `MindooDBAppValue.counter(initial = 0)` | tallies several people change: votes, likes, stock, seats | `number` |
+| `MindooDBAppValue.timestamp(Date \| ms \| ISO string)` | dates and times | ISO 8601 string (UTC, with ms) |
+
+Why they matter:
+
+- **Plain strings are collaborative text.** Concurrent edits are merged character by character, which is right for titles, notes and bodies. For a status that one user changes from `"open"` to `"closed"` while another changes it to `"blocked"`, text merging can produce a mix of both words. An **atomic** string is replaced as a whole: one of the two values wins. It is also cheaper to store.
+- **Plain numbers are last-writer-wins.** If two users both read `votes: 4` and each save `5`, one vote is lost. A **counter** sums concurrent increments, so the result is `6`.
+- **An ISO string written as a plain string is text**, not a date. A **timestamp** stays a date for everyone who reads the document.
+
+The helpers produce plain JSON (`{ "$mindoo": "atomic", "value": "open" }`), so the values pass the bridge unchanged, and Haven converts them into the matching collaborative type. The key `$mindoo` is reserved: an object carrying it must be one of these values, otherwise the write is rejected.
+
+Reads return plain JSON, so **a value keeps its type only if you write it again with the helper.** Writing `status: "done"` stores text; write `status: MindooDBAppValue.atomic("done")`. Haven's database browser keeps the type when a user edits such a field in the JSON view.
+
+#### Counters
+
+Create a counter once, then change it only with `counterIncrement`:
+
+```ts
+interface MindooDBAppJsonCounterIncrementPatch {
+  path: Array<string | number>;
+  delta: number; // safe integer, negative to decrement
+}
+
+await db.documents.update(docId, {
+  json: { counterIncrement: [{ path: ["votes"], delta: 1 }] },
+});
+```
+
+- Writing `MindooDBAppValue.counter(n)` or a plain number over an existing counter resets it. That is an assignment and does not merge with concurrent increments, so use it for creation and deliberate resets only.
+- `counterIncrement` on a missing field creates the counter with value `delta`. If two devices do that concurrently for the same field, only one creation survives, so create shared counters up front, ideally in `documents.create`.
+- `counterIncrement` on a plain number is rejected: the field is not a counter.
+- `counterIncrement` runs after the other operations of the same JSON patch, so a patch may create an object with `set` and increment a counter inside it.
+- In Haven's database browser a counter can be edited in the JSON view: the new value is saved as the difference to the loaded value, so increments made by others in the meantime are kept.
+
+### Text cursors (anchors for comments and highlights)
+
+An index like "character 120" breaks as soon as another user inserts text before it. A **text cursor** identifies a character instead of a position, so it keeps pointing at the same spot while the text around it changes. Use cursors for comment and review anchors, highlights, bookmarks, "continue reading here" markers or links into a long text.
+
+```ts
+// Anchor a comment to characters 120..134 of the body (end exclusive: 135).
+// The end cursor names the LAST character of the range, see below.
+const doc = await db.documents.get(docId);
+const { cursors } = await db.documents.getTextCursors(docId, ["body"], [120, 134], {
+  heads: doc!.heads, // the version the user selected in
+});
+await db.documents.update(docId, {
+  json: {
+    listInsert: [{
+      path: ["comments"],
+      index: 0,
+      values: [{
+        text: "Source?",
+        from: MindooDBAppValue.atomic(cursors[0]!),
+        to: MindooDBAppValue.atomic(cursors[1]!),
+      }],
+    }],
+  },
+});
+
+// Later, after other users edited the body
+const current = (await db.documents.get(docId))!;
+const comment = current.data.comments[0];
+const { positions } = await db.documents.resolveTextCursors(docId, ["body"], [comment.from, comment.to], {
+  heads: current.heads, // resolve in the version you are about to render
+});
+const [start, last] = positions;
+const quoted = current.data.body.slice(start, last + 1);
+```
+
+Details:
+
+- A cursor names the character at its index. Text inserted exactly at that index lands in front of the character, so the cursor moves right. For a range, anchor the start on its first character and the end on its **last** character, then add 1 after resolving. An end cursor on the character after the range would grow the range whenever someone types at its end.
+- `positions` accepts character indexes (clamped to the text length) and `"start"` / `"end"`. An `"end"` cursor stays at the end when text is appended.
+- A cursor whose character was deleted resolves to where the character used to be. `move: "before"` makes it resolve towards the start of the text instead of the end.
+- `heads` (or `revisionId`) creates or resolves cursors against that document version. Pass the heads your editor rendered from so positions the user selected are interpreted in the text they saw.
+- Cursors only work on collaborative text: plain strings and rich text. Atomic strings, numbers and missing fields are rejected. Store the cursor strings themselves as atomic strings.
+- Both calls need the `read` capability. The mock bridge from `mindoodb-app-sdk/testing` returns cursors that do not follow later edits; test anchoring behavior against Haven.
 
 ### Collaborative text editing
 

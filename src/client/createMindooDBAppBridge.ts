@@ -1034,6 +1034,25 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           path,
           revisionId: options?.revisionId,
         }),
+      getTextCursors: async (docId, path, positions, options) =>
+        await this.rpc.call("documents.textCursors.get", {
+          databaseId: this.databaseId,
+          docId,
+          path,
+          positions,
+          heads: options?.heads,
+          move: options?.move,
+          revisionId: options?.revisionId,
+        }),
+      resolveTextCursors: async (docId, path, cursors, options) =>
+        await this.rpc.call("documents.textCursors.resolve", {
+          databaseId: this.databaseId,
+          docId,
+          path,
+          cursors,
+          heads: options?.heads,
+          revisionId: options?.revisionId,
+        }),
       getAutomergeSnapshot: async (docId, options) =>
         await this.rpc.call("documents.automerge.getSnapshot", {
           databaseId: this.databaseId,
