@@ -655,7 +655,7 @@ function createDefaultLaunchContext(
       camera: false,
       microphone: false,
       geolocation: false,
-      clipboardWrite: true,
+      clipboardWrite: false,
       webRtc: false,
       workers: false,
     },

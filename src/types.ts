@@ -242,7 +242,7 @@ export interface MindooDBAppBrowserFeatures {
   microphone: boolean;
   /** `navigator.geolocation`. Definition field `allowGeolocation`. */
   geolocation: boolean;
-  /** `navigator.clipboard.writeText` in response to a user gesture. */
+  /** `navigator.clipboard.writeText` in response to a user gesture. Definition field `allowClipboardWrite`. */
   clipboardWrite: boolean;
   /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */
   webRtc: boolean;
