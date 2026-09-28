@@ -22,6 +22,9 @@ import {
 
 export const DEFAULT_HAVEN_URL = "https://haven.mindoodb.com";
 
+/** Workspace icon files Haven also looks for in a hosted bundle. */
+const APP_ICON_FALLBACKS = ["appicon.png", "appicon.webp", "appicon.svg"] as const;
+
 export interface RenderHavenAppLandingPageOptions {
   /** Haven instance the button opens. Defaults to {@link DEFAULT_HAVEN_URL}. */
   havenUrl?: string;
@@ -185,11 +188,24 @@ export async function renderHavenAppLandingPage(
   root.append(card);
 
   const head = el("header", "mdb-landing__head");
-  const iconUrl = listing?.icon ? resolveMindooDBAppListingAssetUrl(listing.icon, appUrl) : null;
-  if (iconUrl) {
+  // Without `listing.icon`, try the workspace icon files the starter template ships at
+  // the app root, so apps built before the listing existed still show their icon.
+  const iconCandidates = (listing?.icon ? [listing.icon] : [...APP_ICON_FALLBACKS])
+    .map((path) => resolveMindooDBAppListingAssetUrl(path, appUrl))
+    .filter((url): url is string => Boolean(url));
+  if (iconCandidates.length) {
     const icon = el("img", "mdb-landing__icon");
-    icon.src = iconUrl;
+    let next = 0;
     icon.alt = "";
+    icon.addEventListener("error", () => {
+      next += 1;
+      if (next < iconCandidates.length) {
+        icon.src = iconCandidates[next]!;
+      } else {
+        icon.remove();
+      }
+    });
+    icon.src = iconCandidates[0]!;
     head.append(icon);
   }
   const titles = el("div");

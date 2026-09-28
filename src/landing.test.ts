@@ -65,6 +65,9 @@ describe("haven app landing page", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
     const page = await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/", locale: "en" });
     expect(page.definition).toBeNull();
+    expect(document.querySelector<HTMLImageElement>(".mdb-landing__icon")?.src).toBe(
+      "https://trips.example.com/appicon.png",
+    );
     expect(document.querySelector('[data-testid="haven-app-landing-install"]')).not.toBeNull();
     expect(document.body.textContent).toContain("This app runs inside MindooDB Haven.");
   });
