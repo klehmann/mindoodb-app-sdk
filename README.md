@@ -153,6 +153,7 @@ interface MindooDBAppLaunchContext {
   tenantId?: string;
   preferredDatabaseId?: string;
   user: { id: string; username: string };
+  browserFeatures?: MindooDBAppBrowserFeatures;
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
@@ -172,6 +173,18 @@ if (ctx.runtime === "iframe") {
   // A regular in-app menu is often fine in a separate window.
 }
 ```
+
+`browserFeatures` says which browser features Haven leaves available to the app: `popups`, `camera`, `microphone`, `geolocation`, `clipboardWrite`, `webRtc` and `workers`. `false` means Haven blocks the feature for this app, through the iframe sandbox, its `allow` attribute or the hosted app CSP, and the user has to enable it in the app's settings. The browser cannot report these restrictions to the app itself, so check them in an initial setup instead of letting a call fail silently:
+
+```ts
+const ctx = await session.getLaunchContext();
+
+if (ctx.browserFeatures && !ctx.browserFeatures.microphone) {
+  showSetupHint("Voice notes need microphone access. Enable it for this app in Haven's app settings.");
+}
+```
+
+Each flag matches the app definition field of the same name (`allowCamera`, `allowPopups`, …), so an app that always needs a feature can request it there. The field is absent on older hosts; treat that as unknown.
 
 ### Host-rendered menus
 

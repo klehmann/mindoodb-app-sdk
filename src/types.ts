@@ -225,6 +225,31 @@ export type MindooDBAppCapability =
   | "sealedchannel";
 
 /** Metadata about the current app launch supplied by the Haven host. */
+/**
+ * Which browser features the host leaves available to the app. `true` means the host
+ * does not block the feature; the browser may still ask the user (camera, microphone,
+ * location) or require a click (clipboard, popups). `false` means the host blocks it
+ * and the user has to enable it for this app in Haven. Each flag matches the app
+ * definition field of the same name (`allowCamera` and so on), so an app can ship with
+ * the flag already requested.
+ */
+export interface MindooDBAppBrowserFeatures {
+  /** `window.open` and links with `target="_blank"`. Definition field `allowPopups`. */
+  popups: boolean;
+  /** `getUserMedia` video. Definition field `allowCamera`. */
+  camera: boolean;
+  /** `getUserMedia` audio. Definition field `allowMicrophone`. */
+  microphone: boolean;
+  /** `navigator.geolocation`. Definition field `allowGeolocation`. */
+  geolocation: boolean;
+  /** `navigator.clipboard.writeText` in response to a user gesture. */
+  clipboardWrite: boolean;
+  /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */
+  webRtc: boolean;
+  /** `new Worker`, shared and service workers. Blocked only for hosted apps. Definition field `allowWorkers`. */
+  workers: boolean;
+}
+
 export interface MindooDBAppLaunchContext {
   appId: string;
   appInstanceId: string;
@@ -273,6 +298,16 @@ export interface MindooDBAppLaunchContext {
    * permissions".
    */
   appPermissions?: MindooDBAppDefinitionRegistrationPermission[];
+  /**
+   * Browser features the host lets this app use. The iframe sandbox, its `allow`
+   * attribute and the hosted app CSP are set by the host from the app's registration,
+   * and the browser offers no reliable way to read them from inside the frame. Check
+   * this in an initial setup to tell the user which switch to turn on in Haven's app
+   * settings before a feature fails silently.
+   *
+   * Absent on hosts predating this field; treat that as unknown and try the feature.
+   */
+  browserFeatures?: MindooDBAppBrowserFeatures;
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];

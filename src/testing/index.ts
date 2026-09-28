@@ -498,6 +498,7 @@ function mergeLaunchContext(
       uiPreferences: { ...current.uiPreferences },
       user: { ...current.user },
       appPermissions: [...(current.appPermissions ?? [])],
+      browserFeatures: current.browserFeatures ? { ...current.browserFeatures } : undefined,
       launchParameters: { ...current.launchParameters },
       databases: current.databases.map((database) => ({
         ...database,
@@ -549,6 +550,11 @@ function mergeLaunchContext(
       : { ...current.uiPreferences },
     user: patch.user ? { ...current.user, ...patch.user } : { ...current.user },
     appPermissions: [...(patch.appPermissions ?? current.appPermissions ?? [])],
+    browserFeatures: patch.browserFeatures
+      ? { ...current.browserFeatures, ...patch.browserFeatures }
+      : current.browserFeatures
+        ? { ...current.browserFeatures }
+        : undefined,
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
       : { ...current.launchParameters },
@@ -644,6 +650,15 @@ function createDefaultLaunchContext(
     },
     licensedProducts: [],
     appPermissions: [],
+    browserFeatures: {
+      popups: false,
+      camera: false,
+      microphone: false,
+      geolocation: false,
+      clipboardWrite: true,
+      webRtc: false,
+      workers: false,
+    },
     launchParameters: {},
     databases: [],
     views: [],
