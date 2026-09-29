@@ -22,26 +22,17 @@ A **MindooDB App** is any web application that uses this SDK to communicate with
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Haven (browser tab)                                    │
-│                                                         │
-│  ┌──────────────┐   ┌─────────────┐   ┌─────────────┐  │
-│  │  Haven UI    │──▶│ Bridge Host │──▶│  MindooDB    │  │
-│  │  (theme,     │   │  (RPC +     │   │  (encrypted  │  │
-│  │   viewport)  │   │   streams)  │   │   databases) │  │
-│  └──────────────┘   └──────┬──────┘   └─────────────┘  │
-│                            │                            │
-│              postMessage + MessagePort                  │
-│                            │                            │
-│  ┌─────────────────────────┼─────────────────────────┐  │
-│  │  Your App (sandboxed iframe / window)             │  │
-│  │                         │                         │  │
-│  │              ┌──────────▼──────────┐              │  │
-│  │              │  mindoodb-app-sdk   │              │  │
-│  │              └─────────────────────┘              │  │
-│  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph haven["Haven (browser tab)"]
+    direction TB
+    ui["Haven UI<br/>(theme, viewport)"] --> bridge["Bridge Host<br/>(RPC + streams)"]
+    bridge --> db["MindooDB<br/>(encrypted databases)"]
+    subgraph app["Your App (sandboxed iframe / window)"]
+      sdk["mindoodb-app-sdk"]
+    end
+    bridge -- "postMessage + MessagePort" --> sdk
+  end
 ```
 
 The bridge carries RPC calls (documents, views, database info), binary attachment streams, and push events (theme changes, viewport resizes) over a single `MessagePort`.
@@ -757,23 +748,11 @@ Two layers are available:
 
 The end-to-end flow is the same in both cases:
 
-```
-            ┌────────────────────────────────────────────────────┐
-  edit ───► │ App buffer (local string + pending splices)        │ ──► flush
-            └─────────────────────────┬──────────────────────────┘
-                                      │ documents.update({
-                                      │   text: [{ path, baseHeads, edits }]
-                                      │ })
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ Haven applies edits at `baseHeads` and merges with │
-            │ concurrent changes via Automerge                   │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ canonical merged document
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ App reconciles its editor with the canonical text  │
-            └────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  edit(["edit"]) --> buffer["App buffer<br/>(local string + pending splices)"]
+  buffer -- "flush: documents.update({ text: [{ path, baseHeads, edits }] })" --> merge["Haven applies edits at baseHeads<br/>and merges with concurrent changes via Automerge"]
+  merge -- "canonical merged document" --> reconcile["App reconciles its editor<br/>with the canonical text"]
 ```
 
 #### Text patch shape
@@ -1003,24 +982,14 @@ If you must use binary sync, Haven decrypts the canonical document, merges incom
 
 Typical flow:
 
-```
-            ┌────────────────────────────────────────────────────┐
-  open  ──► │ getAutomergeSnapshot → load local replica          │
-            └─────────────────────────┬──────────────────────────┘
-                                      │
-  edit  ──► │ Local Automerge doc (or span edits applied locally)  │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ getChangesSince(baseHeads)
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-  save  ──► │ applyAutomergeChanges({ baseHeads, replicaHeads,   │
-            │                       changes })                   │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ Haven merges + persists
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ Apply result.changesSince locally (or skip if empty) │
-            └────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  open(["open"]) --> snapshot["getAutomergeSnapshot<br/>→ load local replica"]
+  snapshot --> local["Local Automerge doc<br/>(or span edits applied locally)"]
+  editStep(["edit"]) --> local
+  local -- "getChangesSince(baseHeads)" --> apply["applyAutomergeChanges({<br/>baseHeads, replicaHeads, changes })"]
+  saveStep(["save"]) --> apply
+  apply -- "Haven merges + persists" --> result["Apply result.changesSince locally<br/>(or skip if empty)"]
 ```
 
 Bridge RPCs: `documents.automerge.getSnapshot` and `documents.automerge.applyChanges`.
