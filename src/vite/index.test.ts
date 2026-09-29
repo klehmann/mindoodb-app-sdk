@@ -58,4 +58,27 @@ describe("havenBundle", () => {
     });
     expect(readFileSync(path.join(outDir, MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME)).byteLength).toBeGreaterThan(0);
   });
+
+  it("injects share tags from haven-app.json, using the dev server origin while serving", async () => {
+    const root = tempRoot();
+    mkdirSync(path.join(root, "public"));
+    writeFileSync(
+      path.join(root, "public", "haven-app.json"),
+      JSON.stringify({
+        label: "Vega",
+        publicUrl: "https://app-vega.mindoodb.com",
+        listing: { summary: "Plan trips.", icon: "listing/icon.webp" },
+      }),
+    );
+    const plugin = havenBundle();
+    plugin.configResolved({ root, command: "serve", build: { outDir: "dist" }, server: { host: "127.0.0.1", port: 4210 } });
+    const served = await plugin.transformIndexHtml("<head><title>Old</title></head>", {});
+    expect(served).toContain('<meta name="twitter:card" content="summary">');
+    expect(served).toContain("http://127.0.0.1:4210/listing/icon.webp");
+    expect(served).not.toContain("app-vega.mindoodb.com/listing");
+
+    plugin.configResolved({ root, command: "build", build: { outDir: "dist" } });
+    const built = await plugin.transformIndexHtml("<head><title>Old</title></head>", {});
+    expect(built).toContain("https://app-vega.mindoodb.com/listing/icon.webp");
+  });
 });

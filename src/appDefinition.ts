@@ -137,6 +137,13 @@ export interface MindooDBAppDefinitionListing {
   summary?: MindooDBAppLocalizedText;
   /** Longer plain text. Blank lines separate paragraphs; no markup is rendered. */
   description?: MindooDBAppLocalizedText;
+  /**
+   * The same description with formatting: the Markdown subset of `listingMarkdown.ts`
+   * (paragraphs, headings, lists, bold/italic, code, `https:`/`mailto:` links).
+   * Readers that know this field show it instead of `description`; older ones ignore it
+   * and keep showing `description`, so set both when older Haven versions matter.
+   */
+  descriptionMarkdown?: MindooDBAppLocalizedText;
   /** Square icon, path relative to the app origin or an absolute `https:` URL. */
   icon?: string;
   screenshots?: MindooDBAppDefinitionScreenshot[];
@@ -409,6 +416,13 @@ function readListing(value: unknown, errors: string[]): MindooDBAppDefinitionLis
     errors,
   );
   if (description) listing.description = description;
+  const descriptionMarkdown = readLocalizedText(
+    value.descriptionMarkdown,
+    "App definition listing.descriptionMarkdown",
+    MINDOODB_APP_LISTING_DESCRIPTION_MAX,
+    errors,
+  );
+  if (descriptionMarkdown) listing.descriptionMarkdown = descriptionMarkdown;
   const icon = readListingAssetPath(value.icon, "App definition listing.icon", errors);
   if (icon) listing.icon = icon;
 

@@ -84,6 +84,8 @@ export {
   resolveCurrentHavenAppUrl,
 } from "./landing";
 export type { HavenAppLandingPage, RenderHavenAppLandingPageOptions } from "./landing";
+export { listingMarkdownToPlainText, parseListingMarkdown, sanitizeListingHref } from "./listingMarkdown";
+export type { ListingBlock, ListingInline } from "./listingMarkdown";
 export { installHavenStorageShim } from "./client/havenStorageShim";
 export type {
   HavenStorageShimHandle,

@@ -61,6 +61,35 @@ describe("haven app landing page", () => {
     expect(document.title).toBe("Trip Planner");
   });
 
+  it("renders descriptionMarkdown as elements and links the publisher", async () => {
+    const markdown = {
+      ...definition,
+      listing: {
+        ...definition.listing,
+        descriptionMarkdown:
+          "Plan **together**, see [our site](https://mindoo.example).\n\n- one\n- two <img src=x onerror=alert(1)>\n\n[bad](javascript:alert(1))",
+        publisher: { name: "Mindoo", url: "https://mindoo.example" },
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(markdown), { status: 200 })));
+
+    await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/", locale: "en" });
+
+    const section = document.querySelector(".mdb-landing__description")!;
+    expect(section.querySelector("strong")?.textContent).toBe("together");
+    const links = [...section.querySelectorAll("a")];
+    expect(links.map((link) => link.href)).toEqual(["https://mindoo.example/"]);
+    expect(links[0]?.rel).toBe("noopener noreferrer");
+    expect(section.querySelectorAll("li")).toHaveLength(2);
+    expect(section.querySelector("img")).toBeNull();
+    expect(section.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(section.textContent).toContain("bad");
+    const publisher = document.querySelector<HTMLAnchorElement>(".mdb-landing__meta a");
+    expect(publisher?.textContent).toBe("Mindoo");
+    expect(publisher?.href).toBe("https://mindoo.example/");
+    expect(document.querySelector(".mdb-landing__meta")?.textContent).toBe("by Mindoo · from trips.example.com");
+  });
+
   it("still offers the Haven link when haven-app.json is unreachable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
     const page = await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/", locale: "en" });

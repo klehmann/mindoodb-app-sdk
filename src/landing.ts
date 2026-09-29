@@ -5,6 +5,7 @@ import {
   validateMindooDBAppDefinition,
   type MindooDBAppDefinition,
 } from "./appDefinition";
+import { parseListingMarkdown, type ListingInline } from "./listingMarkdown";
 
 /**
  * The page an app shows when someone opens its address directly instead of launching it
@@ -127,6 +128,47 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+function externalLink(href: string): HTMLAnchorElement {
+  const link = el("a");
+  link.href = href;
+  link.rel = "noopener noreferrer";
+  link.target = "_blank";
+  return link;
+}
+
+function appendInline(parent: HTMLElement, nodes: ListingInline[]): void {
+  for (const node of nodes) {
+    if (node.type === "text") {
+      parent.append(node.text);
+    } else if (node.type === "code") {
+      parent.append(el("code", undefined, node.text));
+    } else {
+      const child = node.type === "link" ? externalLink(node.href) : el(node.type);
+      appendInline(child, node.children);
+      parent.append(child);
+    }
+  }
+}
+
+/** `descriptionMarkdown` as elements; its tree only ever becomes text nodes and a few tags. */
+function renderMarkdownDescription(block: HTMLElement, markdown: string): void {
+  for (const entry of parseListingMarkdown(markdown)) {
+    if (entry.type === "list") {
+      const list = el(entry.ordered ? "ol" : "ul");
+      for (const item of entry.items) {
+        const li = el("li");
+        appendInline(li, item);
+        list.append(li);
+      }
+      block.append(list);
+    } else {
+      const node = el(entry.type === "heading" ? "h2" : "p");
+      appendInline(node, entry.children);
+      block.append(node);
+    }
+  }
+}
+
 const STYLE_ID = "mdb-landing-style";
 
 const STYLE = `
@@ -147,7 +189,12 @@ const STYLE = `
 .mdb-landing__button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .mdb-landing__hint{margin:0;max-width:420px;color:var(--muted);font-size:14px}
 .mdb-landing__description{margin:32px 0 0}
-.mdb-landing__description p{margin:0 0 12px}
+.mdb-landing__description p,.mdb-landing__description ul,.mdb-landing__description ol{margin:0 0 12px}
+.mdb-landing__description ul,.mdb-landing__description ol{padding-left:22px}
+.mdb-landing__description li+li{margin-top:4px}
+.mdb-landing__description h2{margin:20px 0 8px;font-size:17px}
+.mdb-landing__description code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;padding:1px 5px;border-radius:5px;background:var(--line)}
+.mdb-landing__description a,.mdb-landing__meta a{color:var(--accent)}
 .mdb-landing__shots-title{margin:32px 0 12px;font-size:15px;color:var(--muted);font-weight:600}
 .mdb-landing__shots{display:grid;grid-auto-flow:column;grid-auto-columns:min(78%,420px);gap:16px;overflow-x:auto;padding-bottom:8px;scroll-snap-type:x mandatory}
 .mdb-landing__shot{margin:0;scroll-snap-align:start}
@@ -210,11 +257,18 @@ export async function renderHavenAppLandingPage(
   }
   const titles = el("div");
   titles.append(el("p", "mdb-landing__eyebrow", strings.eyebrow), el("h1", "mdb-landing__title", label));
-  const meta = [format(strings.from, { origin })];
+  const meta = el("p", "mdb-landing__meta");
   if (listing?.publisher) {
-    meta.unshift(format(strings.by, { publisher: listing.publisher.name }));
+    // The origin always stays next to the name: it is the one thing the publisher
+    // cannot choose freely.
+    const [before, after = ""] = strings.by.split("{publisher}");
+    const name = listing.publisher.url
+      ? Object.assign(externalLink(listing.publisher.url), { textContent: listing.publisher.name })
+      : listing.publisher.name;
+    meta.append(before ?? "", name, after, " · ");
   }
-  titles.append(el("p", "mdb-landing__meta", meta.join(" · ")));
+  meta.append(format(strings.from, { origin }));
+  titles.append(meta);
   head.append(titles);
   card.append(head);
 
@@ -230,11 +284,16 @@ export async function renderHavenAppLandingPage(
   cta.append(button, el("p", "mdb-landing__hint", format(strings.ctaHint, { label })));
   card.append(cta);
 
+  const descriptionMarkdown = resolveMindooDBAppLocalizedText(listing?.descriptionMarkdown, locale);
   const description = resolveMindooDBAppLocalizedText(listing?.description, locale);
-  if (description) {
+  if (descriptionMarkdown || description) {
     const block = el("section", "mdb-landing__description");
-    for (const paragraph of description.split(/\n\s*\n/)) {
-      if (paragraph.trim()) block.append(el("p", undefined, paragraph.trim()));
+    if (descriptionMarkdown) {
+      renderMarkdownDescription(block, descriptionMarkdown);
+    } else {
+      for (const paragraph of description.split(/\n\s*\n/)) {
+        if (paragraph.trim()) block.append(el("p", undefined, paragraph.trim()));
+      }
     }
     card.append(block);
   }

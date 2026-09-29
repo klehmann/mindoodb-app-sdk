@@ -1671,6 +1671,7 @@ What the page shows comes from the optional `listing` in `haven-app.json`. Haven
   "listing": {
     "summary": { "en": "Plan trips together.", "de": "Reisen gemeinsam planen." },
     "description": { "en": "First paragraph.\n\nSecond paragraph." },
+    "descriptionMarkdown": { "en": "**Plan** together.\n\n- Shared board\n- [Website](https://trips.example.com)" },
     "icon": "icon.svg",
     "screenshots": [{ "file": "screenshots/board.webp", "caption": { "en": "The trip board" } }],
     "publisher": { "name": "Mindoo GmbH", "url": "https://mindoo.de" }
@@ -1679,6 +1680,10 @@ What the page shows comes from the optional `listing` in `haven-app.json`. Haven
 ```
 
 Texts are a string or a per-locale map with an `en` fallback. Image paths are relative to the app origin or absolute `https:` URLs. The listing is display-only and grants nothing.
+
+Opening the app URL directly also puts share tags into `index.html` (`twitter:card` = `summary`, plus the Open Graph tags other apps read), with the app icon as the image. A production build takes the absolute URL from `publicUrl` in `haven-app.json`. `vite dev` uses the dev server's own origin instead, so `http://127.0.0.1:<port>/` previews against itself. Crawlers do not run the landing page's JavaScript, which is why the tags are in the HTML file.
+
+`description` is plain text. `descriptionMarkdown` is the same text with formatting, in a small Markdown subset: paragraphs, headings, bullet and numbered lists, `**bold**`, `_italic_`, `` `code` ``, `[text](https://…)`, `[text](mailto:…)` and bare `https://…` links. Links to any other scheme render as plain text. Readers that know `descriptionMarkdown` show it instead of `description`; older Haven versions ignore it, so set both if they matter. `listingMarkdownToPlainText()` derives the plain version. A publisher `url` (`https:` only) turns the publisher name into a link.
 
 For automated and manual tests use a separate test URL that frames the app with a mock host instead — see "Browser test host" in [`TESTING.md`](./TESTING.md). End users never see that page, and they never see mock data.
 
