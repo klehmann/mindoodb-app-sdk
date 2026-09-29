@@ -4,6 +4,8 @@ import {
   MINDOODB_APP_DEFINITION_FORMAT,
   MINDOODB_APP_DEFINITION_VERSION,
   resolveMindooDBAppDefinitionUrl,
+  resolveMindooDBAppListingAssetUrl,
+  resolveMindooDBAppLocalizedText,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 
@@ -139,5 +141,73 @@ describe("resolveMindooDBAppDefinitionUrl", () => {
 
   it("returns an empty string for blank input", () => {
     expect(resolveMindooDBAppDefinitionUrl("   ")).toBe("");
+  });
+});
+
+describe("app definition listing", () => {
+  it("normalizes a full listing", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        listing: {
+          summary: { en: " Plans trips. ", de: "Plant Reisen." },
+          description: "First paragraph.\n\nSecond paragraph.",
+          icon: "icon.svg",
+          screenshots: ["shots/1.webp", { file: "https://cdn.example.com/2.webp", caption: "Board" }],
+          publisher: { name: " Mindoo ", url: "https://mindoo.de" },
+        },
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.listing).toEqual({
+      summary: { en: "Plans trips.", de: "Plant Reisen." },
+      description: "First paragraph.\n\nSecond paragraph.",
+      icon: "icon.svg",
+      screenshots: [{ file: "shots/1.webp" }, { file: "https://cdn.example.com/2.webp", caption: "Board" }],
+      publisher: { name: "Mindoo", url: "https://mindoo.de" },
+    });
+  });
+
+  it("rejects unsafe asset URLs and localized maps without en", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        listing: {
+          summary: { de: "Nur Deutsch" },
+          icon: "javascript:alert(1)",
+          screenshots: [{ file: "//evil.example.com/x.png" }, { file: "data:image/png;base64,AA" }],
+          publisher: { name: "X", url: "http://insecure.example.com" },
+        },
+      }),
+    );
+    expect(definition).toBeNull();
+    expect(errors).toHaveLength(5);
+  });
+
+  it("caps the number of screenshots", () => {
+    const { errors } = validateMindooDBAppDefinition(
+      baseDefinition({ listing: { screenshots: Array.from({ length: 9 }, (_, i) => `s${i}.png`) } }),
+    );
+    expect(errors[0]).toMatch(/not list more than 8/);
+  });
+
+  it("resolves localized text by locale, language and en fallback", () => {
+    const text = { en: "Hello", de: "Hallo", "de-CH": "Grüezi" };
+    expect(resolveMindooDBAppLocalizedText(text, "de-CH")).toBe("Grüezi");
+    expect(resolveMindooDBAppLocalizedText(text, "de-AT")).toBe("Hallo");
+    expect(resolveMindooDBAppLocalizedText(text, "fr")).toBe("Hello");
+    expect(resolveMindooDBAppLocalizedText("Plain", "fr")).toBe("Plain");
+    expect(resolveMindooDBAppLocalizedText(undefined, "fr")).toBe("");
+  });
+
+  it("resolves listing assets against the app origin only", () => {
+    expect(resolveMindooDBAppListingAssetUrl("icon.svg", "https://app.example.com")).toBe(
+      "https://app.example.com/icon.svg",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("shots/a.png", "https://app.example.com/sub/")).toBe(
+      "https://app.example.com/sub/shots/a.png",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("icon.svg", "http://127.0.0.1:4300")).toBe(
+      "http://127.0.0.1:4300/icon.svg",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("javascript:alert(1)", "https://app.example.com")).toBeNull();
   });
 });

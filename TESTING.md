@@ -319,6 +319,38 @@ Useful Level 2 methods:
 
 The built-in request handling also covers `documents.query` and the `documents.liveQuery.*` RPCs against the seeded documents, so `db.documents.query()` / `db.documents.liveQuery()` and `navigator.onDidUpdate()` work end-to-end over the real bridge transport in Level 2 tests.
 
+## Browser test host
+
+Level 1 and 2 run in Node/jsdom. To run the real app in a real browser — for Playwright, or to click through it yourself — mount the browser test host on a separate page. It frames the app exactly as Haven does (an iframe with `?mindoodbAppLaunchId=…`) and answers the bridge with the same mock state as the Vitest helpers:
+
+```ts
+// src/testHost/main.ts, loaded by /__haven-test/index.html
+import { mockDatabasesFromDefinition, mountHavenTestHost } from "mindoodb-app-sdk/testing";
+import definition from "../../public/haven-app.json";
+
+mountHavenTestHost({
+  appUrl: "/",
+  title: definition.label,
+  databases: mockDatabasesFromDefinition(definition, {
+    main: [{ id: "welcome", data: { type: "note", title: "Seeded note" } }],
+  }),
+});
+```
+
+The page shows the app next to a control panel: theme and host-focus toggles, a file picker that decides what the app's next `attachments.scan()` returns (none means the user cancelled), and a live log of notifications, attachment previews, scans and every RPC request. The same controls are scriptable as `window.__havenTestHost`:
+
+```ts
+await page.goto("/__haven-test/");
+const app = page.frameLocator('[data-testid="haven-test-app-frame"]');
+await page.evaluate(() => window.__havenTestHost!.setNextScan({ fileName: "receipt.pdf", mimeType: "application/pdf", size: 1024 }));
+await app.getByRole("button", { name: "Scan" }).click();
+expect(await page.evaluate(() => window.__havenTestHost!.log.scans)).toHaveLength(1);
+```
+
+Lower-level pieces, if you build your own page: `createBrowserTestHost({ frame, appUrl, ...mockOptions })` wires one iframe to a fake host, and `host.acceptConnection(message, ports)` answers a handshake you received yourself.
+
+Keep the test page out of production builds. The starter template builds it only for `vite dev` and when `HAVEN_TEST_HOST=1` is set (for preview deployments), so the app's public URL keeps showing its landing page.
+
 ## When to use which level
 
 Choose Level 1 when:

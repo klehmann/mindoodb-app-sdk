@@ -23,12 +23,20 @@ export {
   MINDOODB_APP_DEFINITION_PERMISSIONS,
   MINDOODB_APP_DEFINITION_REGISTRATION_PERMISSIONS,
   MINDOODB_APP_DEFINITION_VERSION,
+  MINDOODB_APP_LISTING_DESCRIPTION_MAX,
+  MINDOODB_APP_LISTING_MAX_SCREENSHOTS,
+  MINDOODB_APP_LISTING_SUMMARY_MAX,
   resolveMindooDBAppDefinitionUrl,
+  resolveMindooDBAppListingAssetUrl,
+  resolveMindooDBAppLocalizedText,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 export type {
   MindooDBAppDefinition,
   MindooDBAppDefinitionDatabase,
+  MindooDBAppDefinitionListing,
+  MindooDBAppDefinitionScreenshot,
+  MindooDBAppLocalizedText,
   MindooDBAppDefinitionPermission,
   MindooDBAppDefinitionRegistrationPermission,
   MindooDBAppDefinitionValidation,
@@ -63,9 +71,19 @@ export {
 } from "./hostShortcuts";
 export {
   MINDOODB_APP_HOSTING_QUERY_PARAM,
+  MINDOODB_APP_LAUNCH_ID_QUERY_PARAM,
   isHostedBundleRuntime,
+  isLaunchedByHaven,
   readMindooDBAppHostingMode,
+  readMindooDBAppLaunchId,
 } from "./client/hosting";
+export {
+  DEFAULT_HAVEN_URL,
+  buildHavenAppInstallUrl,
+  renderHavenAppLandingPage,
+  resolveCurrentHavenAppUrl,
+} from "./landing";
+export type { HavenAppLandingPage, RenderHavenAppLandingPageOptions } from "./landing";
 export { installHavenStorageShim } from "./client/havenStorageShim";
 export type {
   HavenStorageShimHandle,

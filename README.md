@@ -1679,6 +1679,40 @@ wrangler deploy
 
 Other static hosting options work just as well: Netlify, Vercel, any web server serving your `dist/` folder.
 
+### Sharing an app by its URL
+
+Anyone who opens your app's address directly — not from inside Haven — has no host to talk to. Instead of letting the bridge handshake time out into an error, branch on `isLaunchedByHaven()` before mounting and show a landing page:
+
+```ts
+import { isLaunchedByHaven, renderHavenAppLandingPage } from "mindoodb-app-sdk";
+
+if (isLaunchedByHaven()) {
+  createApp(App).mount("#app");
+} else {
+  void renderHavenAppLandingPage();
+}
+```
+
+Haven puts `mindoodbAppLaunchId` into every launch URL, so the check is synchronous. `renderHavenAppLandingPage()` reads `haven-app.json` from the same origin and shows the app's name, summary, description and screenshots, plus a button to `https://haven.mindoodb.com/?app=<your app URL>` (pass `havenUrl` for another Haven instance). Haven then walks a new user through setup with your app installed at the end, or offers an existing user to add it.
+
+What the page shows comes from the optional `listing` in `haven-app.json`. Haven's setup wizard shows the same fields:
+
+```json
+{
+  "listing": {
+    "summary": { "en": "Plan trips together.", "de": "Reisen gemeinsam planen." },
+    "description": { "en": "First paragraph.\n\nSecond paragraph." },
+    "icon": "icon.svg",
+    "screenshots": [{ "file": "screenshots/board.webp", "caption": { "en": "The trip board" } }],
+    "publisher": { "name": "Mindoo GmbH", "url": "https://mindoo.de" }
+  }
+}
+```
+
+Texts are a string or a per-locale map with an `en` fallback. Image paths are relative to the app origin or absolute `https:` URLs. The listing is display-only and grants nothing.
+
+For automated and manual tests use a separate test URL that frames the app with a mock host instead — see "Browser test host" in [`TESTING.md`](./TESTING.md). End users never see that page, and they never see mock data.
+
 ### Haven-hosted bundles
 
 Instead of Haven loading your app from your server on every launch, you can hand Haven the build itself. Haven stores it in its own cache and serves it from a service worker on an opaque origin, so the app loads offline and runs in a stricter sandbox than an external URL gets.

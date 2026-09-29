@@ -112,7 +112,41 @@ export interface MindooDBAppDefinition {
   /** `logicalDatabaseId` the app should open first. */
   defaultLaunchDatabaseId?: string;
   databases?: MindooDBAppDefinitionDatabase[];
+  /**
+   * What a person sees before installing: the app's landing page when its URL is
+   * opened directly, and Haven's setup wizard when it arrives through a shared link.
+   * Display-only; nothing in here affects what the app is granted.
+   */
+  listing?: MindooDBAppDefinitionListing;
 }
+
+/**
+ * Text in one language, or a map from locale (`de`, `fr`, …) to text. A map must carry
+ * `en`, the fallback for every locale it does not name.
+ */
+export type MindooDBAppLocalizedText = string | ({ en: string } & Record<string, string>);
+
+export interface MindooDBAppDefinitionScreenshot {
+  /** Image path relative to the app origin, or an absolute `https:` URL. */
+  file: string;
+  caption?: MindooDBAppLocalizedText;
+}
+
+export interface MindooDBAppDefinitionListing {
+  /** One or two sentences: what the app is for. */
+  summary?: MindooDBAppLocalizedText;
+  /** Longer plain text. Blank lines separate paragraphs; no markup is rendered. */
+  description?: MindooDBAppLocalizedText;
+  /** Square icon, path relative to the app origin or an absolute `https:` URL. */
+  icon?: string;
+  screenshots?: MindooDBAppDefinitionScreenshot[];
+  /** Who publishes the app. Shown next to the app's origin, never instead of it. */
+  publisher?: { name: string; url?: string };
+}
+
+export const MINDOODB_APP_LISTING_SUMMARY_MAX = 300;
+export const MINDOODB_APP_LISTING_DESCRIPTION_MAX = 4000;
+export const MINDOODB_APP_LISTING_MAX_SCREENSHOTS = 8;
 
 export interface MindooDBAppDefinitionValidation {
   definition: MindooDBAppDefinition | null;
@@ -284,6 +318,181 @@ function readDatabases(
   return result.length ? result : undefined;
 }
 
+function readLocalizedText(
+  value: unknown,
+  label: string,
+  maxLength: number,
+  errors: string[],
+): MindooDBAppLocalizedText | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > maxLength) {
+      errors.push(`${label} must not be longer than ${maxLength} characters.`);
+      return undefined;
+    }
+    return trimmed || undefined;
+  }
+  if (!isPlainObject(value)) {
+    errors.push(`${label} must be a string or an object of per-locale strings.`);
+    return undefined;
+  }
+  const result: Record<string, string> = {};
+  for (const [locale, text] of Object.entries(value)) {
+    if (typeof text !== "string") {
+      errors.push(`${label}.${locale} must be a string.`);
+      continue;
+    }
+    const trimmed = text.trim();
+    if (trimmed.length > maxLength) {
+      errors.push(`${label}.${locale} must not be longer than ${maxLength} characters.`);
+      continue;
+    }
+    if (trimmed) {
+      result[locale] = trimmed;
+    }
+  }
+  if (!Object.keys(result).length) {
+    return undefined;
+  }
+  if (!result.en) {
+    errors.push(`${label} must include an "en" entry as the fallback for other locales.`);
+    return undefined;
+  }
+  return result as { en: string } & Record<string, string>;
+}
+
+/** Relative paths stay on the app origin; absolute URLs must be `https:`. */
+function readListingAssetPath(value: unknown, label: string, errors: string[]): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    errors.push(`${label} must be a non-empty string.`);
+    return undefined;
+  }
+  const trimmed = value.trim();
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed)?.[1]?.toLowerCase();
+  if (scheme && scheme !== "https") {
+    errors.push(`${label} must be a path on the app origin or an https: URL.`);
+    return undefined;
+  }
+  if (trimmed.startsWith("//")) {
+    errors.push(`${label} must be a path on the app origin or an https: URL.`);
+    return undefined;
+  }
+  return trimmed;
+}
+
+function readListing(value: unknown, errors: string[]): MindooDBAppDefinitionListing | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    errors.push("App definition listing must be an object.");
+    return undefined;
+  }
+  const listing: MindooDBAppDefinitionListing = {};
+  const summary = readLocalizedText(
+    value.summary,
+    "App definition listing.summary",
+    MINDOODB_APP_LISTING_SUMMARY_MAX,
+    errors,
+  );
+  if (summary) listing.summary = summary;
+  const description = readLocalizedText(
+    value.description,
+    "App definition listing.description",
+    MINDOODB_APP_LISTING_DESCRIPTION_MAX,
+    errors,
+  );
+  if (description) listing.description = description;
+  const icon = readListingAssetPath(value.icon, "App definition listing.icon", errors);
+  if (icon) listing.icon = icon;
+
+  if (value.screenshots !== undefined && value.screenshots !== null) {
+    if (!Array.isArray(value.screenshots)) {
+      errors.push("App definition listing.screenshots must be an array.");
+    } else if (value.screenshots.length > MINDOODB_APP_LISTING_MAX_SCREENSHOTS) {
+      errors.push(
+        `App definition listing.screenshots must not list more than ${MINDOODB_APP_LISTING_MAX_SCREENSHOTS} images.`,
+      );
+    } else {
+      const screenshots: MindooDBAppDefinitionScreenshot[] = [];
+      value.screenshots.forEach((entry, index) => {
+        const label = `App definition listing.screenshots[${index}]`;
+        const raw = typeof entry === "string" ? { file: entry } : entry;
+        if (!isPlainObject(raw)) {
+          errors.push(`${label} must be a path or an object with a file.`);
+          return;
+        }
+        const file = readListingAssetPath(raw.file, `${label}.file`, errors);
+        if (!file) {
+          return;
+        }
+        const caption = readLocalizedText(raw.caption, `${label}.caption`, MINDOODB_APP_LISTING_SUMMARY_MAX, errors);
+        screenshots.push(caption ? { file, caption } : { file });
+      });
+      if (screenshots.length) listing.screenshots = screenshots;
+    }
+  }
+
+  if (value.publisher !== undefined && value.publisher !== null) {
+    const publisher = isPlainObject(value.publisher) ? value.publisher : {};
+    const name = typeof publisher.name === "string" ? publisher.name.trim() : "";
+    if (!name) {
+      errors.push("App definition listing.publisher must be an object with a non-empty name.");
+    } else {
+      const url = readListingAssetPath(publisher.url, "App definition listing.publisher.url", errors);
+      if (url && !/^https:\/\//i.test(url)) {
+        errors.push("App definition listing.publisher.url must be an absolute https: URL.");
+      } else {
+        listing.publisher = url ? { name, url } : { name };
+      }
+    }
+  }
+
+  return Object.keys(listing).length ? listing : undefined;
+}
+
+/**
+ * Picks the text for `locale` out of a localized value: the exact locale, then its
+ * language (`de` for `de-CH`), then `en`.
+ */
+export function resolveMindooDBAppLocalizedText(
+  text: MindooDBAppLocalizedText | undefined,
+  locale: string,
+): string {
+  if (text === undefined) {
+    return "";
+  }
+  if (typeof text === "string") {
+    return text;
+  }
+  const normalized = locale.trim();
+  const language = normalized.split(/[-_]/)[0]?.toLowerCase() ?? "";
+  return text[normalized] ?? text[normalized.toLowerCase()] ?? (language ? text[language] : undefined) ?? text.en;
+}
+
+/**
+ * Resolves a listing asset (icon, screenshot) against the app origin. Returns `null`
+ * for anything that would leave `https:` or the origin's own scheme.
+ */
+export function resolveMindooDBAppListingAssetUrl(path: string, originUrl: string): string | null {
+  try {
+    const base = new URL(originUrl.endsWith("/") ? originUrl : `${originUrl}/`);
+    const resolved = new URL(path, base);
+    if (resolved.protocol !== "https:" && resolved.protocol !== base.protocol) {
+      return null;
+    }
+    return resolved.toString();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Structural validation of a `haven-app.json` payload. Returns the normalized
  * definition, or `null` plus every problem found so a publisher can fix them in one
@@ -349,6 +558,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowGeolocation = readOptionalBoolean(raw, "allowGeolocation", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
+  const listing = readListing(raw.listing, errors);
 
   if (
     defaultLaunchDatabaseId
@@ -385,6 +595,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       launchParameters,
       defaultLaunchDatabaseId,
       databases,
+      listing,
     },
     errors: [],
   };
