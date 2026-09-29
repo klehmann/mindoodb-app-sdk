@@ -1,3 +1,4 @@
+import * as Automerge from "@automerge/automerge";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMindooDBAppBridge } from "../client/createMindooDBAppBridge";
@@ -1365,6 +1366,46 @@ describe("mindoodb-app-sdk/testing", () => {
       { call: "getAtRevision", docId: "doc-1", revisionId: "rev-merge", phase: undefined },
       { call: "getAtHeads", docId: "doc-1", headIds: ["rev-a", "rev-b"] },
     ]);
+
+    host.dispose();
+  });
+
+  it("answers the bulk document calls Word chunk journals use", async () => {
+    const host = createFakeBridgeHost({
+      databases: [{
+        info: { id: "main", title: "Main", capabilities: ["read", "create", "update", "delete"] },
+      }],
+    });
+
+    host.install();
+    const session = await createMindooDBAppBridge().connect();
+    const database = await session.openDatabase("main");
+    expect((await database.info()).id).toBe("main");
+
+    const { ids } = await database.documents.createMany([
+      { id: "chunk-a", assumeUniqueId: true, set: { type: "wordChunk" } },
+      { id: "chunk-b", assumeUniqueId: true, set: { type: "wordChunk" } },
+    ]);
+    expect(ids).toEqual(["chunk-a", "chunk-b"]);
+
+    const patches = [];
+    for (const docId of ids) {
+      const snapshot = await database.documents.getAutomergeSnapshot(docId);
+      const base = Automerge.load<Record<string, unknown>>(snapshot.binary);
+      const changed = Automerge.change(base, (draft) => {
+        draft.text = `Text ${docId}`;
+      });
+      patches.push({
+        docId,
+        patch: { baseHeads: snapshot.heads, changes: Automerge.getChanges(base, changed) },
+      });
+    }
+    const results = await database.documents.applyAutomergeChangesBatch(patches);
+    expect(results).toHaveLength(2);
+    expect((await database.documents.get("chunk-b"))?.data.text).toBe("Text chunk-b");
+
+    await database.documents.deleteMany(["chunk-a"]);
+    expect((await database.documents.list()).items.some((doc) => doc.id === "chunk-a")).toBe(false);
 
     host.dispose();
   });
