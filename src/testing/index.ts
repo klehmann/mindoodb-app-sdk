@@ -3436,6 +3436,9 @@ export function createFakeBridgeHost(
         return state.getLicensedProducts();
       case "session.listDatabases":
         return state.listDatabaseInfos();
+      case "session.listDocumentsSinceViewCursor":
+        // Same answer as the Level 1 session: the mock has no view cursors.
+        return { items: [], nextCursor: null } satisfies MindooDBAppViewCursorDocumentListResult;
       case "session.openDatabase":
         state.getDatabase(String(params.databaseId));
         return { ok: true };
@@ -3646,6 +3649,28 @@ export function createFakeBridgeHost(
               changes: Uint8Array[];
             },
           );
+      case "documents.automerge.applyChangesBatch":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.applyAutomergeChangesBatch(
+            (Array.isArray(params.items) ? params.items : []) as Parameters<
+              MindooDBAppDatabase["documents"]["applyAutomergeChangesBatch"]
+            >[0],
+          );
+      case "documents.createMany":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.createMany(
+            (Array.isArray(params.inputs) ? params.inputs : []) as Parameters<
+              MindooDBAppDatabase["documents"]["createMany"]
+            >[0],
+          );
+      case "documents.deleteMany":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.deleteMany(Array.isArray(params.docIds) ? params.docIds.map(String) : []);
+      case "databases.info":
+        return await state.getDatabase(String(params.databaseId)).info();
       case "documents.create":
         return await state
           .getDatabase(String(params.databaseId))
@@ -4242,8 +4267,10 @@ export function createFakeBridgeHost(
           builtinResult === undefined &&
           message.method !== "viewNavigators.dispose"
         ) {
+          // The code a Haven without this method answers with, so the
+          // client's fallbacks for older hosts run here too.
           postRpcError(port, message.id, {
-            code: "unsupported-method",
+            code: "method-not-found",
             message: `No fake bridge handler is configured for ${message.method}.`,
           });
           return;
