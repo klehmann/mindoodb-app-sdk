@@ -2339,8 +2339,31 @@ export interface MindooDBAppDirectoryApi {
   /**
    * Active directory usernames in this tenant, for recipient pickers.
    * Requires the `directory` capability.
+   *
+   * Without options: every username. With options: one page, filtered by a
+   * case-insensitive `query` and continued with `nextCursor` — use this for large
+   * directories. Hosts without paging support return the full list; the SDK then
+   * filters and pages it on the client, so the paged form works everywhere.
    */
   listUsers(): Promise<string[]>;
+  listUsers(options: MindooDBAppListUsersOptions): Promise<MindooDBAppListUsersPage>;
+}
+
+/** Paging and search for {@link MindooDBAppDirectoryApi.listUsers}. */
+export interface MindooDBAppListUsersOptions {
+  /** Case-insensitive substring of the username. */
+  query?: string;
+  /** `nextCursor` of the previous page; omit for the first page. */
+  cursor?: string | null;
+  /** Page size, default 50, at most 500. */
+  limit?: number;
+}
+
+/** One page of {@link MindooDBAppDirectoryApi.listUsers}. */
+export interface MindooDBAppListUsersPage {
+  users: string[];
+  /** Cursor for the next page, `null` on the last page. */
+  nextCursor: string | null;
 }
 
 // ---------------------------------------------------------------------------

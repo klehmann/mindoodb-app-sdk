@@ -65,6 +65,8 @@ import type {
   MindooDBAppExtractionSetup,
   MindooDBAppSummarySetup,
   MindooDBAppDirectoryApi,
+  MindooDBAppListUsersOptions,
+  MindooDBAppListUsersPage,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -109,6 +111,7 @@ import type {
   MindooDBAppNotifyInput,
   MindooDBAppNotifyResult,
 } from "../types";
+import { pageUsers } from "../directoryPaging";
 import { installHostFocusCapture } from "../hostFocus";
 import {
   applyHostedDocumentOverscrollContain,
@@ -1271,18 +1274,32 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           publicKeys,
         }),
-      listUsers: async () => {
+      listUsers: (async (options?: MindooDBAppListUsersOptions) => {
+        let result: string[] | MindooDBAppListUsersPage;
         try {
-          return await this.rpc.call("directory.listUsers", {
-            databaseId: this.databaseId,
-          });
+          result = await this.rpc.call<string[] | MindooDBAppListUsersPage>(
+            "directory.listUsers",
+            options
+              ? {
+                  databaseId: this.databaseId,
+                  query: options.query,
+                  cursor: options.cursor ?? undefined,
+                  limit: options.limit,
+                }
+              : { databaseId: this.databaseId },
+          );
         } catch (error) {
           if (!isMethodNotFoundError(error)) {
             throw error;
           }
-          return [];
+          result = [];
         }
-      },
+        if (!options) {
+          return Array.isArray(result) ? result : result.users;
+        }
+        // hosts without paging answer with the full list
+        return Array.isArray(result) ? pageUsers(result, options) : result;
+      }) as MindooDBAppDirectoryApi["listUsers"],
     };
 
     this.attachments = {

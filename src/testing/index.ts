@@ -31,6 +31,7 @@ import type {
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDirectoryApi,
+  MindooDBAppListUsersOptions,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
   MindooDBAppSummarySetup,
@@ -95,6 +96,8 @@ import type {
   MindooDBAppTextCursorPosition,
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
+import { guardDatabase } from "./capabilityGuard";
+import { pageUsers } from "../directoryPaging";
 
 const PROTOCOL = "mindoodb-app-bridge";
 
@@ -1722,6 +1725,7 @@ async function mockSha256Hex(value: string): Promise<string | null> {
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
   peers: MockDatabasePeers,
+  directoryUsers: () => readonly string[] = () => [],
 ): {
   handle: MindooDBAppDatabase;
   listViewDocuments: () => EvaluatingViewDocument[];
@@ -2422,9 +2426,8 @@ function createDatabaseHandle(
         status: "unknown" as const,
       }));
     },
-    async listUsers() {
-      return [];
-    },
+    listUsers: (async (options?: MindooDBAppListUsersOptions) =>
+      options ? pageUsers(directoryUsers(), options) : [...directoryUsers()]) as MindooDBAppDirectoryApi["listUsers"],
   };
 
   const defaultViews: MockViewApi = {
@@ -2578,6 +2581,11 @@ type MockSessionState = {
   ) => MindooDBAppLaunchContext;
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
+  setCapabilities: (databaseId: string, capabilities: MindooDBAppCapability[]) => void;
+  setEnforceCapabilities: (enforce: boolean) => void;
+  getEnforceCapabilities: () => boolean;
+  setDirectoryUsers: (users: readonly string[]) => void;
+  getDirectoryUsers: () => string[];
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
   getLicensedProducts: () => string[];
   proposedApps: MindooDBAppProposeAppInput[];
@@ -2712,8 +2720,16 @@ function createMockSessionState(
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
-      const created = createDatabaseHandle(definition, databasePeers);
-      databaseHandles.set(definition.info.id, created.handle);
+      const created = createDatabaseHandle(definition, databasePeers, () => directoryUsers);
+      const databaseId = definition.info.id;
+      databaseHandles.set(
+        databaseId,
+        guardDatabase(
+          created.handle,
+          () => databaseInfos.find((entry) => entry.id === databaseId) ?? definition.info,
+          () => enforceCapabilities,
+        ),
+      );
       databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
       databaseDocumentStores.set(definition.info.id, created.documents);
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
@@ -2739,6 +2755,17 @@ function createMockSessionState(
     launchContext = mergeLaunchContext(launchContext, {
       databases: databaseInfos,
     });
+  };
+
+  let enforceCapabilities = options.enforceCapabilities ?? false;
+  let directoryUsers: string[] = [...(options.directoryUsers ?? [])];
+  const setCapabilities = (databaseId: string, capabilities: MindooDBAppCapability[]) => {
+    const entry = databaseInfos.find((info) => info.id === databaseId);
+    if (!entry) {
+      throw new Error(`Unknown test database: ${databaseId}`);
+    }
+    entry.capabilities = [...new Set(capabilities)];
+    launchContext = mergeLaunchContext(launchContext, { databases: databaseInfos });
   };
 
   setDatabases(options.databases ?? []);
@@ -2955,6 +2982,15 @@ function createMockSessionState(
       }));
     },
     setDatabases,
+    setCapabilities,
+    setEnforceCapabilities(enforce) {
+      enforceCapabilities = enforce;
+    },
+    getEnforceCapabilities: () => enforceCapabilities,
+    setDirectoryUsers(users) {
+      directoryUsers = [...users];
+    },
+    getDirectoryUsers: () => [...directoryUsers],
     getDatabase(databaseId) {
       const database = databaseHandles.get(databaseId);
       if (!database) {
@@ -3088,6 +3124,35 @@ export interface CreateMockMindooDBAppSessionOptions {
   proposeApp?: (input: MindooDBAppProposeAppInput) => MindooDBAppProposeAppResult;
   /** Initial contents of `session.storage`. */
   storage?: Record<string, string>;
+  /**
+   * Reject calls a database was not granted, like Haven does (a `forbidden` error;
+   * `documents.canCreate()` and friends answer `allowed: false`). Off by default so
+   * existing tests keep passing; turn it on to test how an app handles missing rights.
+   */
+  enforceCapabilities?: boolean;
+  /**
+   * Usernames `directory.listUsers()` returns on every database (Haven's directory is
+   * tenant-wide), e.g. `generateDirectoryUsers(120)`. A database's own
+   * `methods.directory` still wins.
+   */
+  directoryUsers?: readonly string[];
+}
+
+/**
+ * Test usernames in Haven's canonical form: `CN=Test User 001/O=Test`, …
+ * Enough of them (e.g. 120) exercise the paging of `directory.listUsers({ … })`.
+ */
+export function generateDirectoryUsers(
+  count: number,
+  options: { prefix?: string; organization?: string } = {},
+): string[] {
+  const prefix = options.prefix ?? "Test User";
+  const organization = options.organization ?? "Test";
+  const width = String(Math.max(count, 1)).length;
+  return Array.from(
+    { length: count },
+    (_, index) => `CN=${prefix} ${String(index + 1).padStart(width, "0")}/O=${organization}`,
+  );
 }
 
 export interface MockMindooDBAppSessionController {
@@ -3102,6 +3167,16 @@ export interface MockMindooDBAppSessionController {
   proposedApps: MindooDBAppProposeAppInput[];
   listDatabases(): MindooDBAppDatabaseInfo[];
   setDatabases(definitions: MockMindooDBAppDatabaseDefinition[]): void;
+  /**
+   * Replaces the capabilities of one mapped database. Takes effect on the next call
+   * (with `enforceCapabilities`) and in the launch context; apps that read the
+   * capabilities once at start see the change after a reload.
+   */
+  setCapabilities(databaseId: string, capabilities: MindooDBAppCapability[]): void;
+  /** Turns the capability checks on or off (see `enforceCapabilities`). */
+  setEnforceCapabilities(enforce: boolean): void;
+  /** Replaces the directory's usernames (see `directoryUsers`). */
+  setDirectoryUsers(users: readonly string[]): void;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
@@ -3133,6 +3208,9 @@ export function createMockMindooDBAppSession(
     proposedApps: state.proposedApps,
     listDatabases: state.listDatabaseInfos,
     setDatabases: state.setDatabases,
+    setCapabilities: state.setCapabilities,
+    setEnforceCapabilities: state.setEnforceCapabilities,
+    setDirectoryUsers: state.setDirectoryUsers,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
     emitUiPreferencesChange: state.emitUiPreferencesChange,
@@ -3169,11 +3247,21 @@ export type FakeBridgePortMessageHandler = (
   },
 ) => MaybePromise<boolean | void>;
 
+/** How the fake host answered one RPC request (see `onResponse`). */
+export type FakeBridgeRpcResponse =
+  | { ok: true; result: unknown; durationMs: number }
+  | { ok: false; error: MindooDBAppBridgeErrorPayload; durationMs: number };
+
 export interface CreateFakeBridgeHostOptions extends CreateMockMindooDBAppSessionOptions {
   windowMode?: "parent" | "opener";
   requestHandlers?: Record<string, FakeBridgeRequestHandler>;
   /** Called for every RPC request the app sends, before it is answered. */
   onRequest?: (request: MindooDBAppBridgeRpcRequest) => void;
+  /** Called with the answer to every RPC request, right after it was sent. */
+  onResponse?: (
+    request: MindooDBAppBridgeRpcRequest,
+    response: FakeBridgeRpcResponse,
+  ) => void;
   onPortMessage?: FakeBridgePortMessageHandler;
 }
 
@@ -3213,6 +3301,15 @@ export interface FakeBridgeHostController {
   ): void;
   setRequestHandler(method: string, handler: FakeBridgeRequestHandler): void;
   clearRequestHandler(method: string): void;
+  listDatabases(): MindooDBAppDatabaseInfo[];
+  /** See {@link MockMindooDBAppSessionController.setCapabilities}. */
+  setCapabilities(databaseId: string, capabilities: MindooDBAppCapability[]): void;
+  /** See {@link CreateMockMindooDBAppSessionOptions.enforceCapabilities}. */
+  setEnforceCapabilities(enforce: boolean): void;
+  getEnforceCapabilities(): boolean;
+  /** See {@link CreateMockMindooDBAppSessionOptions.directoryUsers}. */
+  setDirectoryUsers(users: readonly string[]): void;
+  getDirectoryUsers(): string[];
 }
 
 export function createFakeBridgeHost(
@@ -3813,10 +3910,17 @@ export function createFakeBridgeHost(
           .directory.excerpt(
             Array.isArray(params.publicKeys) ? params.publicKeys.map(String) : [],
           );
-      case "directory.listUsers":
-        return await state
-          .getDatabase(String(params.databaseId))
-          .directory.listUsers();
+      case "directory.listUsers": {
+        const directory = state.getDatabase(String(params.databaseId)).directory;
+        const paged =
+          params.query !== undefined || params.cursor !== undefined || params.limit !== undefined;
+        if (!paged) return await directory.listUsers();
+        return await directory.listUsers({
+          query: typeof params.query === "string" ? params.query : undefined,
+          cursor: typeof params.cursor === "string" ? params.cursor : undefined,
+          limit: typeof params.limit === "number" ? params.limit : undefined,
+        });
+      }
       case "attachments.list":
         return await state
           .getDatabase(String(params.databaseId))
@@ -4251,6 +4355,23 @@ export function createFakeBridgeHost(
     if (message.kind === "request") {
       requests.push(message);
       options.onRequest?.(message);
+      const startedAt = performance.now();
+      const succeed = (result: unknown) => {
+        postRpcSuccess(port, message.id, result);
+        options.onResponse?.(message, {
+          ok: true,
+          result,
+          durationMs: performance.now() - startedAt,
+        });
+      };
+      const fail = (error: MindooDBAppBridgeErrorPayload) => {
+        postRpcError(port, message.id, error);
+        options.onResponse?.(message, {
+          ok: false,
+          error,
+          durationMs: performance.now() - startedAt,
+        });
+      };
       try {
         const customHandler = customRequestHandlers.get(message.method);
         if (customHandler) {
@@ -4259,7 +4380,7 @@ export function createFakeBridgeHost(
             request: message,
             port,
           });
-          postRpcSuccess(port, message.id, result);
+          succeed(result);
           return;
         }
         const builtinResult = await handleBuiltinRequest(message);
@@ -4269,15 +4390,15 @@ export function createFakeBridgeHost(
         ) {
           // The code a Haven without this method answers with, so the
           // client's fallbacks for older hosts run here too.
-          postRpcError(port, message.id, {
+          fail({
             code: "method-not-found",
             message: `No fake bridge handler is configured for ${message.method}.`,
           });
           return;
         }
-        postRpcSuccess(port, message.id, builtinResult);
+        succeed(builtinResult);
       } catch (error) {
-        postRpcError(port, message.id, createBridgeErrorPayload(error));
+        fail(createBridgeErrorPayload(error));
       }
       return;
     }
@@ -4322,6 +4443,12 @@ export function createFakeBridgeHost(
     },
     install,
     acceptConnection,
+    listDatabases: state.listDatabaseInfos,
+    setCapabilities: state.setCapabilities,
+    setEnforceCapabilities: state.setEnforceCapabilities,
+    getEnforceCapabilities: state.getEnforceCapabilities,
+    setDirectoryUsers: state.setDirectoryUsers,
+    getDirectoryUsers: state.getDirectoryUsers,
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {
@@ -4441,3 +4568,5 @@ export function createFakeBridgeHost(
   return controller;
 }
 export * from "./browserTestHost";
+export { createMemoryAttachments } from "./memoryAttachments";
+export { MockForbiddenError } from "./capabilityGuard";

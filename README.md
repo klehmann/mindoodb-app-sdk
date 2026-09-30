@@ -288,6 +288,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
+| `directory`   | List the tenant's users (`directory.listUsers()`), resolve signing keys |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -302,6 +303,21 @@ if (!db.capabilities.includes("delete")) {
 ```
 
 When the database is readable, `documents.list()` can also expose deleted document IDs by setting `status: "all"` or `status: "deleted"`. This is useful for app-side indexes and sync checkpoints.
+
+### Directory users
+
+With the `directory` capability, `db.directory.listUsers()` returns the tenant's active usernames, e.g. for a recipient picker. For large directories ask for pages instead, with an optional case-insensitive search:
+
+```ts
+let cursor: string | null = null;
+do {
+  const page = await db.directory.listUsers({ query: "ann", cursor, limit: 50 });
+  addOptions(page.users);
+  cursor = page.nextCursor;
+} while (cursor);
+```
+
+Hosts that do not page yet answer with the full list; the SDK then filters and pages it on the client, so the paged form works with every Haven version.
 
 ### Sealed channels
 
