@@ -253,7 +253,7 @@ Haven uses the app's registration label as the headline and ignores any title fr
 
 An app can offer its own operations to AI agents. Haven registers them with the browser's agent interface ([WebMCP](https://webmachinelearning.github.io/webmcp/)) next to Haven's own tools, so an agent in the browser — or a local agent connected through a WebMCP bridge — can call "create a mind map", "list open tasks" or "attach this file" instead of clicking through the UI.
 
-The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's key (`vega_maps_list` for an app id `mindoodb-app-vega`), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
+The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's tool prefix (`vega_maps_list` for `"agentToolPrefix": "vega"` in `haven-app.json`; without it Haven derives one from the app id or label), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
 
 Agents only see an app's tools while the user has **Agent tools** switched on in Haven (Settings → General) **and** has allowed this app (**Offer tools to AI agents** in the app's settings). Neither can be set by `haven-app.json`. `registerTools()` works either way; `enabled` in its answer says whether agents can call the tools right now.
 
