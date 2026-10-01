@@ -80,6 +80,30 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
     });
   }
 
+  async provideFile(
+    data: Blob | ArrayBuffer | Uint8Array,
+    options: { name: string; mimeType?: string },
+  ): Promise<{ fileRef: string; size: number }> {
+    const buffer =
+      data instanceof Blob
+        ? await data.arrayBuffer()
+        : data instanceof Uint8Array
+          ? data.slice().buffer
+          : data;
+    return await this.rpc.call("agent.provideFile", {
+      name: options.name,
+      mimeType: options.mimeType ?? (data instanceof Blob ? data.type : undefined),
+      data: buffer,
+    });
+  }
+
+  async takeFile(fileRef: string): Promise<File> {
+    const result = await this.rpc.call<{ name: string; mimeType: string; data: ArrayBuffer }>("agent.takeFile", {
+      fileRef,
+    });
+    return new File([result.data], result.name, { type: result.mimeType });
+  }
+
   async setContext(context: Record<string, unknown> | null): Promise<void> {
     await this.rpc.call("agent.setContext", { context: context === null ? null : toJson(context) });
   }

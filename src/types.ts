@@ -1403,6 +1403,21 @@ export interface MindooDBAppAgentApi {
    * Keep it small and semantic; it is not a UI dump.
    */
   setContext(context: Record<string, unknown> | null): Promise<void>;
+  /**
+   * Hands Haven a file the app produced (an export, a rendering, an attachment)
+   * and returns a short-lived `fileRef` (ten minutes). Return the ref from a
+   * tool; the agent passes it to `haven_files_export` to get the file into the
+   * user's exchange folder. Files never travel through the agent as bytes.
+   */
+  provideFile(
+    data: Blob | ArrayBuffer | Uint8Array,
+    options: { name: string; mimeType?: string },
+  ): Promise<{ fileRef: string; size: number }>;
+  /**
+   * Takes a file Haven imported for this app (`haven_files_import` with the
+   * app's key). Fails for refs that expired or were imported for another app.
+   */
+  takeFile(fileRef: string): Promise<File>;
 }
 
 /** Host → app: an agent called one of the app's tools. */

@@ -115,4 +115,25 @@ describe("MindooDBAppAgentApiImpl", () => {
       { code: "NOT_FOUND", message: 'The app has no tool "missing" (any more).' },
     ]));
   });
+
+  it("passes files to and from Haven by reference", async () => {
+    const { rpc } = createRpc();
+    const call = rpc.call as unknown as ReturnType<typeof vi.fn>;
+    call.mockImplementation(async (method: string) =>
+      method === "agent.provideFile"
+        ? { fileRef: "file_1", size: 3 }
+        : { name: "notes.md", mimeType: "text/markdown", data: new TextEncoder().encode("# Hi").buffer },
+    );
+    const api = new MindooDBAppAgentApiImpl(rpc);
+    await expect(api.provideFile(new Blob(["abc"], { type: "text/plain" }), { name: "a.txt" })).resolves.toEqual({
+      fileRef: "file_1",
+      size: 3,
+    });
+    const [, params] = call.mock.calls[0] as [string, { name: string; mimeType: string; data: ArrayBuffer }];
+    expect(params).toMatchObject({ name: "a.txt", mimeType: "text/plain" });
+    expect(params.data.byteLength).toBe(3);
+    const file = await api.takeFile("file_2");
+    expect(file.name).toBe("notes.md");
+    expect(await file.text()).toBe("# Hi");
+  });
 });
