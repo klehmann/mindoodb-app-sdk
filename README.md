@@ -309,7 +309,7 @@ if (session.agent) {
 }
 ```
 
-- **`registerTools(tools)`** replaces the app's whole tool set; call it again when the set changes (e.g. after a document opens). At most 30 tools; names are lower case, digits and `_`, starting with a letter.
+- **`registerTools(tools)`** replaces the app's whole tool set; call it again when the set changes (e.g. after a document opens). At most 64 tools; names are lower case, digits and `_`, starting with a letter. Fewer is better: every tool costs the model context on each request and makes choosing harder, so large apps register the tools of the area the user has open and add the rest on demand.
 - **`description`** is written for a model: what the tool does, when to use it, where ids come from, what it returns. **`inputSchema`** is a JSON Schema object; use `enum` for fixed choices.
 - **`annotations`**: `readOnlyHint` for reads; `consequentialHint` for anything the user should confirm (sending, sharing, deleting) — Haven shows its own confirmation dialog and a refusal reaches the agent as `NOT_ALLOWED`; `untrustedContentHint` when the result contains text other people wrote.
 - **Errors**: throw `MindooDBAppAgentToolError(code, message, requiredAction?)` with `NOT_FOUND`, `INVALID_INPUT`, `INVALID_STATE`, `STATE_CHANGED`, `NOT_ALLOWED` or `FAILED`; `requiredAction` tells the agent what to do next ("call todo_tasks_search"). Any other exception becomes `FAILED`. Haven passes the agent one JSON error.
