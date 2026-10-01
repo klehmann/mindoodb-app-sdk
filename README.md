@@ -249,6 +249,77 @@ Show a notice when the app does not have host focus, or when a long task finishe
 
 Haven uses the app's registration label as the headline and ignores any title from the app. Pass the same `id` to update that notice in place. Omit `id` to add another notice. An id only matches notices from this launch. Omit `durationMs` and the notice stays until the user dismisses it or clicks it. A duration is clamped to about 1–8 seconds, which fits a short progress step such as "10%". Clicking the notice brings that launch back. The close button only dismisses it.
 
+### Agent tools (WebMCP)
+
+An app can offer its own operations to AI agents. Haven registers them with the browser's agent interface ([WebMCP](https://webmachinelearning.github.io/webmcp/)) next to Haven's own tools, so an agent in the browser — or a local agent connected through a WebMCP bridge — can call "create a mind map", "list open tasks" or "attach this file" instead of clicking through the UI.
+
+The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's key (`vega_maps_list` for an app id `mindoodb-app-vega`), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
+
+Agents only see an app's tools while the user has **Agent tools** switched on in Haven (Settings → General) **and** has allowed this app (**Offer tools to AI agents** in the app's settings). Neither can be set by `haven-app.json`. `registerTools()` works either way; `enabled` in its answer says whether agents can call the tools right now.
+
+```ts
+import { createViewLanguage, MindooDBAppAgentToolError } from "mindoodb-app-sdk";
+
+const v = createViewLanguage<{ title: string; status: string; due: string }>();
+
+if (session.agent) {
+  await session.agent.registerTools([
+    {
+      name: "tasks_search",
+      description:
+        "Finds tasks by part of the title. Returns taskId, title, status and due date. " +
+        "Use the taskId with todo_tasks_complete.",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: { query: { type: "string", description: "Part of the title." } },
+      },
+      annotations: { readOnlyHint: true, untrustedContentHint: true },
+      async execute(input) {
+        const result = await database.documents.query({
+          filter: v.contains(v.lower(v.field("title")), v.string(String(input.query).toLowerCase())),
+          fields: ["title", "status", "due"],
+          limit: 20,
+        });
+        return { tasks: result.rows.map((row) => ({ taskId: row.docId, ...row.fields })) };
+      },
+    },
+    {
+      name: "tasks_complete",
+      description: "Marks a task as done. taskId comes from todo_tasks_search; never pass a title.",
+      inputSchema: {
+        type: "object",
+        required: ["taskId"],
+        properties: { taskId: { type: "string" } },
+      },
+      async execute(input) {
+        const taskId = String(input.taskId ?? "");
+        const task = await database.documents.get(taskId).catch(() => null);
+        if (!task) {
+          throw new MindooDBAppAgentToolError("NOT_FOUND", `No task "${taskId}".`, "call todo_tasks_search");
+        }
+        await database.documents.update(taskId, { set: { status: "done" } });
+        return { taskId, status: "done" };
+      },
+    },
+  ]);
+
+  // What the user has open, for "this task" / "the selected one". Small and semantic.
+  await session.agent.setContext({ view: "list", selectedTaskId: null });
+}
+```
+
+- **`registerTools(tools)`** replaces the app's whole tool set; call it again when the set changes (e.g. after a document opens). At most 30 tools; names are lower case, digits and `_`, starting with a letter.
+- **`description`** is written for a model: what the tool does, when to use it, where ids come from, what it returns. **`inputSchema`** is a JSON Schema object; use `enum` for fixed choices.
+- **`annotations`**: `readOnlyHint` for reads; `consequentialHint` for anything the user should confirm (sending, sharing, deleting) — Haven shows its own confirmation dialog and a refusal reaches the agent as `NOT_ALLOWED`; `untrustedContentHint` when the result contains text other people wrote.
+- **Errors**: throw `MindooDBAppAgentToolError(code, message, requiredAction?)` with `NOT_FOUND`, `INVALID_INPUT`, `INVALID_STATE`, `STATE_CHANGED`, `NOT_ALLOWED` or `FAILED`; `requiredAction` tells the agent what to do next ("call todo_tasks_search"). Any other exception becomes `FAILED`. Haven passes the agent one JSON error.
+- **Results** must be JSON. Return what changed (ids, new values), not just `ok`.
+- **`setContext(context)`** shows the app's state to agents in `haven_get_context` under the focused app.
+- **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
+- A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
+
+`session.agent` is absent on hosts without agent tools, so check for it. Test tools by calling `execute` directly in unit tests; the reference implementation is `src/features/agent/` in [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega). How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
+
 ### Host-owned drag
 
 When two apps run as visible workspace chicklets, native HTML5 drag dies at the iframe boundary. The SDK therefore hands the gesture to Haven: the source starts it, Haven draws a PNG ghost above every frame, and the target hit-tests the drop.
@@ -1808,6 +1879,10 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `hasHostFocus()`                      | `Promise<boolean>`                   |
 | `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
 | `notify(input)`                       | `Promise<{ id: string }>`            |
+| `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
+| `agent?.setContext(context)`          | `Promise<void>`                      |
+| `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |
+| `agent?.takeFile(fileRef)`            | `Promise<File>`                      |
 | `drag.setProfile(profile)`            | `Promise<void>`                      |
 | `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
 | `drag.cancel()`                       | `Promise<void>`                      |

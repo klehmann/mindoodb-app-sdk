@@ -1324,6 +1324,122 @@ export interface MindooDBAppNotifyResult {
   id: string;
 }
 
+/**
+ * Why an agent tool call failed, in terms an AI agent can act on. Haven passes
+ * the code through to the agent unchanged.
+ *
+ * - `NOT_FOUND`: an id the agent passed does not exist (any more).
+ * - `INVALID_INPUT`: the input does not match the schema or allowed values.
+ * - `INVALID_STATE`: the call is valid but cannot run in the app's current state.
+ * - `STATE_CHANGED`: what the agent planned on changed in between.
+ * - `NOT_ALLOWED`: the user or a policy does not permit it.
+ * - `FAILED`: anything else.
+ *
+ * `LOCKED` is Haven's own and never comes from an app.
+ */
+export type MindooDBAppAgentToolErrorCode =
+  | "NOT_FOUND"
+  | "INVALID_INPUT"
+  | "INVALID_STATE"
+  | "STATE_CHANGED"
+  | "NOT_ALLOWED"
+  | "FAILED";
+
+/** Hints an agent uses to decide how carefully to treat a tool (WebMCP `ToolAnnotations`). */
+export interface MindooDBAppAgentToolAnnotations {
+  /** The tool only reads. */
+  readOnlyHint?: boolean;
+  /** The tool changes something the user would want to confirm; Haven asks first. */
+  consequentialHint?: boolean;
+  /** The result carries text other people wrote (names, notes, document content). */
+  untrustedContentHint?: boolean;
+}
+
+/** What an app tells Haven about one agent tool; everything but the implementation. */
+export interface MindooDBAppAgentToolDescriptor {
+  /**
+   * Name within the app: lower case, digits, underscore, starting with a letter.
+   * Haven exposes it to agents prefixed with the app's key (`vega_maps_list`).
+   */
+  name: string;
+  /** Written for an AI agent: what the tool does, when to use it, where ids come from. */
+  description: string;
+  /** JSON Schema of the input object. */
+  inputSchema: Record<string, unknown>;
+  annotations?: MindooDBAppAgentToolAnnotations;
+}
+
+/** One agent tool an app offers. `execute` runs inside the app; its result must be JSON. */
+export interface MindooDBAppAgentTool extends MindooDBAppAgentToolDescriptor {
+  execute(input: Record<string, unknown>): Promise<unknown>;
+}
+
+/** Haven's answer to {@link MindooDBAppAgentApi.registerTools}. */
+export interface MindooDBAppAgentRegistration {
+  /**
+   * Whether agents can call the tools right now. `false` while the user has agent
+   * access off, globally or for this app; Haven keeps the tools and offers them
+   * as soon as access is switched on.
+   */
+  enabled: boolean;
+  /** The names agents see, prefix included. */
+  exposedNames: string[];
+}
+
+/**
+ * Lets an app offer operations to AI agents through Haven.
+ *
+ * The app declares tools; Haven registers them with the browser's agent
+ * interface (WebMCP) under the app's namespace, checks the user's permission,
+ * asks for confirmation where a tool is consequential, and calls `execute`
+ * through the bridge. The tools disappear when the app closes.
+ */
+export interface MindooDBAppAgentApi {
+  /** Replaces the app's whole tool set. Pass `[]` to withdraw all tools. */
+  registerTools(tools: MindooDBAppAgentTool[]): Promise<MindooDBAppAgentRegistration>;
+  /**
+   * The app's state as an agent should see it (open document, view, selection).
+   * Shown to agents in `haven_get_context` under the focused app. `null` clears it.
+   * Keep it small and semantic; it is not a UI dump.
+   */
+  setContext(context: Record<string, unknown> | null): Promise<void>;
+  /**
+   * Hands Haven a file the app produced (an export, a rendering, an attachment)
+   * and returns a short-lived `fileRef` (ten minutes). Return the ref from a
+   * tool; the agent passes it to `haven_files_export` to get the file into the
+   * user's exchange folder. Files never travel through the agent as bytes.
+   */
+  provideFile(
+    data: Blob | ArrayBuffer | Uint8Array,
+    options: { name: string; mimeType?: string },
+  ): Promise<{ fileRef: string; size: number }>;
+  /**
+   * Takes a file Haven imported for this app (`haven_files_import` with the
+   * app's key). Fails for refs that expired or were imported for another app.
+   */
+  takeFile(fileRef: string): Promise<File>;
+}
+
+/** Host → app: an agent called one of the app's tools. */
+export interface MindooDBAppBridgeAgentInvokeMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "agent-invoke";
+  callId: string;
+  /** The tool's name as the app registered it, without the prefix. */
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/** App → host: the outcome of an {@link MindooDBAppBridgeAgentInvokeMessage}. */
+export interface MindooDBAppBridgeAgentResultMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "agent-result";
+  callId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: { code: MindooDBAppAgentToolErrorCode; message: string; requiredAction?: string };
+}
+
 /** Any message that can travel across the dedicated bridge MessagePort. */
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
@@ -1340,6 +1456,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeShortcutInvokedMessage
   | MindooDBAppBridgeWorkspaceFocusRequestedMessage
   | MindooDBAppBridgeHostFocusChangedMessage
+  | MindooDBAppBridgeAgentInvokeMessage
+  | MindooDBAppBridgeAgentResultMessage
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage;
@@ -3254,6 +3372,11 @@ export interface MindooDBAppSession {
    * replace one from another launch.
    */
   notify(input: MindooDBAppNotifyInput): Promise<MindooDBAppNotifyResult>;
+  /**
+   * Offer operations to AI agents through Haven. Absent on hosts that predate
+   * agent tools, so check before use.
+   */
+  agent?: MindooDBAppAgentApi;
   /**
    * Tear down the session: close the bridge port and release all host-side
    * resources of this launch (navigators, live queries, streams). The

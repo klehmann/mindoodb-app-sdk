@@ -60,6 +60,7 @@ export {
   snapshotElementToPng,
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
+export { MindooDBAppAgentToolError } from "./client/agentTools";
 export { releaseMindooDBAppBridgeSessions } from "./client/createMindooDBAppBridge";
 export {
   DEFAULT_HAVEN_HOST_SHORTCUTS,
