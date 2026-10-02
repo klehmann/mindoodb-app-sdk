@@ -105,6 +105,12 @@ export interface MindooDBAppDefinition {
   allowGeolocation?: boolean;
   allowWebRtc?: boolean;
   allowWorkers?: boolean;
+  /**
+   * Prefix for the app's agent tools: `vega` turns `map_get` into `vega_map_get`.
+   * Lowercase letters, digits and `_`, starting with a letter, at most 16 characters;
+   * `haven` is reserved. Without it Haven derives a prefix from the app id or label.
+   */
+  agentToolPrefix?: string;
   /** Permissions that apply to the app itself rather than to one database. */
   permissions?: MindooDBAppDefinitionRegistrationPermission[];
   /** Static launch parameters the app expects in its launch context. */
@@ -573,6 +579,15 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const listing = readListing(raw.listing, errors);
+  const agentToolPrefix = readOptionalString(raw, "agentToolPrefix", errors);
+  if (
+    agentToolPrefix !== undefined
+    && (!/^[a-z][a-z0-9_]{0,15}$/.test(agentToolPrefix) || agentToolPrefix.endsWith("_") || /^haven(?:_|$)/.test(agentToolPrefix))
+  ) {
+    errors.push(
+      `App definition agentToolPrefix must be 1-16 lowercase letters, digits or "_", start with a letter and not be "haven", received ${JSON.stringify(agentToolPrefix)}.`,
+    );
+  }
 
   if (
     defaultLaunchDatabaseId
@@ -605,6 +620,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowGeolocation,
       allowWebRtc,
       allowWorkers,
+      agentToolPrefix,
       permissions,
       launchParameters,
       defaultLaunchDatabaseId,

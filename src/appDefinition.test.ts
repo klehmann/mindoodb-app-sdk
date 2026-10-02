@@ -110,6 +110,15 @@ describe("validateMindooDBAppDefinition", () => {
     ]);
   });
 
+  it("keeps a valid agentToolPrefix and rejects a reserved or malformed one", () => {
+    expect(validateMindooDBAppDefinition(baseDefinition({ agentToolPrefix: "vega" })).definition?.agentToolPrefix).toBe(
+      "vega",
+    );
+    for (const agentToolPrefix of ["haven", "Vega", "vega-app", "vega_", "a_very_long_prefix_x"]) {
+      expect(validateMindooDBAppDefinition(baseDefinition({ agentToolPrefix })).errors).toHaveLength(1);
+    }
+  });
+
   it("rejects a non-object payload", () => {
     expect(validateMindooDBAppDefinition("nope").errors).toEqual([
       "App definition must be a JSON object.",
