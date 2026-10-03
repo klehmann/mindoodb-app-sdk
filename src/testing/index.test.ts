@@ -1095,6 +1095,41 @@ describe("mindoodb-app-sdk/testing", () => {
     await subscription.dispose();
   });
 
+  it("rejects caller-provided ids and prefixes the host would reject, also with an overridden create", async () => {
+    const created: string[] = [];
+    const mock = createMockMindooDBAppBridge({
+      databases: [
+        { info: { id: "main", title: "Main", capabilities: ["read", "create"] } },
+        {
+          info: { id: "custom", title: "Custom", capabilities: ["read", "create"] },
+          methods: {
+            documents: {
+              async create(input) {
+                created.push(input.id ?? "");
+                return { id: input.id ?? "generated", data: {}, attachments: [], updatedAt: new Date().toISOString() };
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await expect(database.documents.create({ id: "6ac16a5e71b863b189e9a8ab_game", set: {} })).rejects.toThrow(
+      'createDocument: invalid document id "6ac16a5e71b863b189e9a8ab_game". Custom document IDs must match ^[a-z][a-z0-9_]*$.',
+    );
+    await expect(database.documents.create({ idPrefix: "Cls", set: {} })).rejects.toThrow(/invalid idPrefix "Cls"/);
+    await expect(database.documents.createMany([{ id: "ok_1", set: {} }, { id: "Bad", set: {} }])).rejects.toThrow(/invalid document id "Bad"/);
+    expect((await database.documents.list()).items).toHaveLength(0);
+    await expect(database.documents.create({ id: "game_6ac16a5e71b863b189e9a8ab", set: {} })).resolves.toMatchObject({ id: "game_6ac16a5e71b863b189e9a8ab" });
+
+    const custom = await session.openDatabase("custom");
+    await expect(custom.documents.create({ id: "1x", set: {} })).rejects.toThrow(/invalid document id "1x"/);
+    await expect(custom.documents.create({ id: "x1", set: {} })).resolves.toMatchObject({ id: "x1" });
+    expect(created).toEqual(["x1"]);
+  });
+
   it("narrows documents.list by idPrefix (boundary-aware) in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{
@@ -1383,10 +1418,10 @@ describe("mindoodb-app-sdk/testing", () => {
     expect((await database.info()).id).toBe("main");
 
     const { ids } = await database.documents.createMany([
-      { id: "chunk-a", assumeUniqueId: true, set: { type: "wordChunk" } },
-      { id: "chunk-b", assumeUniqueId: true, set: { type: "wordChunk" } },
+      { id: "chunk_a", assumeUniqueId: true, set: { type: "wordChunk" } },
+      { id: "chunk_b", assumeUniqueId: true, set: { type: "wordChunk" } },
     ]);
-    expect(ids).toEqual(["chunk-a", "chunk-b"]);
+    expect(ids).toEqual(["chunk_a", "chunk_b"]);
 
     const patches = [];
     for (const docId of ids) {
@@ -1402,10 +1437,10 @@ describe("mindoodb-app-sdk/testing", () => {
     }
     const results = await database.documents.applyAutomergeChangesBatch(patches);
     expect(results).toHaveLength(2);
-    expect((await database.documents.get("chunk-b"))?.data.text).toBe("Text chunk-b");
+    expect((await database.documents.get("chunk_b"))?.data.text).toBe("Text chunk_b");
 
-    await database.documents.deleteMany(["chunk-a"]);
-    expect((await database.documents.list()).items.some((doc) => doc.id === "chunk-a")).toBe(false);
+    await database.documents.deleteMany(["chunk_a"]);
+    expect((await database.documents.list()).items.some((doc) => doc.id === "chunk_a")).toBe(false);
 
     host.dispose();
   });
