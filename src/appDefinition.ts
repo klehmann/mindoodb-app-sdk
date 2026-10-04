@@ -103,6 +103,12 @@ export interface MindooDBAppDefinition {
   allowCamera?: boolean;
   allowMicrophone?: boolean;
   allowGeolocation?: boolean;
+  /**
+   * Motion and orientation sensors (Permissions-Policy `accelerometer`, `gyroscope`,
+   * `magnetometer`): `devicemotion`/`deviceorientation` events, e.g. to tilt a game or
+   * read the compass. iOS still asks the user (`DeviceOrientationEvent.requestPermission`).
+   */
+  allowMotion?: boolean;
   allowWebRtc?: boolean;
   allowWorkers?: boolean;
   /**
@@ -576,6 +582,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowCamera = readOptionalBoolean(raw, "allowCamera", errors);
   const allowMicrophone = readOptionalBoolean(raw, "allowMicrophone", errors);
   const allowGeolocation = readOptionalBoolean(raw, "allowGeolocation", errors);
+  const allowMotion = readOptionalBoolean(raw, "allowMotion", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const listing = readListing(raw.listing, errors);
@@ -618,6 +625,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowCamera,
       allowMicrophone,
       allowGeolocation,
+      allowMotion,
       allowWebRtc,
       allowWorkers,
       agentToolPrefix,
