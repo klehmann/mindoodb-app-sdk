@@ -77,6 +77,29 @@ interface ShareHtmlContext {
   server?: { resolvedUrls?: { local?: string[] } | null };
 }
 
+/** Structural subset of Vite's dev server (connect middlewares). */
+interface DevServer {
+  middlewares: {
+    use: (
+      handler: (
+        req: { url?: string },
+        res: { statusCode: number; setHeader: (name: string, value: string) => void; end: () => void },
+        next: () => void,
+      ) => void,
+    ) => void;
+  };
+}
+
+/**
+ * The test host lives in the `__haven-test/` directory, so only the URL with the trailing
+ * slash reaches its page; without it Vite answers with the app's own `index.html`.
+ */
+export function havenTestRedirect(url: string | undefined): string | null {
+  if (!url) return null;
+  const match = /^(.*\/__haven-test)(\?.*)?$/.exec(url);
+  return match ? `${match[1]}/${match[2] ?? ""}` : null;
+}
+
 /** Structural subset of Vite's `Plugin`, so the SDK does not need to depend on Vite. */
 export interface HavenBundleVitePlugin {
   name: string;
@@ -86,6 +109,8 @@ export interface HavenBundleVitePlugin {
    */
   configResolved: (config: ResolvedViteConfig) => void;
   transformIndexHtml: (html: string, ctx: ShareHtmlContext) => Promise<string>;
+  /** Dev only: `/__haven-test` redirects to `/__haven-test/`, the test host's page. */
+  configureServer: (server: DevServer) => void;
   writeBundle: () => Promise<void>;
   closeBundle: () => Promise<void>;
 }
@@ -297,6 +322,15 @@ export function havenBundle(options: HavenBundleOptions = {}): HavenBundleVitePl
       }
       const meta = havenAppShareMeta(raw, pageUrl);
       return meta ? injectHavenAppShareMeta(html, meta) : html;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const target = havenTestRedirect(req.url);
+        if (!target) return next();
+        res.statusCode = 302;
+        res.setHeader("Location", target);
+        res.end();
+      });
     },
     async writeBundle() {
       await emitBundle();
