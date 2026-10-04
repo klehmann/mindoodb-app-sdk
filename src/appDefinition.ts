@@ -119,11 +119,37 @@ export interface MindooDBAppDefinition {
   defaultLaunchDatabaseId?: string;
   databases?: MindooDBAppDefinitionDatabase[];
   /**
+   * Content this app can receive from the share sheet, "open with", the Files
+   * import folder, or a drop/picker in Haven. Each entry is one choice in
+   * Haven's "send to app" picker; the app gets it through
+   * `session.onIncomingContent` with the entry's `id` as `acceptId`.
+   */
+  accepts?: MindooDBAppAcceptSpec[];
+  /**
    * What a person sees before installing: the app's landing page when its URL is
    * opened directly, and Haven's setup wizard when it arrives through a shared link.
    * Display-only; nothing in here affects what the app is granted.
    */
   listing?: MindooDBAppDefinitionListing;
+}
+
+/** One kind of content an app takes, as a choice in Haven's picker. */
+export interface MindooDBAppAcceptSpec {
+  /** Stable id, handed back as `acceptId`. Lowercase letters, digits, `-` and `_`. */
+  id: string;
+  /** What the choice does, e.g. "Attach to the open document". */
+  label: MindooDBAppLocalizedText;
+  /**
+   * MIME patterns: `image/*`, `application/pdf`, `*\/*`. Use `text/plain`
+   * for shared text and `text/uri-list` for shared links.
+   */
+  types: string[];
+  /** Whether whole folders (with relative paths) are welcome. Default false. */
+  folders?: boolean;
+  /** Whether more than one item at once is welcome. Default true. */
+  multiple?: boolean;
+  /** Largest total size the app handles; larger deliveries are not offered. */
+  maxBytes?: number;
 }
 
 /**
@@ -377,6 +403,94 @@ function readLocalizedText(
   return result as { en: string } & Record<string, string>;
 }
 
+export const MINDOODB_APP_ACCEPTS_MAX = 16;
+const ACCEPT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+const ACCEPT_TYPE_PATTERN = /^(\*|[a-z0-9][a-z0-9.+-]*)\/(\*|[a-z0-9][a-z0-9.+-]*)$/i;
+
+function readAccepts(value: unknown, errors: string[]): MindooDBAppAcceptSpec[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("App definition accepts must be an array.");
+    return undefined;
+  }
+  if (value.length > MINDOODB_APP_ACCEPTS_MAX) {
+    errors.push(`App definition accepts must not have more than ${MINDOODB_APP_ACCEPTS_MAX} entries.`);
+    return undefined;
+  }
+  const result: MindooDBAppAcceptSpec[] = [];
+  const ids = new Set<string>();
+  value.forEach((entry, index) => {
+    const label = `App definition accepts[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${label} must be an object.`);
+      return;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!ACCEPT_ID_PATTERN.test(id)) {
+      errors.push(`${label}.id must be 1-48 lowercase letters, digits, "-" or "_", received ${JSON.stringify(entry.id)}.`);
+      return;
+    }
+    if (ids.has(id)) {
+      errors.push(`${label}.id "${id}" is used twice.`);
+      return;
+    }
+    ids.add(id);
+    const text = readLocalizedText(entry.label, `${label}.label`, 80, errors);
+    if (!text) {
+      errors.push(`${label}.label is required.`);
+      return;
+    }
+    if (!Array.isArray(entry.types) || !entry.types.length) {
+      errors.push(`${label}.types must be a non-empty array of MIME patterns.`);
+      return;
+    }
+    const types: string[] = [];
+    for (const type of entry.types) {
+      if (typeof type !== "string" || !ACCEPT_TYPE_PATTERN.test(type.trim())) {
+        errors.push(`${label}.types contains an invalid MIME pattern ${JSON.stringify(type)}.`);
+        return;
+      }
+      types.push(type.trim().toLowerCase());
+    }
+    const folders = readOptionalBoolean(entry, "folders", errors);
+    const multiple = readOptionalBoolean(entry, "multiple", errors);
+    let maxBytes: number | undefined;
+    if (entry.maxBytes !== undefined) {
+      if (typeof entry.maxBytes !== "number" || !Number.isSafeInteger(entry.maxBytes) || entry.maxBytes <= 0) {
+        errors.push(`${label}.maxBytes must be a positive integer.`);
+        return;
+      }
+      maxBytes = entry.maxBytes;
+    }
+    result.push({ id, label: text, types, folders, multiple, maxBytes });
+  });
+  return result.length ? result : undefined;
+}
+
+/**
+ * Validates an `accepts` list on its own, for hosts that read it from another
+ * manifest format (Haven's app store catalog).
+ */
+export function validateMindooDBAppAccepts(value: unknown): {
+  accepts: MindooDBAppAcceptSpec[] | undefined;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const accepts = readAccepts(value, errors);
+  return { accepts: errors.length ? undefined : accepts, errors };
+}
+
+/** Whether `type` (e.g. `image/png`) matches a pattern like `image/*` or `*\/*`. */
+export function mindooDBAppAcceptMatchesType(pattern: string, type: string): boolean {
+  const [patternMajor, patternMinor] = pattern.toLowerCase().split("/");
+  const [major, minor] = (type || "application/octet-stream").toLowerCase().split(";")[0]!.trim().split("/");
+  return (
+    (patternMajor === "*" || patternMajor === major) && (patternMinor === "*" || patternMinor === minor)
+  );
+}
+
 /** Relative paths stay on the app origin; absolute URLs must be `https:`. */
 function readListingAssetPath(value: unknown, label: string, errors: string[]): string | undefined {
   if (value === undefined || value === null) {
@@ -579,6 +693,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const listing = readListing(raw.listing, errors);
+  const accepts = readAccepts(raw.accepts, errors);
   const agentToolPrefix = readOptionalString(raw, "agentToolPrefix", errors);
   if (
     agentToolPrefix !== undefined
@@ -625,6 +740,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       launchParameters,
       defaultLaunchDatabaseId,
       databases,
+      accepts,
       listing,
     },
     errors: [],

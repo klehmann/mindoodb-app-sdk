@@ -1441,6 +1441,79 @@ export interface MindooDBAppBridgeAgentResultMessage {
 }
 
 /** Any message that can travel across the dedicated bridge MessagePort. */
+/**
+ * Where content handed to an app came from. Native sources (share sheet,
+ * "open with", the Files import folder, shortcuts) only exist in the Haven
+ * iOS/Android app; `drop` and `picker` work everywhere.
+ */
+export type MindooDBAppIncomingSource =
+  | "share-sheet"
+  | "open-with"
+  | "files-folder"
+  | "shortcut"
+  | "drop"
+  | "picker";
+
+/** One file, text or link in a delivery, without its bytes. */
+export interface MindooDBAppIncomingItemInfo {
+  itemId: string;
+  /**
+   * POSIX path relative to what the user shared, e.g. `assets/logo.png` for a
+   * folder, or just the file name. Never absolute, never contains `..`.
+   */
+  path: string;
+  kind: "file" | "text" | "url";
+  /** MIME type; `text/plain` for text, `text/uri-list` for links. */
+  type: string;
+  /** Size in bytes. */
+  size: number;
+  /** Inline value for `text` and `url` items. */
+  text?: string;
+}
+
+/** Host → app: what Haven is about to hand over, without the bytes. */
+export interface MindooDBAppIncomingContentInfo {
+  deliveryId: string;
+  /** The manifest `accepts` entry the user picked. */
+  acceptId: string;
+  source: MindooDBAppIncomingSource;
+  items: MindooDBAppIncomingItemInfo[];
+}
+
+/** An item as the app's handler sees it. */
+export interface MindooDBAppIncomingItem extends MindooDBAppIncomingItemInfo {
+  /** Loads the content from Haven in chunks. */
+  read(): Promise<Blob>;
+  /** `read()` decoded as UTF-8; resolves immediately for `text` and `url` items. */
+  readText(): Promise<string>;
+}
+
+/** What `session.onIncomingContent` handlers receive. */
+export interface MindooDBAppIncomingContent {
+  deliveryId: string;
+  acceptId: string;
+  source: MindooDBAppIncomingSource;
+  items: MindooDBAppIncomingItem[];
+}
+
+/** The handler's answer; Haven shows it to the user and clears the queue. */
+export interface MindooDBAppIncomingResult {
+  status: "accepted" | "partial" | "rejected";
+  /** Short text for the user, e.g. "3 attachments added". */
+  message?: string;
+}
+
+export type MindooDBAppIncomingContentHandler = (
+  content: MindooDBAppIncomingContent,
+) => Promise<MindooDBAppIncomingResult> | MindooDBAppIncomingResult;
+
+/** Host → app: hand over content the user chose this app for. */
+export interface MindooDBAppBridgeIncomingContentMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "incoming-content";
+  content: MindooDBAppIncomingContentInfo;
+}
+
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
   | MindooDBAppBridgeStreamMessage
@@ -1460,7 +1533,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeAgentResultMessage
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
-  | MindooDBAppBridgeDragDropMessage;
+  | MindooDBAppBridgeDragDropMessage
+  | MindooDBAppBridgeIncomingContentMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -3333,6 +3407,18 @@ export interface MindooDBAppSession {
    * new BCP-47 language tag (e.g. `"de"`). Returns an unsubscribe function.
    */
   onLocaleChange(listener: (locale: string) => void): () => void;
+  /**
+   * Receive content the user hands to this app: files from the share sheet,
+   * "open with", the Files import folder, or dropped/picked in Haven. The app
+   * declares what it takes in its definition's `accepts`; Haven only offers it
+   * for matching content and only after the user picked it.
+   *
+   * Register once, early: Haven waits for a handler before it delivers, so a
+   * launch started for a delivery receives it as soon as this is called.
+   * Content arriving before that is held and handed over on registration.
+   * Returns an unsubscribe function.
+   */
+  onIncomingContent(handler: MindooDBAppIncomingContentHandler): () => void;
   /**
    * Run work before the host tears this launch down, e.g. flushing buffered writes.
    *

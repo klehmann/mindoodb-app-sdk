@@ -1632,3 +1632,19 @@ describe("createMindooDBAppBridge attachment streaming", () => {
     await session.disconnect();
   });
 });
+
+describe("mock session incoming content", () => {
+  it("delivers emitted content once the app registers a handler", async () => {
+    const { createMockMindooDBAppSession } = await import("../testing/index");
+    const mock = createMockMindooDBAppSession();
+    const result = mock.emitIncomingContent({
+      acceptId: "attach",
+      items: [{ file: new Blob(["abc"], { type: "text/plain" }), path: "a.txt" }, { url: "https://example.com" }],
+    });
+    mock.session.onIncomingContent(async (content) => {
+      const first = await content.items[0]!.readText();
+      return { status: "accepted", message: `${first}|${content.items[1]!.kind}` };
+    });
+    await expect(result).resolves.toEqual({ status: "accepted", message: "abc|url" });
+  });
+});

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   MINDOODB_APP_DEFINITION_FORMAT,
   MINDOODB_APP_DEFINITION_VERSION,
+  mindooDBAppAcceptMatchesType,
   resolveMindooDBAppDefinitionUrl,
   resolveMindooDBAppListingAssetUrl,
   resolveMindooDBAppLocalizedText,
+  validateMindooDBAppAccepts,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 
@@ -218,5 +220,54 @@ describe("app definition listing", () => {
       "http://127.0.0.1:4300/icon.svg",
     );
     expect(resolveMindooDBAppListingAssetUrl("javascript:alert(1)", "https://app.example.com")).toBeNull();
+  });
+});
+
+describe("app definition accepts", () => {
+  it("keeps valid entries and normalizes MIME patterns", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        accepts: [
+          {
+            id: "attach",
+            label: { en: "Attach", de: "Anhängen" },
+            types: ["Image/*", "application/pdf"],
+            multiple: true,
+          },
+          { id: "import-assets", label: "Import assets", types: ["*/*"], folders: true, maxBytes: 1000 },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.accepts).toEqual([
+      {
+        id: "attach",
+        label: { en: "Attach", de: "Anhängen" },
+        types: ["image/*", "application/pdf"],
+        folders: undefined,
+        multiple: true,
+        maxBytes: undefined,
+      },
+      { id: "import-assets", label: "Import assets", types: ["*/*"], folders: true, multiple: undefined, maxBytes: 1000 },
+    ]);
+  });
+
+  it("rejects bad ids, duplicate ids, missing labels and invalid types", () => {
+    const bad = (accepts: unknown) => validateMindooDBAppDefinition(baseDefinition({ accepts })).errors;
+    expect(bad("x")).toHaveLength(1);
+    expect(bad([{ id: "Bad Id", label: "x", types: ["*/*"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: ["*/*"] }, { id: "a", label: "y", types: ["*/*"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", types: ["*/*"] }]).length).toBeGreaterThan(0);
+    expect(bad([{ id: "a", label: "x", types: ["not a type"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: [] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: ["*/*"], maxBytes: -1 }])).toHaveLength(1);
+  });
+
+  it("matches MIME patterns", () => {
+    expect(mindooDBAppAcceptMatchesType("image/*", "image/png")).toBe(true);
+    expect(mindooDBAppAcceptMatchesType("image/*", "application/pdf")).toBe(false);
+    expect(mindooDBAppAcceptMatchesType("*/*", "")).toBe(true);
+    expect(mindooDBAppAcceptMatchesType("text/plain", "text/plain; charset=utf-8")).toBe(true);
+    expect(validateMindooDBAppAccepts([{ id: "a", label: "x", types: ["*/*"] }]).errors).toEqual([]);
   });
 });
