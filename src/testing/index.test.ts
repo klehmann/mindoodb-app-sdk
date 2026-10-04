@@ -922,6 +922,48 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(paged.rows[0].fields).toEqual({ customer: "acme" });
   });
 
+  it("returns only summary-buffer fields in query rows, like the host", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: {
+          id: "main",
+          title: "Main",
+          capabilities: ["read", "create", "update"],
+        },
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({
+      set: {
+        type: "lesson",
+        topic: "Burgen",
+        tags: ["ge", "7b"],
+        phases: [{ title: "Einstieg", minutes: 10 }],
+        boardItems: [{ id: "board_1", kind: "drawing" }],
+        notes: "x".repeat(2000),
+      },
+    });
+
+    // Defaults: scalars and scalar arrays up to 1024 bytes only.
+    const defaults = await database.documents.query({ filter: 'v.eq(v.field("type"), "lesson")' });
+    expect(defaults.rows[0].fields).toEqual({ type: "lesson", topic: "Burgen", tags: ["ge", "7b"] });
+
+    // `include` adds nested and long values, `exclude` removes fields.
+    await database.setSummarySetup({ include: ["phases", "notes"], exclude: ["tags"] });
+    const configured = await database.documents.query({ fields: ["phases", "tags", "boardItems"] });
+    expect(configured.rows[0].fields).toEqual({
+      phases: [{ title: "Einstieg", minutes: 10 }],
+      tags: undefined,
+      boardItems: undefined,
+    });
+
+    // The full document still has everything.
+    const full = await database.documents.get(created.id);
+    expect(full?.data.boardItems).toEqual([{ id: "board_1", kind: "drawing" }]);
+  });
+
   it("joins related documents through include slots in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [
@@ -1582,6 +1624,42 @@ describe("evaluating VirtualView navigators", () => {
       .sort();
 
     expect(docIds).toEqual(["obs_a", "task_a"]);
+    await navigator.dispose();
+  });
+
+  it("fires onDidUpdate after a write and shows the new document on the next walk", async () => {
+    const { createViewLanguage } = await import("mindoodb-view-language");
+    const v = createViewLanguage();
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: { id: "main", title: "Main", capabilities: ["read", "create", "views"] },
+        documents: [{ id: "task_a", data: { type: "task", title: "A" } }],
+      }],
+    });
+
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const navigator = await session.createViewNavigator({
+      databaseIds: ["main"],
+      categorizationStyle: "category_then_document",
+      definition: {
+        id: "tasks-live",
+        title: "Tasks",
+        columns: [{ name: "title", role: "display", expression: v.field("title"), sorting: "ascending" }],
+      },
+      options: { includeCategories: false, includeDocuments: true },
+    });
+    const updates: unknown[] = [];
+    navigator.onDidUpdate((stats) => updates.push(stats));
+
+    const created = await database.documents.create({ set: { type: "task", title: "B" } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(updates).toHaveLength(1);
+
+    await navigator.expandAll();
+    const page = await navigator.entriesForward({ limit: 100 });
+    expect(page.entries.filter((entry) => entry.kind === "document").map((entry) => entry.docId).sort())
+      .toEqual([created.id, "task_a"].sort());
     await navigator.dispose();
   });
 

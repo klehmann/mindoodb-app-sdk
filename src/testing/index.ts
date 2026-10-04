@@ -906,6 +906,7 @@ function runMockDocumentQuery(
   databaseId: string,
   query?: MindooDBAppDocumentQuery,
   resolveDatabase?: MockIncludeDatabaseResolver,
+  summarySetup?: MindooDBAppSummarySetup | null,
 ): MindooDBAppQueryResult {
   const filter =
     typeof query?.filter === "string"
@@ -980,7 +981,10 @@ function runMockDocumentQuery(
   const page = matches.slice(offset, offset + limit);
   const rows: MindooDBAppQueryRow[] = page.map(({ document, textScore }) => ({
     docId: document.id,
-    fields: projectMockFields(document.data, query?.fields),
+    fields: projectMockFields(
+      mockSummaryDocument(document.data, summarySetup),
+      query?.fields,
+    ),
     lastModified: mockLastModified(document),
     ...(textScore === undefined ? {} : { textScore }),
   }));
@@ -1004,6 +1008,160 @@ function runMockDocumentQuery(
   }
 
   return { rows, total: matches.length, coverage: "full" };
+}
+
+/**
+ * The fields the host's summary buffer holds for a document, by the rules
+ * of MindooDB's `extractSummaryFields`: auto-include copies non-underscore
+ * top-level scalars and scalar arrays up to `maxValueBytes` (JSON length,
+ * default 1024), `include` adds any value by dot-path, `exclude` wins over
+ * both, and `_attachments` is kept as a slim projection. Query rows only
+ * carry these fields, so nested objects and long values are missing from
+ * `fields` just like in Haven, and apps must `get` the document for them.
+ */
+function extractMockSummaryFields(
+  data: Record<string, unknown>,
+  setup: MindooDBAppSummarySetup | null | undefined,
+): Record<string, unknown> {
+  const autoInclude = setup?.autoInclude ?? true;
+  const maxValueBytes = Math.max(0, setup?.maxValueBytes ?? 1024);
+  const include = setup?.include ?? [];
+  const exclude = setup?.exclude ?? [];
+  const isExcluded = (path: string) =>
+    exclude.some((excluded) => path === excluded || path.startsWith(`${excluded}.`));
+  const isScalar = (value: unknown) =>
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean";
+  const valueSize = (value: unknown) => {
+    if (typeof value === "string") return value.length + 2;
+    try {
+      return JSON.stringify(value)?.length ?? 0;
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  };
+
+  const fields: Record<string, unknown> = {};
+  if (autoInclude) {
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith("_") || key.endsWith("_encrypted") || key.endsWith("_encrypted_key")) {
+        continue;
+      }
+      if (isExcluded(key)) continue;
+      const includable = isScalar(value) || (Array.isArray(value) && value.every(isScalar));
+      if (!includable || valueSize(value) > maxValueBytes) continue;
+      fields[key] = structuredClone(value);
+    }
+  }
+  for (const path of include) {
+    if (isExcluded(path)) continue;
+    const value = getFieldValue(data, path);
+    if (value !== undefined) fields[path] = structuredClone(value);
+  }
+  if ((setup?.includeAttachments ?? true) && !isExcluded("_attachments")) {
+    const attachments = data._attachments;
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      fields._attachments = attachments
+        .filter(
+          (item): item is Record<string, unknown> => item !== null && typeof item === "object",
+        )
+        .map((item) => {
+          const info: Record<string, unknown> = {};
+          for (const key of ["attachmentId", "fileName", "size", "mimeType", "createdAt"]) {
+            if (item[key] !== undefined) info[key] = item[key];
+          }
+          if (typeof item.extractedText === "string" && item.extractedText.length > 0) {
+            info.hasExtractedText = true;
+          }
+          return info;
+        });
+    }
+  }
+  return fields;
+}
+
+/**
+ * Summary fields as a document: explicitly included dot-paths
+ * (`"meta.owner"`) are expanded into nested objects, as the host does
+ * before projecting summary rows.
+ */
+function mockSummaryDocument(
+  data: Record<string, unknown>,
+  setup: MindooDBAppSummarySetup | null | undefined,
+): Record<string, unknown> {
+  const doc: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(extractMockSummaryFields(data, setup))) {
+    const parts = key.split(".");
+    let current = doc;
+    for (const part of parts.slice(0, -1)) {
+      const next = current[part];
+      if (next !== null && typeof next === "object" && !Array.isArray(next)) {
+        current = next as Record<string, unknown>;
+      } else {
+        const created: Record<string, unknown> = {};
+        current[part] = created;
+        current = created;
+      }
+    }
+    current[parts[parts.length - 1]] = value;
+  }
+  return doc;
+}
+
+/**
+ * Keeps a mock view navigator current like a host navigator: a write to
+ * one of its databases marks it stale and fires `onDidUpdate` (coalesced,
+ * after the write), and the next call rebuilds the view from the current
+ * documents. Rebuilding resets the cursor position. The stats carry no
+ * counts — the mock does not diff views.
+ */
+function createLiveMockViewNavigator(
+  initial: MindooDBAppViewNavigator,
+  rebuild: () => Promise<MindooDBAppViewNavigator | null>,
+  subscribe: (onChange: () => void) => () => void,
+): MindooDBAppViewNavigator {
+  let inner = initial;
+  let stale = false;
+  let pendingNotify: ReturnType<typeof setTimeout> | null = null;
+  const listeners = new Set<(stats: MindooDBAppViewUpdateStats) => void>();
+  const unsubscribe = subscribe(() => {
+    stale = true;
+    if (pendingNotify) return;
+    pendingNotify = setTimeout(() => {
+      pendingNotify = null;
+      for (const listener of listeners) listener({ addedCount: 0, removedCount: 0 });
+    }, 0);
+  });
+  const current = async () => {
+    if (stale) {
+      stale = false;
+      inner = (await rebuild()) ?? inner;
+    }
+    return inner;
+  };
+  return new Proxy({} as MindooDBAppViewNavigator, {
+    get(_target, property) {
+      if (property === "then") return undefined;
+      if (property === "onDidUpdate") {
+        return (listener: (stats: MindooDBAppViewUpdateStats) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        };
+      }
+      return async (...args: unknown[]) => {
+        if (property === "dispose") {
+          unsubscribe();
+          listeners.clear();
+          if (pendingNotify) clearTimeout(pendingNotify);
+        }
+        const navigator = await current();
+        const member = (navigator as unknown as Record<PropertyKey, unknown>)[property];
+        return typeof member === "function" ? member.apply(navigator, args) : member;
+      };
+    },
+  });
 }
 
 function projectMockFields(
@@ -1722,6 +1880,8 @@ function createDefaultViewNavigator(): MindooDBAppViewNavigator {
 type MockDatabasePeers = {
   getDocuments: MockIncludeDatabaseResolver;
   refreshAllLiveQueries: () => void;
+  /** Tells view navigators over `databaseId` that its documents changed. */
+  documentsChanged: (databaseId: string) => void;
 };
 
 type MockDatabaseMethods = {
@@ -1793,6 +1953,7 @@ function createDatabaseHandle(
         definition.info.id,
         subscription.query,
         peers.getDocuments,
+        summarySetup,
       );
       const resultJson = JSON.stringify(result);
       if (resultJson !== subscription.lastResultJson) {
@@ -1809,6 +1970,7 @@ function createDatabaseHandle(
    */
   const notifyLiveQueries = () => {
     peers.refreshAllLiveQueries();
+    peers.documentsChanged(definition.info.id);
   };
 
   function mockEncryptForMap(names: string[]): Record<string, { kind: "user" }> {
@@ -1867,6 +2029,7 @@ function createDatabaseHandle(
         definition.info.id,
         query,
         peers.getDocuments,
+        summarySetup,
       ) as MindooDBAppQueryResult<TIncludes>;
     },
     async liveQuery<TIncludes extends MindooDBAppQueryIncludeSlots>(
@@ -1878,6 +2041,7 @@ function createDatabaseHandle(
         definition.info.id,
         query,
         peers.getDocuments,
+        summarySetup,
       );
       const subscription: MockLiveQuerySubscription = {
         query,
@@ -1896,6 +2060,7 @@ function createDatabaseHandle(
             definition.info.id,
             query,
             peers.getDocuments,
+            summarySetup,
           );
           subscription.lastResultJson = JSON.stringify(result);
           onResult(result as MindooDBAppQueryResult<TIncludes>);
@@ -2655,7 +2820,13 @@ function createMockSessionState(
         refresh();
       }
     },
+    documentsChanged: (databaseId) => {
+      for (const listener of viewChangeListeners) {
+        if (listener.databaseIds.includes(databaseId)) listener.onChange();
+      }
+    },
   };
+  const viewChangeListeners = new Set<{ databaseIds: string[]; onChange: () => void }>();
   const databaseViewApis = new Map<string, MockViewApi>();
   const sessionViews = new Map<string, MindooDBAppViewNavigator>();
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
@@ -2758,16 +2929,33 @@ function createMockSessionState(
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
       databaseViewApis.set(definition.info.id, {
         async create(input: MindooDBAppCreateViewNavigatorInput) {
-          const documents = input.databaseIds.flatMap((databaseId) => {
-            const list = databaseViewDocumentLists.get(databaseId);
-            return list ? list() : [];
-          });
-          const evaluating = await createEvaluatingViewNavigator(input, documents);
-          if (evaluating) return evaluating;
+          const build = () =>
+            createEvaluatingViewNavigator(
+              input,
+              input.databaseIds.flatMap((databaseId) => {
+                const list = databaseViewDocumentLists.get(databaseId);
+                return list ? list() : [];
+              }),
+            );
+          const subscribe = (onChange: () => void) => {
+            const listener = { databaseIds: [...input.databaseIds], onChange };
+            viewChangeListeners.add(listener);
+            return () => viewChangeListeners.delete(listener);
+          };
+          const evaluating = await build();
+          if (evaluating) {
+            return createLiveMockViewNavigator(evaluating, build, subscribe);
+          }
           console.warn(
             "[mindoodb-app-sdk/testing] mindoodb peer not available; using empty view navigator. Install mindoodb as a devDependency for evaluating VirtualViews.",
           );
-          return await createDefaultViewNavigator();
+          // Still announce writes, so apps that only listen for view
+          // updates (replica watchers) react like they do in Haven.
+          return createLiveMockViewNavigator(
+            await createDefaultViewNavigator(),
+            async () => null,
+            subscribe,
+          );
         },
         async open(_viewId: string) {
           return await createDefaultViewNavigator();
@@ -3107,9 +3295,11 @@ export interface MockMindooDBAppDatabaseDefinition {
   extractionSetup?: MindooDBAppExtractionSetup | null;
   /**
    * Initial summary buffer configuration returned by `getSummarySetup()`.
-   * `setSummarySetup()` overwrites it for the lifetime of the handle. The
-   * mock's `query()` reads the seeded documents directly and ignores this
-   * config — it exists so apps can test their setup/bootstrap logic.
+   * `setSummarySetup()` overwrites it for the lifetime of the handle. Rows
+   * of the mock's `query()` and `liveQuery()` carry only the fields this
+   * configuration puts into the summary buffer (MindooDB's defaults when
+   * unset), so apps notice nested or oversized fields missing from query
+   * results the same way they would in Haven.
    */
   summarySetup?: MindooDBAppSummarySetup | null;
 }
@@ -3578,6 +3768,16 @@ export function createFakeBridgeHost(
             | undefined,
         });
         viewSessions.set(navigatorId, navigator);
+        navigator.onDidUpdate((stats) => {
+          if (!viewSessions.has(navigatorId)) return;
+          const payload: MindooDBAppBridgeViewChangedMessage = {
+            protocol: PROTOCOL,
+            kind: "view-changed",
+            navigatorId,
+            stats,
+          };
+          connectedPorts.forEach((port) => port.postMessage(payload));
+        });
         return { navigatorId };
       }
       case "session.openViewNavigator": {

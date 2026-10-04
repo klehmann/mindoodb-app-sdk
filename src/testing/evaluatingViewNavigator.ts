@@ -40,8 +40,10 @@ let mindoodbModulePromise: Promise<MindoodbVirtualViews | null> | null = null;
 
 export async function loadMindoodbForTesting(): Promise<MindoodbVirtualViews | null> {
   if (!mindoodbModulePromise) {
+    // Browser bundles may alias "mindoodb" to its expressions-only barrel
+    // (no VirtualView engine); treat that like a missing peer.
     mindoodbModulePromise = import("mindoodb")
-      .then((mod) => mod)
+      .then((mod) => (typeof mod.VirtualViewFactory === "function" ? mod : null))
       .catch(() => null);
   }
   return mindoodbModulePromise;
