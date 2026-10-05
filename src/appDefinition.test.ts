@@ -119,6 +119,12 @@ describe("validateMindooDBAppDefinition", () => {
     }
   });
 
+  it("keeps the device feature flags, motion sensors included", () => {
+    const result = validateMindooDBAppDefinition(baseDefinition({ allowCamera: true, allowMicrophone: true, allowMotion: true }));
+    expect(result.definition).toMatchObject({ allowCamera: true, allowMicrophone: true, allowMotion: true });
+    expect(validateMindooDBAppDefinition(baseDefinition({ allowMotion: "yes" })).errors.join()).toMatch(/allowMotion/);
+  });
+
   it("rejects a non-object payload", () => {
     expect(validateMindooDBAppDefinition("nope").errors).toEqual([
       "App definition must be a JSON object.",

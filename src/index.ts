@@ -1,6 +1,13 @@
 export * from "./types";
 export * from "./values";
 export {
+  MINDOODB_CUSTOM_DOCUMENT_ID_PATTERN,
+  MINDOODB_DOCUMENT_ID_PREFIX_PATTERN,
+  assertValidMindooDBCreateIds,
+  isValidMindooDBDocumentId,
+  mindooDBDocumentId,
+} from "./documentIds";
+export {
   MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME,
   MINDOODB_APP_BUNDLE_MANIFEST_FILE_NAME,
   MINDOODB_APP_BUNDLE_MANIFEST_FORMAT,

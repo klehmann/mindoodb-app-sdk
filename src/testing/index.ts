@@ -96,6 +96,7 @@ import type {
   MindooDBAppTextCursorPosition,
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
+import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase } from "./capabilityGuard";
 import { pageUsers } from "../directoryPaging";
 
@@ -755,6 +756,28 @@ function matchesDocumentFilter(
   return Object.entries(filter).every(
     ([field, expected]) => getFieldValue(document.data, field) === expected,
   );
+}
+
+/**
+ * Applies MindooDB's rules for caller-provided ids and id prefixes to `create`
+ * and `createMany` — also when a test overrides them through `methods.documents`
+ * — so an id Haven would reject fails in tests too.
+ */
+function withValidatedCreateIds(
+  documents: MindooDBAppDatabase["documents"],
+): MindooDBAppDatabase["documents"] {
+  const { create, createMany } = documents;
+  return {
+    ...documents,
+    async create(input) {
+      assertValidMindooDBCreateIds(input, "createDocument");
+      return await create(input);
+    },
+    async createMany(inputs) {
+      for (const input of inputs) assertValidMindooDBCreateIds(input, "createDocument");
+      return await createMany(inputs);
+    },
+  };
 }
 
 /**
@@ -2518,10 +2541,10 @@ function createDatabaseHandle(
         capabilities: [...definition.info.capabilities],
       };
     },
-    documents: {
+    documents: withValidatedCreateIds({
       ...defaultDocuments,
       ...methods.documents,
-    },
+    }),
     attachments: {
       ...defaultAttachments,
       ...methods.attachments,
