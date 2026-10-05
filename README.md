@@ -144,6 +144,7 @@ interface MindooDBAppLaunchContext {
   tenantId?: string;
   preferredDatabaseId?: string;
   user: { id: string; username: string };
+  browserFeatures?: MindooDBAppBrowserFeatures;
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
@@ -163,6 +164,18 @@ if (ctx.runtime === "iframe") {
   // A regular in-app menu is often fine in a separate window.
 }
 ```
+
+`browserFeatures` says which browser features Haven leaves available to the app: `popups`, `camera`, `microphone`, `geolocation`, `clipboardWrite`, `motion`, `webRtc` and `workers`. `false` means Haven blocks the feature for this app, through the iframe sandbox, its `allow` attribute or the hosted app CSP, and the user has to enable it in the app's settings. The browser cannot report these restrictions to the app itself, so check them in an initial setup instead of letting a call fail silently:
+
+```ts
+const ctx = await session.getLaunchContext();
+
+if (ctx.browserFeatures && !ctx.browserFeatures.microphone) {
+  showSetupHint("Voice notes need microphone access. Enable it for this app in Haven's app settings.");
+}
+```
+
+Each flag matches the app definition field of the same name (`allowCamera`, `allowPopups`, …), so an app that always needs a feature can request it there. The field is absent on older hosts; treat that as unknown.
 
 ### Host-rendered menus
 
@@ -345,6 +358,38 @@ const unbind = session.drag.bindSource(cardEl, {
 ```
 
 `bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). After start, the source frame keeps the pressed pointer (browsers do not retarget mouse-capture into Haven) and forwards `pointermove` / `pointerup` to the host. You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview, then `reportPointer` / `release`. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
+
+### Receiving files and content
+
+Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:
+
+```json
+"accepts": [
+  {
+    "id": "attach",
+    "label": { "en": "Attach to the open document", "de": "An das offene Dokument anhängen" },
+    "types": ["image/*", "application/pdf", "*/*"]
+  },
+  { "id": "import-assets", "label": "Import as asset set", "types": ["*/*"], "folders": true, "maxBytes": 524288000 }
+]
+```
+
+Each entry is one choice in Haven's picker. `types` are MIME patterns (`text/plain` for shared text, `text/uri-list` for links), `folders: true` allows whole folders with relative paths, `multiple: false` limits it to one item, `maxBytes` caps the total size. Open apps are listed first.
+
+```ts
+session.onIncomingContent(async (content) => {
+  if (content.acceptId !== "attach") {
+    return { status: "rejected", message: "Unknown action" };
+  }
+  for (const item of content.items) {
+    const blob = await item.read(); // streamed from Haven in 1 MiB chunks
+    await attachments.add(item.path, blob);
+  }
+  return { status: "accepted", message: `${content.items.length} attachment(s) added` };
+});
+```
+
+Register the handler once, early. Haven waits for it before delivering, so a launch started for a delivery receives it as soon as the handler exists. `item.path` is relative (`assets/logo.png` inside a shared folder) and never absolute. What the app does with the content is up to the app. The returned `status` and `message` are shown to the user; a throwing handler counts as `rejected`. In tests, `createMockMindooDBAppSession().emitIncomingContent({ acceptId, items })` plays Haven's part.
 
 ### Databases and capabilities
 

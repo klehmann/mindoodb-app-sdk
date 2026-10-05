@@ -32,13 +32,17 @@ export {
   MINDOODB_APP_DEFINITION_VERSION,
   MINDOODB_APP_LISTING_DESCRIPTION_MAX,
   MINDOODB_APP_LISTING_MAX_SCREENSHOTS,
+  MINDOODB_APP_ACCEPTS_MAX,
   MINDOODB_APP_LISTING_SUMMARY_MAX,
+  mindooDBAppAcceptMatchesType,
   resolveMindooDBAppDefinitionUrl,
   resolveMindooDBAppListingAssetUrl,
   resolveMindooDBAppLocalizedText,
+  validateMindooDBAppAccepts,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 export type {
+  MindooDBAppAcceptSpec,
   MindooDBAppDefinition,
   MindooDBAppDefinitionDatabase,
   MindooDBAppDefinitionListing,

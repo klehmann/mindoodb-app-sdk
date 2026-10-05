@@ -10,6 +10,11 @@ import {
   type EvaluatingViewDocument,
 } from "./evaluatingViewNavigator.js";
 import type {
+  MindooDBAppIncomingContent,
+  MindooDBAppIncomingContentHandler,
+  MindooDBAppIncomingItem,
+  MindooDBAppIncomingResult,
+  MindooDBAppIncomingSource,
   MindooDBAppAttachmentApi,
   MindooDBAppBridge,
   MindooDBAppBridgeBeforeCloseMessage,
@@ -502,6 +507,7 @@ function mergeLaunchContext(
       uiPreferences: { ...current.uiPreferences },
       user: { ...current.user },
       appPermissions: [...(current.appPermissions ?? [])],
+      browserFeatures: current.browserFeatures ? { ...current.browserFeatures } : undefined,
       launchParameters: { ...current.launchParameters },
       databases: current.databases.map((database) => ({
         ...database,
@@ -553,6 +559,11 @@ function mergeLaunchContext(
       : { ...current.uiPreferences },
     user: patch.user ? { ...current.user, ...patch.user } : { ...current.user },
     appPermissions: [...(patch.appPermissions ?? current.appPermissions ?? [])],
+    browserFeatures: patch.browserFeatures
+      ? { ...current.browserFeatures, ...patch.browserFeatures }
+      : current.browserFeatures
+        ? { ...current.browserFeatures }
+        : undefined,
     launchParameters: patch.launchParameters
       ? { ...current.launchParameters, ...patch.launchParameters }
       : { ...current.launchParameters },
@@ -648,6 +659,16 @@ function createDefaultLaunchContext(
     },
     licensedProducts: [],
     appPermissions: [],
+    browserFeatures: {
+      popups: false,
+      camera: false,
+      microphone: false,
+      geolocation: false,
+      clipboardWrite: false,
+      motion: false,
+      webRtc: false,
+      workers: false,
+    },
     launchParameters: {},
     databases: [],
     views: [],
@@ -2794,6 +2815,7 @@ type MockSessionState = {
   setHostFocused: (focused: boolean) => void;
   resolveDrag: (result: MindooDBAppDragStartResult) => void;
   getDragProfile: () => MindooDBAppDragProfile | null;
+  emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
 };
 
 function createMockSessionState(
@@ -2801,6 +2823,9 @@ function createMockSessionState(
 ): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
+  let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
+  const pendingIncoming: Array<() => void> = [];
+  let incomingCounter = 0;
   const hostFocusListeners = new Set<(focused: boolean) => void>();
   let hostFocused = false;
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
@@ -3144,6 +3169,15 @@ function createMockSessionState(
         localeListeners.delete(listener);
       };
     },
+    onIncomingContent(handler) {
+      incomingHandler = handler;
+      pendingIncoming.splice(0).forEach((deliver) => deliver());
+      return () => {
+        if (incomingHandler === handler) {
+          incomingHandler = null;
+        }
+      };
+    },
     onBeforeClose(listener) {
       beforeCloseListeners.add(listener);
       return () => {
@@ -3217,6 +3251,23 @@ function createMockSessionState(
     openViewNavigator: session.openViewNavigator,
     bridge,
     session,
+    emitIncomingContent(input) {
+      incomingCounter += 1;
+      const content = buildMockIncomingContent(input, `mock-delivery-${incomingCounter}`);
+      return new Promise<MindooDBAppIncomingResult>((resolve, reject) => {
+        const deliver = () => {
+          const handler = incomingHandler;
+          if (!handler) {
+            pendingIncoming.push(deliver);
+            return;
+          }
+          Promise.resolve()
+            .then(() => handler(content))
+            .then((result) => resolve(result ?? { status: "accepted" }), reject);
+        };
+        deliver();
+      });
+    },
     emitThemeChange(theme) {
       launchContext = mergeLaunchContext(launchContext, { theme });
       themeListeners.forEach((listener) =>
@@ -3400,6 +3451,58 @@ export interface MockMindooDBAppSessionController {
   emitHostFocusChange(focused: boolean): void;
   resolveDrag(result: MindooDBAppDragStartResult): void;
   getDragProfile(): MindooDBAppDragProfile | null;
+  /**
+   * Hands content to the app as Haven does after the user picked it in the
+   * "send to app" picker. Waits until the app registered `onIncomingContent`
+   * and resolves with the handler's result.
+   */
+  emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
+}
+
+/** Content for `emitIncomingContent`. */
+export interface MockIncomingContentInput {
+  acceptId?: string;
+  source?: MindooDBAppIncomingSource;
+  items: Array<
+    | { file: Blob; path?: string; name?: string }
+    | { text: string; path?: string }
+    | { url: string; path?: string }
+  >;
+}
+
+function buildMockIncomingContent(input: MockIncomingContentInput, deliveryId: string): MindooDBAppIncomingContent {
+  return {
+    deliveryId,
+    acceptId: input.acceptId ?? "default",
+    source: input.source ?? "picker",
+    items: input.items.map((entry, index): MindooDBAppIncomingItem => {
+      const itemId = `${deliveryId}-${index + 1}`;
+      if ("file" in entry) {
+        const name = entry.path ?? entry.name ?? ((entry.file as File).name || `file-${index + 1}`);
+        return {
+          itemId,
+          path: name,
+          kind: "file",
+          type: entry.file.type || "application/octet-stream",
+          size: entry.file.size,
+          read: async () => entry.file,
+          readText: async () => await entry.file.text(),
+        };
+      }
+      const isUrl = "url" in entry;
+      const text = isUrl ? entry.url : entry.text;
+      return {
+        itemId,
+        path: entry.path ?? (isUrl ? "link.url" : "text.txt"),
+        kind: isUrl ? "url" : "text",
+        type: isUrl ? "text/uri-list" : "text/plain",
+        size: new Blob([text]).size,
+        text,
+        read: async () => new Blob([text], { type: isUrl ? "text/uri-list" : "text/plain" }),
+        readText: async () => text,
+      };
+    }),
+  };
 }
 
 export {
@@ -3434,6 +3537,7 @@ export function createMockMindooDBAppSession(
     },
     resolveDrag: state.resolveDrag,
     getDragProfile: state.getDragProfile,
+    emitIncomingContent: state.emitIncomingContent,
   };
 }
 
