@@ -3676,6 +3676,9 @@ export interface FakeBridgeHostController {
   getEmbeddingFinish(): MockEmbeddingFinish | null;
 }
 
+/** What the fake host's built-in dispatch returns for a method it does not know. */
+const NOT_HANDLED = Symbol("not-handled");
+
 export function createFakeBridgeHost(
   options: CreateFakeBridgeHostOptions = {},
 ): FakeBridgeHostController {
@@ -3952,6 +3955,27 @@ export function createFakeBridgeHost(
       case "menus.hide":
         await state.session.menus.hide();
         return { ok: true };
+      case "appStorage.snapshot":
+        return await state.session.storage.snapshot({
+          prefixes: Array.isArray(params.prefixes) ? params.prefixes.map(String) : undefined,
+        });
+      case "appStorage.get":
+        return await state.session.storage.get(String(params.key));
+      case "appStorage.set":
+        await state.session.storage.set(String(params.key), String(params.value));
+        return null;
+      case "appStorage.remove":
+        await state.session.storage.remove(String(params.key));
+        return null;
+      case "appStorage.keys":
+        return await state.session.storage.keys({
+          prefix: typeof params.prefix === "string" ? params.prefix : undefined,
+        });
+      case "appStorage.clear":
+        await state.session.storage.clear({
+          prefix: typeof params.prefix === "string" ? params.prefix : undefined,
+        });
+        return null;
       case "components.list":
         return {
           components: await state.session.components.list(
@@ -4660,7 +4684,7 @@ export function createFakeBridgeHost(
         return undefined;
       }
       default:
-        return undefined;
+        return NOT_HANDLED;
     }
   }
 
@@ -4787,10 +4811,7 @@ export function createFakeBridgeHost(
           return;
         }
         const builtinResult = await handleBuiltinRequest(message);
-        if (
-          builtinResult === undefined &&
-          message.method !== "viewNavigators.dispose"
-        ) {
+        if (builtinResult === NOT_HANDLED) {
           // The code a Haven without this method answers with, so the
           // client's fallbacks for older hosts run here too.
           fail({

@@ -97,3 +97,20 @@ describe("mock components and embeds", () => {
     }
   });
 });
+
+describe("fake bridge host app storage", () => {
+  it("answers session.storage over the port", async () => {
+    const host = createFakeBridgeHost({ storage: { "a.one": "1" } });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      await session.storage.set("a.two", "2");
+      await expect(session.storage.get("a.one")).resolves.toBe("1");
+      await expect(session.storage.keys({ prefix: "a." })).resolves.toEqual(["a.one", "a.two"]);
+      await session.storage.remove("a.one");
+      await expect(session.storage.snapshot()).resolves.toEqual({ "a.two": "2" });
+    } finally {
+      host.dispose();
+    }
+  });
+});
