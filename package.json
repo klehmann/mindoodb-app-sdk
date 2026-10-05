@@ -1,6 +1,6 @@
 {
   "name": "mindoodb-app-sdk",
-  "version": "0.0.57",
+  "version": "0.0.58",
   "packageManager": "pnpm@11.1.1",
   "engines": {
     "node": ">=22.13.0"
@@ -53,7 +53,7 @@
   },
   "peerDependencies": {
     "@automerge/automerge": "^3.3.2",
-    "mindoodb": ">=0.0.69"
+    "mindoodb": ">=0.0.70"
   },
   "peerDependenciesMeta": {
     "@automerge/automerge": {
@@ -64,8 +64,8 @@
     }
   },
   "devDependencies": {
-    "@automerge/automerge": "^3.3.2",
-    "mindoodb": "^0.0.69",
+    "@automerge/automerge": "^3.5.0",
+    "mindoodb": "^0.0.70",
     "@types/node": "25.5.0",
     "jsdom": "^29.0.1",
     "tsup": "^8.5.1",

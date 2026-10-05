@@ -16,8 +16,8 @@ importers:
         version: 0.0.18
     devDependencies:
       '@automerge/automerge':
-        specifier: ^3.3.2
-        version: 3.4.0
+        specifier: ^3.5.0
+        version: 3.5.0
       '@types/node':
         specifier: 25.5.0
         version: 25.5.0
@@ -56,6 +56,9 @@ packages:
 
   '@automerge/automerge@3.4.0':
     resolution: {integrity: sha512-THmghtTNGGt2xsI0pM3o1i3PM8oZKcYFgOj25FOzW7l6e94SQOivNtCwy6xc0I8hVJsQSSotoBNs+yk/9hM2dg==}
+
+  '@automerge/automerge@3.5.0':
+    resolution: {integrity: sha512-ejbqJWfXWM2QbTcUK/5ugYiQiyOP7LYVAp/RuSvthCc07oek0FClMxEuouuhjrLjVPDSI34RP1ftGc45PF7WRA==}
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
@@ -1174,6 +1177,8 @@ snapshots:
   '@asamuzakjp/nwsapi@2.3.9': {}
 
   '@automerge/automerge@3.4.0': {}
+
+  '@automerge/automerge@3.5.0': {}
 
   '@bramus/specificity@2.4.2':
     dependencies:
