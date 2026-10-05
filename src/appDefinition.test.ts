@@ -258,6 +258,14 @@ describe("app definition accepts", () => {
     ]);
   });
 
+  it("keeps multiple: false, which turns off the default", () => {
+    const { accepts, errors } = validateMindooDBAppAccepts([
+      { id: "import", label: "Import", types: ["application/pdf"], multiple: false },
+    ]);
+    expect(errors).toEqual([]);
+    expect(accepts?.[0]?.multiple).toBe(false);
+  });
+
   it("rejects bad ids, duplicate ids, missing labels and invalid types", () => {
     const bad = (accepts: unknown) => validateMindooDBAppDefinition(baseDefinition({ accepts })).errors;
     expect(bad("x")).toHaveLength(1);

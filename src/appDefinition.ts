@@ -463,7 +463,9 @@ function readAccepts(value: unknown, errors: string[]): MindooDBAppAcceptSpec[] 
       types.push(type.trim().toLowerCase());
     }
     const folders = readOptionalBoolean(entry, "folders", errors);
-    const multiple = readOptionalBoolean(entry, "multiple", errors);
+    // `multiple` defaults to true, so unlike the allow* flags its `false` is the
+    // meaningful value and must survive.
+    const multiple = entry.multiple === false ? false : readOptionalBoolean(entry, "multiple", errors);
     let maxBytes: number | undefined;
     if (entry.maxBytes !== undefined) {
       if (typeof entry.maxBytes !== "number" || !Number.isSafeInteger(entry.maxBytes) || entry.maxBytes <= 0) {
