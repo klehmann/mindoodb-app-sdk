@@ -103,6 +103,8 @@ export interface MindooDBAppDefinition {
   allowCamera?: boolean;
   allowMicrophone?: boolean;
   allowGeolocation?: boolean;
+  /** Lets the app write to the clipboard, e.g. for a "Copy" button. Reading stays denied. */
+  allowClipboardWrite?: boolean;
   /**
    * Motion and orientation sensors (Permissions-Policy `accelerometer`, `gyroscope`,
    * `magnetometer`): `devicemotion`/`deviceorientation` events, e.g. to tilt a game or
@@ -696,6 +698,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowCamera = readOptionalBoolean(raw, "allowCamera", errors);
   const allowMicrophone = readOptionalBoolean(raw, "allowMicrophone", errors);
   const allowGeolocation = readOptionalBoolean(raw, "allowGeolocation", errors);
+  const allowClipboardWrite = readOptionalBoolean(raw, "allowClipboardWrite", errors);
   const allowMotion = readOptionalBoolean(raw, "allowMotion", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
@@ -740,6 +743,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowCamera,
       allowMicrophone,
       allowGeolocation,
+      allowClipboardWrite,
       allowMotion,
       allowWebRtc,
       allowWorkers,
