@@ -54,7 +54,12 @@ export type {
   MindooDBAppViewVariableExpression,
 } from "mindoodb-view-language";
 
-import type { MindooDBAppDefinitionRegistrationPermission } from "./appDefinition";
+import type {
+  MindooDBAppComponentChildren,
+  MindooDBAppComponentFieldValue,
+  MindooDBAppComponentIntent,
+  MindooDBAppDefinitionRegistrationPermission,
+} from "./appDefinition";
 
 /** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
@@ -316,6 +321,34 @@ export interface MindooDBAppLaunchContext {
   launchParameters: Record<string, string>;
   databases: MindooDBAppDatabaseInfo[];
   views: MindooDBAppResolvedViewDefinition[];
+  /**
+   * Set when another app embeds this one as a component (see `components` in
+   * haven-app.json). The app then has exactly one database, a sandbox holding the
+   * document it should open, and should hide navigation that leads elsewhere
+   * ("New", "Open"). Absent for ordinary launches.
+   */
+  embed?: MindooDBAppEmbedContext;
+}
+
+/** What an embedded component launch is for. */
+export interface MindooDBAppEmbedContext {
+  embedId: string;
+  /** `id` of the component in this app's haven-app.json. */
+  componentId: string;
+  intent: "edit" | "view";
+  /** The sandbox database; also the only entry of `databases`. */
+  databaseId: string;
+  /** The root document to open. */
+  docId: string;
+  /** Name of the app that embeds this one, e.g. "CRM". */
+  hostAppLabel: string;
+  /** Which of the app's own navigation makes sense inside the host. */
+  features: {
+    /** Creating further root documents. Always false: the host decides what exists. */
+    create: boolean;
+    /** Opening other documents. Always false: the sandbox only holds this one. */
+    open: boolean;
+  };
 }
 
 /** Attachment metadata returned by the attachment APIs. */
@@ -1554,6 +1587,117 @@ export interface MindooDBAppBridgeIncomingContentMessage {
   content: MindooDBAppIncomingContentInfo;
 }
 
+/** A component another app offers, as `session.components.list` returns it. */
+export interface MindooDBAppComponentInfo {
+  /** Opaque key for `session.embeds.open`. */
+  key: string;
+  appInstanceId: string;
+  appId: string;
+  /** Name of the app that provides the component, e.g. "TeamGrid". */
+  appLabel: string;
+  componentId: string;
+  /** Label in the user's language. */
+  label: string;
+  description?: string;
+  /** Absolute icon URL, when the component declares one. */
+  iconUrl?: string;
+  intents: MindooDBAppComponentIntent[];
+  /** Fields a root document for this component carries. */
+  match: Record<string, MindooDBAppComponentFieldValue>;
+  /** All fields of a new, empty root document: `create` plus `match`. */
+  createFields: Record<string, unknown>;
+  children?: MindooDBAppComponentChildren;
+}
+
+/** Filter for `session.components.list`. */
+export interface MindooDBAppComponentQuery {
+  intent?: MindooDBAppComponentIntent;
+  /** Only components whose `match` fits these root document fields. */
+  document?: Record<string, unknown>;
+}
+
+/** Rectangle in the host app's viewport, CSS pixels. */
+export type MindooDBAppEmbedRect = MindooDBAppMenuRect;
+
+/** Input of `session.embeds.open`. */
+export interface MindooDBAppEmbedOpenInput {
+  componentKey: string;
+  /** Host database that holds the root document. */
+  databaseId: string;
+  /** Root document; it must match the component's `match` fields. */
+  docId: string;
+  /** Default `edit`. `view` gives the component read access only. */
+  intent?: "edit" | "view";
+  /** Where the component appears, in this app's viewport. */
+  rect: MindooDBAppEmbedRect;
+  /** Default true. */
+  visible?: boolean;
+}
+
+/** Why an embedded component went away. */
+export type MindooDBAppEmbedCloseReason = "completed" | "cancelled" | "closed" | "error";
+
+/** Delivered once when an embedded component closes. */
+export interface MindooDBAppEmbedClosedEvent {
+  embedId: string;
+  reason: MindooDBAppEmbedCloseReason;
+  /** What the component passed to `session.embedding.complete`, as plain JSON. */
+  result?: unknown;
+  message?: string;
+}
+
+/** A component shown inside this app. */
+export interface MindooDBAppEmbed {
+  readonly embedId: string;
+  readonly componentKey: string;
+  readonly databaseId: string;
+  readonly docId: string;
+  /** Move or resize; coordinates are in this app's viewport. */
+  setRect(rect: MindooDBAppEmbedRect): Promise<void>;
+  /** Hide without closing, e.g. while a dialog of the host covers it. */
+  setVisible(visible: boolean): Promise<void>;
+  /** Let the component save, then close it. Resolves with the closed event. */
+  close(): Promise<MindooDBAppEmbedClosedEvent>;
+  /** Called once when the component closes, whoever closed it. */
+  onClosed(listener: (event: MindooDBAppEmbedClosedEvent) => void): () => void;
+  /** Settles with the closed event. */
+  readonly closed: Promise<MindooDBAppEmbedClosedEvent>;
+}
+
+/** Components other apps offer (`components` in their haven-app.json). */
+export interface MindooDBAppComponentsApi {
+  list(query?: MindooDBAppComponentQuery): Promise<MindooDBAppComponentInfo[]>;
+}
+
+/** Show another app's component inside this app. */
+export interface MindooDBAppEmbedsApi {
+  /**
+   * Shows the component over `rect`. Haven copies the root document and its
+   * children into a sandbox, runs the component against it and writes the changes
+   * back to `databaseId`, which this app must be allowed to read and (for `edit`)
+   * update. The first time, Haven asks the user to allow the pairing.
+   */
+  open(input: MindooDBAppEmbedOpenInput): Promise<MindooDBAppEmbed>;
+}
+
+/** For an app running as an embedded component (check `launchContext.embed`). */
+export interface MindooDBAppEmbeddingApi {
+  /**
+   * Done: Haven closes the component and hands `result` (plain JSON) to the host.
+   * Flush pending writes before calling this.
+   */
+  complete(result?: unknown): Promise<void>;
+  /** Closes without a result, e.g. when the user cancels. */
+  cancel(message?: string): Promise<void>;
+}
+
+/** Host → app: something happened to an embed this app opened. */
+export interface MindooDBAppBridgeEmbedEventMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "embed-event";
+  event: { type: "closed" } & MindooDBAppEmbedClosedEvent;
+}
+
 export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeRpcMessage
   | MindooDBAppBridgeStreamMessage
@@ -1574,7 +1718,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage
-  | MindooDBAppBridgeIncomingContentMessage;
+  | MindooDBAppBridgeIncomingContentMessage
+  | MindooDBAppBridgeEmbedEventMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -3413,6 +3558,12 @@ export interface MindooDBAppSession {
    */
   proposeApp(input: MindooDBAppProposeAppInput): Promise<MindooDBAppProposeAppResult>;
   menus: MindooDBAppMenuApi;
+  /** Components (embeddable editors) that installed apps offer. */
+  components: MindooDBAppComponentsApi;
+  /** Show another app's component inside this app. */
+  embeds: MindooDBAppEmbedsApi;
+  /** Only meaningful when this launch is itself an embedded component. */
+  embedding: MindooDBAppEmbeddingApi;
   /** Host-owned cross-iframe drag. Iframe-only; copy-only in v1. */
   drag: MindooDBAppDragApi;
   /**

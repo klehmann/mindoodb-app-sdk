@@ -4,10 +4,12 @@ import {
   MINDOODB_APP_DEFINITION_FORMAT,
   MINDOODB_APP_DEFINITION_VERSION,
   mindooDBAppAcceptMatchesType,
+  mindooDBAppComponentFieldsMatch,
   resolveMindooDBAppDefinitionUrl,
   resolveMindooDBAppListingAssetUrl,
   resolveMindooDBAppLocalizedText,
   validateMindooDBAppAccepts,
+  validateMindooDBAppComponents,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 
@@ -283,5 +285,58 @@ describe("app definition accepts", () => {
     expect(mindooDBAppAcceptMatchesType("*/*", "")).toBe(true);
     expect(mindooDBAppAcceptMatchesType("text/plain", "text/plain; charset=utf-8")).toBe(true);
     expect(validateMindooDBAppAccepts([{ id: "a", label: "x", types: ["*/*"] }]).errors).toEqual([]);
+  });
+});
+
+describe("app definition components", () => {
+  it("keeps a valid component", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        components: [
+          {
+            id: "word",
+            label: { en: "Word document", de: "Word-Dokument" },
+            icon: "icons/word.svg",
+            intents: ["create", "edit", "edit"],
+            match: { form: "teamedit", type: "word" },
+            create: { subject: "" },
+            children: { linkField: "parentId", match: { type: "wordChunk" } },
+          },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.components).toEqual([
+      {
+        id: "word",
+        label: { en: "Word document", de: "Word-Dokument" },
+        icon: "icons/word.svg",
+        intents: ["create", "edit"],
+        match: { form: "teamedit", type: "word" },
+        create: { subject: "" },
+        children: { linkField: "parentId", match: { type: "wordChunk" } },
+      },
+    ]);
+  });
+
+  it.each([
+    [{ match: {} }, /at least one field/],
+    [{ intents: ["delete"] }, /unknown intent/],
+    [{ create: { form: "x" } }, /must not repeat the match field/],
+    [{ children: { linkField: "parentId", match: { parentId: "x" } } }, /must not name the link field/],
+    [{ children: { linkField: "a.b" } }, /linkField/],
+    [{ match: { "a.b": "x" } }, /invalid field name/],
+    [{ icon: "javascript:alert(1)" }, /https: URL/],
+  ])("rejects %o", (patch, message) => {
+    const { errors } = validateMindooDBAppComponents([
+      { id: "sheet", label: "Sheet", intents: ["edit"], match: { form: "teamgrid" }, ...patch },
+    ]);
+    expect(errors.join("\n")).toMatch(message);
+  });
+
+  it("matches plain field values", () => {
+    expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "teamgrid", x: 1 })).toBe(true);
+    expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "other" })).toBe(false);
+    expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, null)).toBe(false);
   });
 });

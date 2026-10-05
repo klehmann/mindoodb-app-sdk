@@ -10,6 +10,7 @@ import {
   type CreateFakeBridgeHostOptions,
   type FakeBridgeHostController,
   type FakeBridgeRpcResponse,
+  type MockEmbedState,
   type MockMindooDBAppDatabaseDefinition,
 } from "./index";
 import { createMemoryAttachments } from "./memoryAttachments";
@@ -500,6 +501,10 @@ const STYLE = `
 .htest{display:grid;grid-template-columns:minmax(0,1fr) 320px;height:100vh;margin:0;font:13px/1.45 system-ui,sans-serif;background:#eef1f7;color:#172033}
 .htest *{box-sizing:border-box}
 .htest__frame{width:100%;height:100%;border:0;background:#fff}
+.htest__stage{position:relative;min-width:0;height:100%;overflow:hidden}
+.htest__embed{position:absolute;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;border:2px dashed #6366f1;background:rgba(238,242,255,.94);color:#312e81;text-align:center;padding:12px;overflow:hidden}
+.htest__embed[hidden]{display:none}
+.htest__embed strong{font-size:14px}
 .htest__panel{border-left:1px solid #d7dce8;overflow:auto;padding:14px;background:#f8f9fc}
 .htest__badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#fde68a;color:#713f12;font-weight:600;font-size:11px;letter-spacing:.04em}
 .htest h1{font-size:15px;margin:8px 0 12px}
@@ -603,8 +608,38 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
   frame.dataset.testid = "haven-test-app-frame";
   const panel = document.createElement("aside");
   panel.className = "htest__panel";
-  root.append(frame, panel);
+  // Stand-ins for components the app embeds: Haven would lay the other app's frame
+  // over the reported rect; here a placeholder with "done"/"cancel" takes its place.
+  const stage = document.createElement("div");
+  stage.className = "htest__stage";
+  const embedLayer = document.createElement("div");
+  stage.append(frame, embedLayer);
+  root.append(stage, panel);
   container.replaceChildren(root);
+  function renderEmbeds(embeds: readonly MockEmbedState[]) {
+    embedLayer.replaceChildren(
+      ...embeds.map((embed) => {
+        const box = document.createElement("div");
+        box.className = "htest__embed";
+        box.dataset.testid = `haven-test-embed-${embed.embedId}`;
+        box.hidden = !embed.visible;
+        box.style.left = `${embed.rect.left}px`;
+        box.style.top = `${embed.rect.top}px`;
+        box.style.width = `${embed.rect.width}px`;
+        box.style.height = `${embed.rect.height}px`;
+        const name = document.createElement("strong");
+        name.textContent = `${embed.component.appLabel}: ${embed.component.label}`;
+        const row = document.createElement("div");
+        row.className = "htest__row";
+        row.append(
+          button("Done", () => testHost.host.closeEmbed(embed.embedId, "completed", { saved: true })),
+          button("Cancel", () => testHost.host.closeEmbed(embed.embedId, "cancelled")),
+        );
+        box.append(name, hint(`${embed.intent} · ${embed.databaseId}/${embed.docId}`), row);
+        return box;
+      }),
+    );
+  }
   if (container === document.body) {
     document.body.style.margin = "0";
   }
@@ -766,6 +801,10 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
         : hostOptions.directoryUsers,
     frame,
     onChange: render,
+    onEmbedChange(embeds) {
+      hostOptions.onEmbedChange?.(embeds);
+      renderEmbeds(embeds);
+    },
   });
   // the locale goes into the URL once it came from there or the panel changed it
   let currentLocale: string | undefined = url.locale;

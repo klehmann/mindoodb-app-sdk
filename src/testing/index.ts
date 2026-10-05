@@ -9,7 +9,17 @@ import {
   createEvaluatingViewNavigator,
   type EvaluatingViewDocument,
 } from "./evaluatingViewNavigator.js";
+import {
+  createMockEmbedHost,
+  type MockEmbeddingFinish,
+  type MockEmbedState,
+} from "./mockEmbeds.js";
 import type {
+  MindooDBAppComponentInfo,
+  MindooDBAppComponentQuery,
+  MindooDBAppEmbedOpenInput,
+  MindooDBAppEmbedRect,
+  MindooDBAppEmbedCloseReason,
   MindooDBAppIncomingContent,
   MindooDBAppIncomingContentHandler,
   MindooDBAppIncomingItem,
@@ -2816,12 +2826,21 @@ type MockSessionState = {
   resolveDrag: (result: MindooDBAppDragStartResult) => void;
   getDragProfile: () => MindooDBAppDragProfile | null;
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
+  embedHost: ReturnType<typeof createMockEmbedHost>;
 };
 
 function createMockSessionState(
   options: CreateMockMindooDBAppSessionOptions = {},
 ): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
+  // Resolved lazily: the database handles are built further down.
+  const embedHost = createMockEmbedHost(options, (databaseId) => {
+    const database = databaseHandles.get(databaseId);
+    if (!database) {
+      throw new Error(`Unknown test database: ${databaseId}`);
+    }
+    return database;
+  });
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const pendingIncoming: Array<() => void> = [];
@@ -3110,6 +3129,9 @@ function createMockSessionState(
     },
     menus,
     drag,
+    components: embedHost.components,
+    embeds: embedHost.embeds,
+    embedding: embedHost.embedding,
     storage: {
       async snapshot(snapshotOptions) {
         const prefixes = snapshotOptions?.prefixes;
@@ -3236,6 +3258,7 @@ function createMockSessionState(
       directoryUsers = [...users];
     },
     getDirectoryUsers: () => [...directoryUsers],
+    embedHost,
     getDatabase(databaseId) {
       const database = databaseHandles.get(databaseId);
       if (!database) {
@@ -3400,6 +3423,10 @@ export interface CreateMockMindooDBAppSessionOptions {
    * `methods.directory` still wins.
    */
   directoryUsers?: readonly string[];
+  /** What `session.components.list` offers; see `closeEmbed` on the controller. */
+  components?: MindooDBAppComponentInfo[];
+  /** Called whenever the app opens, moves or closes an embed. */
+  onEmbedChange?: (embeds: readonly MockEmbedState[]) => void;
 }
 
 /**
@@ -3457,7 +3484,17 @@ export interface MockMindooDBAppSessionController {
    * and resolves with the handler's result.
    */
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
+  /** Embeds the app has open (`session.embeds.open`). */
+  listEmbeds(): MockEmbedState[];
+  /** Closes an embed as Haven does when the component finishes or the user closes it. */
+  closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
+  /** Replaces what `session.components.list` offers. */
+  setComponents(components: MindooDBAppComponentInfo[]): void;
+  /** For an app under test that runs as a component: its `session.embedding` call. */
+  getEmbeddingFinish(): MockEmbeddingFinish | null;
 }
+
+export type { MockEmbeddingFinish, MockEmbedState } from "./mockEmbeds.js";
 
 /** Content for `emitIncomingContent`. */
 export interface MockIncomingContentInput {
@@ -3538,6 +3575,10 @@ export function createMockMindooDBAppSession(
     resolveDrag: state.resolveDrag,
     getDragProfile: state.getDragProfile,
     emitIncomingContent: state.emitIncomingContent,
+    listEmbeds: () => state.embedHost.listEmbeds(),
+    closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
+    setComponents: (components) => state.embedHost.setComponents(components),
+    getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
   };
 }
 
@@ -3627,6 +3668,12 @@ export interface FakeBridgeHostController {
   /** See {@link CreateMockMindooDBAppSessionOptions.directoryUsers}. */
   setDirectoryUsers(users: readonly string[]): void;
   getDirectoryUsers(): string[];
+  /** Embeds the app has open (`session.embeds.open`). */
+  listEmbeds(): MockEmbedState[];
+  /** Closes an embed and pushes the `embed-event` to the app. */
+  closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
+  /** For an app under test that runs as a component: its `session.embedding` call. */
+  getEmbeddingFinish(): MockEmbeddingFinish | null;
 }
 
 export function createFakeBridgeHost(
@@ -3638,6 +3685,11 @@ export function createFakeBridgeHost(
   );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
+  state.embedHost.onClosed((event) => {
+    connectedPorts.forEach((port) =>
+      port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "closed", ...event } }),
+    );
+  });
   const beforeCloseWaiters = new Map<string, () => void>();
   let beforeCloseCounter = 0;
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
@@ -3899,6 +3951,30 @@ export function createFakeBridgeHost(
         );
       case "menus.hide":
         await state.session.menus.hide();
+        return { ok: true };
+      case "components.list":
+        return {
+          components: await state.session.components.list(
+            (params.query ?? undefined) as MindooDBAppComponentQuery | undefined,
+          ),
+        };
+      case "embeds.open":
+        return { embedId: await state.embedHost.openEmbed(params.input as MindooDBAppEmbedOpenInput) };
+      case "embeds.setRect":
+        state.embedHost.setRect(String(params.embedId), params.rect as MindooDBAppEmbedRect);
+        return { ok: true };
+      case "embeds.setVisible":
+        state.embedHost.setVisible(String(params.embedId), params.visible === true);
+        return { ok: true };
+      case "embeds.close":
+        state.embedHost.closeEmbed(String(params.embedId), "closed");
+        return { ok: true };
+      case "embedding.finish":
+        state.embedHost.finishEmbedding({
+          reason: params.reason === "cancelled" ? "cancelled" : "completed",
+          ...(params.result === undefined ? {} : { result: params.result }),
+          ...(typeof params.message === "string" ? { message: params.message } : {}),
+        });
         return { ok: true };
       case "session.requestHostFocus":
         await state.session.requestHostFocus();
@@ -4776,6 +4852,9 @@ export function createFakeBridgeHost(
     getEnforceCapabilities: state.getEnforceCapabilities,
     setDirectoryUsers: state.setDirectoryUsers,
     getDirectoryUsers: state.getDirectoryUsers,
+    listEmbeds: () => state.embedHost.listEmbeds(),
+    closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
+    getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {
