@@ -165,7 +165,7 @@ if (ctx.runtime === "iframe") {
 }
 ```
 
-`browserFeatures` says which browser features Haven leaves available to the app: `popups`, `camera`, `microphone`, `geolocation`, `clipboardWrite`, `webRtc` and `workers`. `false` means Haven blocks the feature for this app, through the iframe sandbox, its `allow` attribute or the hosted app CSP, and the user has to enable it in the app's settings. The browser cannot report these restrictions to the app itself, so check them in an initial setup instead of letting a call fail silently:
+`browserFeatures` says which browser features Haven leaves available to the app: `popups`, `camera`, `microphone`, `geolocation`, `clipboardWrite`, `motion`, `webRtc` and `workers`. `false` means Haven blocks the feature for this app, through the iframe sandbox, its `allow` attribute or the hosted app CSP, and the user has to enable it in the app's settings. The browser cannot report these restrictions to the app itself, so check them in an initial setup instead of letting a call fail silently:
 
 ```ts
 const ctx = await session.getLaunchContext();

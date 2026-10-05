@@ -224,7 +224,6 @@ export type MindooDBAppCapability =
   | "directory"
   | "sealedchannel";
 
-/** Metadata about the current app launch supplied by the Haven host. */
 /**
  * Which browser features the host leaves available to the app. `true` means the host
  * does not block the feature; the browser may still ask the user (camera, microphone,
@@ -244,12 +243,18 @@ export interface MindooDBAppBrowserFeatures {
   geolocation: boolean;
   /** `navigator.clipboard.writeText` in response to a user gesture. Definition field `allowClipboardWrite`. */
   clipboardWrite: boolean;
+  /**
+   * `devicemotion`/`deviceorientation` events (accelerometer, gyroscope, magnetometer).
+   * iOS still asks the user. Definition field `allowMotion`.
+   */
+  motion: boolean;
   /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */
   webRtc: boolean;
   /** `new Worker`, shared and service workers. Blocked only for hosted apps. Definition field `allowWorkers`. */
   workers: boolean;
 }
 
+/** Metadata about the current app launch supplied by the Haven host. */
 export interface MindooDBAppLaunchContext {
   appId: string;
   appInstanceId: string;
