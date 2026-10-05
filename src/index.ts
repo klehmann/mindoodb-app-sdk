@@ -1,6 +1,13 @@
 export * from "./types";
 export * from "./values";
 export {
+  MINDOODB_CUSTOM_DOCUMENT_ID_PATTERN,
+  MINDOODB_DOCUMENT_ID_PREFIX_PATTERN,
+  assertValidMindooDBCreateIds,
+  isValidMindooDBDocumentId,
+  mindooDBDocumentId,
+} from "./documentIds";
+export {
   MINDOODB_APP_BUNDLE_ARCHIVE_FILE_NAME,
   MINDOODB_APP_BUNDLE_MANIFEST_FILE_NAME,
   MINDOODB_APP_BUNDLE_MANIFEST_FORMAT,
@@ -23,12 +30,24 @@ export {
   MINDOODB_APP_DEFINITION_PERMISSIONS,
   MINDOODB_APP_DEFINITION_REGISTRATION_PERMISSIONS,
   MINDOODB_APP_DEFINITION_VERSION,
+  MINDOODB_APP_LISTING_DESCRIPTION_MAX,
+  MINDOODB_APP_LISTING_MAX_SCREENSHOTS,
+  MINDOODB_APP_ACCEPTS_MAX,
+  MINDOODB_APP_LISTING_SUMMARY_MAX,
+  mindooDBAppAcceptMatchesType,
   resolveMindooDBAppDefinitionUrl,
+  resolveMindooDBAppListingAssetUrl,
+  resolveMindooDBAppLocalizedText,
+  validateMindooDBAppAccepts,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 export type {
+  MindooDBAppAcceptSpec,
   MindooDBAppDefinition,
   MindooDBAppDefinitionDatabase,
+  MindooDBAppDefinitionListing,
+  MindooDBAppDefinitionScreenshot,
+  MindooDBAppLocalizedText,
   MindooDBAppDefinitionPermission,
   MindooDBAppDefinitionRegistrationPermission,
   MindooDBAppDefinitionValidation,
@@ -52,6 +71,7 @@ export {
   snapshotElementToPng,
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
+export { MindooDBAppAgentToolError } from "./client/agentTools";
 export { releaseMindooDBAppBridgeSessions } from "./client/createMindooDBAppBridge";
 export {
   DEFAULT_HAVEN_HOST_SHORTCUTS,
@@ -63,9 +83,21 @@ export {
 } from "./hostShortcuts";
 export {
   MINDOODB_APP_HOSTING_QUERY_PARAM,
+  MINDOODB_APP_LAUNCH_ID_QUERY_PARAM,
   isHostedBundleRuntime,
+  isLaunchedByHaven,
   readMindooDBAppHostingMode,
+  readMindooDBAppLaunchId,
 } from "./client/hosting";
+export {
+  DEFAULT_HAVEN_URL,
+  buildHavenAppInstallUrl,
+  renderHavenAppLandingPage,
+  resolveCurrentHavenAppUrl,
+} from "./landing";
+export type { HavenAppLandingPage, RenderHavenAppLandingPageOptions } from "./landing";
+export { listingMarkdownToPlainText, parseListingMarkdown, sanitizeListingHref } from "./listingMarkdown";
+export type { ListingBlock, ListingInline } from "./listingMarkdown";
 export { installHavenStorageShim } from "./client/havenStorageShim";
 export type {
   HavenStorageShimHandle,

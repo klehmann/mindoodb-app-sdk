@@ -11,6 +11,12 @@ import {
   type MindooDBAppBundleFileEntry,
   type MindooDBAppBundleManifest,
 } from "../appBundleManifest";
+import {
+  havenAppPublicUrl,
+  havenAppShareMeta,
+  havenAppSharePageUrl,
+  injectHavenAppShareMeta,
+} from "../shareMeta";
 import { createZipArchive } from "./zip";
 
 export type { MindooDBAppBundleManifest } from "../appBundleManifest";
@@ -61,14 +67,50 @@ export interface HavenBundleOptions {
 
 interface ResolvedViteConfig {
   root: string;
+  command?: "build" | "serve";
   build: { outDir: string };
+  server?: { host?: string | boolean; port?: number };
+}
+
+interface ShareHtmlContext {
+  filename?: string;
+  server?: { resolvedUrls?: { local?: string[] } | null };
+}
+
+/** Structural subset of Vite's dev server (connect middlewares). */
+interface DevServer {
+  middlewares: {
+    use: (
+      handler: (
+        req: { url?: string },
+        res: { statusCode: number; setHeader: (name: string, value: string) => void; end: () => void },
+        next: () => void,
+      ) => void,
+    ) => void;
+  };
+}
+
+/**
+ * The test host lives in the `__haven-test/` directory, so only the URL with the trailing
+ * slash reaches its page; without it Vite answers with the app's own `index.html`.
+ */
+export function havenTestRedirect(url: string | undefined): string | null {
+  if (!url) return null;
+  const match = /^(.*\/__haven-test)(\?.*)?$/.exec(url);
+  return match ? `${match[1]}/${match[2] ?? ""}` : null;
 }
 
 /** Structural subset of Vite's `Plugin`, so the SDK does not need to depend on Vite. */
 export interface HavenBundleVitePlugin {
   name: string;
-  apply: "build";
+  /**
+   * Runs in dev and in build. The zip is still build-only; dev needs the same plugin so
+   * `index.html` carries the share tags while `vite dev` is serving it.
+   */
   configResolved: (config: ResolvedViteConfig) => void;
+  transformIndexHtml: (html: string, ctx: ShareHtmlContext) => Promise<string>;
+  /** Dev only: `/__haven-test` redirects to `/__haven-test/`, the test host's page. */
+  configureServer: (server: DevServer) => void;
   writeBundle: () => Promise<void>;
   closeBundle: () => Promise<void>;
 }
@@ -161,12 +203,28 @@ async function readPackageMetadata(root: string) {
  * Emits `haven-bundle.json` and `haven-bundle.zip` next to the build output so a MindooDB
  * host can install and update the app from a URL.
  */
+function devPageUrl(config: ResolvedViteConfig, ctx: ShareHtmlContext): string | undefined {
+  const local = ctx.server?.resolvedUrls?.local ?? [];
+  const fromServer = havenAppSharePageUrl(local.find((url) => url.includes("127.0.0.1")) ?? local[0]);
+  if (fromServer) {
+    return fromServer;
+  }
+  const port = config.server?.port;
+  if (!port) {
+    return undefined;
+  }
+  const host = config.server?.host;
+  const hostname = !host || host === true || host === "0.0.0.0" ? "127.0.0.1" : host;
+  return havenAppSharePageUrl(`http://${hostname}:${port}/`);
+}
+
 export function havenBundle(options: HavenBundleOptions = {}): HavenBundleVitePlugin {
   let resolvedConfig: ResolvedViteConfig | null = null;
   let emitted = false;
+  let isBuild = true;
 
   async function emitBundle() {
-    if (emitted) {
+    if (!isBuild || emitted) {
       return;
     }
     if (!resolvedConfig) {
@@ -243,9 +301,36 @@ export function havenBundle(options: HavenBundleOptions = {}): HavenBundleVitePl
 
   return {
     name: "haven-bundle",
-    apply: "build",
     configResolved(config) {
       resolvedConfig = config;
+      isBuild = config.command !== "serve";
+    },
+    async transformIndexHtml(html, ctx) {
+      if (!resolvedConfig || ctx.filename?.includes("__haven-test")) {
+        return html;
+      }
+      let raw: unknown;
+      try {
+        raw = JSON.parse(await readFile(path.join(resolvedConfig.root, "public", "haven-app.json"), "utf8"));
+      } catch {
+        return html;
+      }
+      const baked = havenAppPublicUrl(raw);
+      const pageUrl = resolvedConfig.command === "serve" ? devPageUrl(resolvedConfig, ctx) ?? baked : baked;
+      if (!pageUrl) {
+        return html;
+      }
+      const meta = havenAppShareMeta(raw, pageUrl);
+      return meta ? injectHavenAppShareMeta(html, meta) : html;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const target = havenTestRedirect(req.url);
+        if (!target) return next();
+        res.statusCode = 302;
+        res.setHeader("Location", target);
+        res.end();
+      });
     },
     async writeBundle() {
       await emitBundle();

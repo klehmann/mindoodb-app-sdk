@@ -38,8 +38,11 @@
  * @module createMindooDBAppBridge
  */
 import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
+import { MindooDBAppAgentApiImpl } from "./agentTools";
+import { MindooDBAppIncomingApiImpl } from "./incomingContent";
 import { PortRpcClient } from "./portRpcClient";
 import type {
+  MindooDBAppIncomingContentHandler,
   MindooDBAppAutomergePatchResult,
   MindooDBAppAttachmentApi,
   MindooDBAppAttachmentChunk,
@@ -65,6 +68,8 @@ import type {
   MindooDBAppExtractionSetup,
   MindooDBAppSummarySetup,
   MindooDBAppDirectoryApi,
+  MindooDBAppListUsersOptions,
+  MindooDBAppListUsersPage,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -109,6 +114,7 @@ import type {
   MindooDBAppNotifyInput,
   MindooDBAppNotifyResult,
 } from "../types";
+import { pageUsers } from "../directoryPaging";
 import { installHostFocusCapture } from "../hostFocus";
 import {
   applyHostedDocumentOverscrollContain,
@@ -1271,18 +1277,32 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           databaseId: this.databaseId,
           publicKeys,
         }),
-      listUsers: async () => {
+      listUsers: (async (options?: MindooDBAppListUsersOptions) => {
+        let result: string[] | MindooDBAppListUsersPage;
         try {
-          return await this.rpc.call("directory.listUsers", {
-            databaseId: this.databaseId,
-          });
+          result = await this.rpc.call<string[] | MindooDBAppListUsersPage>(
+            "directory.listUsers",
+            options
+              ? {
+                  databaseId: this.databaseId,
+                  query: options.query,
+                  cursor: options.cursor ?? undefined,
+                  limit: options.limit,
+                }
+              : { databaseId: this.databaseId },
+          );
         } catch (error) {
           if (!isMethodNotFoundError(error)) {
             throw error;
           }
-          return [];
+          result = [];
         }
-      },
+        if (!options) {
+          return Array.isArray(result) ? result : result.users;
+        }
+        // hosts without paging answer with the full list
+        return Array.isArray(result) ? pageUsers(result, options) : result;
+      }) as MindooDBAppDirectoryApi["listUsers"],
     };
 
     this.attachments = {
@@ -1597,6 +1617,8 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly menus: MindooDBAppMenuApi;
   public readonly drag: MindooDBAppDragApiImpl;
   public readonly storage: MindooDBAppStorageApi;
+  public readonly agent: MindooDBAppAgentApiImpl;
+  private readonly incoming: MindooDBAppIncomingApiImpl;
   private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
   private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
   private readonly stopHostShortcuts: () => void;
@@ -1615,6 +1637,8 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
       },
     };
     this.drag = new MindooDBAppDragApiImpl(this.rpc);
+    this.agent = new MindooDBAppAgentApiImpl(this.rpc);
+    this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
     this.storage = {
       snapshot: async (options) =>
         await this.rpc.call<Record<string, string>>("appStorage.snapshot", {
@@ -1845,6 +1869,11 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     });
   }
 
+  /** Receive content the user hands to this app (share sheet, drop, …). */
+  onIncomingContent(handler: MindooDBAppIncomingContentHandler) {
+    return this.incoming.onIncomingContent(handler);
+  }
+
   /** Subscribe to host-pushed UI language changes. */
   onLocaleChange(listener: (locale: MindooDBAppLaunchContext["locale"]) => void) {
     return this.rpc.addMessageListener((message) => {
@@ -1892,6 +1921,8 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.stopHostShortcuts();
     this.stopHostFocus();
     this.drag.dispose();
+    this.agent.dispose();
+    this.incoming.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
     } finally {

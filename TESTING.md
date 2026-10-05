@@ -319,6 +319,72 @@ Useful Level 2 methods:
 
 The built-in request handling also covers `documents.query` and the `documents.liveQuery.*` RPCs against the seeded documents, so `db.documents.query()` / `db.documents.liveQuery()` and `navigator.onDidUpdate()` work end-to-end over the real bridge transport in Level 2 tests.
 
+## Browser test host
+
+Level 1 and 2 run in Node/jsdom. To run the real app in a real browser — for Playwright, or to click through it yourself — mount the browser test host on a separate page. It frames the app exactly as Haven does (an iframe with `?mindoodbAppLaunchId=…`) and answers the bridge with the same mock state as the Vitest helpers:
+
+```ts
+// src/testHost/main.ts, loaded by /__haven-test/index.html
+import { mockDatabasesFromDefinition, mountHavenTestHost } from "mindoodb-app-sdk/testing";
+import definition from "../../public/haven-app.json";
+
+mountHavenTestHost({
+  appUrl: "/",
+  title: definition.label,
+  databases: mockDatabasesFromDefinition(definition, {
+    main: [{ id: "welcome", data: { type: "note", title: "Seeded note" } }],
+  }),
+});
+```
+
+The page shows the app next to a control panel:
+
+- **Host**: theme and host-focus toggles, reload the app frame.
+- **Language**: switches the launch context's locale live (`onLocaleChange`), so you see the app re-render in every language without a reload.
+- **Databases**: one checkbox per capability for every mapped database, plus **Enforce capabilities**. Changing a capability relaunches the app, as Haven does after a permission change. With enforcement on, the mock rejects every call the database was not granted with a `forbidden` error (and `documents.canCreate()` and friends answer `allowed: false`), so you can check the app's hints for missing rights.
+- **Directory**: fills the tenant directory with 0 to 500 generated users (`CN=Test User 001/O=Test`, …) for recipient pickers and paging.
+- **Scanner**: what `attachments.scan()` returns — cancel, a generated sample page, or a file you choose. The file is written to the document's attachments like Haven's scanner does, so the app can read it back.
+- A live log of notifications, attachment previews, scans and every RPC request. Click a request for its parameters, its result or error, and how long it took; binary values show as size plus a hex preview.
+
+`mockDatabasesFromDefinition` gives every database an in-memory attachment store (`attachments: "none"` restores the stateless default) and takes overrides for testing other mappings than the definition requests:
+
+```ts
+mountHavenTestHost({
+  appUrl: "/",
+  databases: mockDatabasesFromDefinition(definition, seed, {
+    overrides: {
+      main: { capabilities: ["read"] },    // read-only mapping
+      archive: { mapped: false },          // the user did not map this one
+    },
+  }),
+  enforceCapabilities: true,
+  directoryUsers: generateDirectoryUsers(120),
+  scanMode: "sample",
+});
+```
+
+The panel keeps its settings in the page URL, so a scenario can be linked or opened by Playwright directly: `/__haven-test/?db=main:read,attachments&db=archive:none&enforce=1&users=120&locale=de-DE&theme=dark` (`db=<id>:none` unmaps a database; URL settings win over the options). The same controls are scriptable as `window.__havenTestHost`:
+
+```ts
+await page.goto("/__haven-test/?enforce=1");
+const app = page.frameLocator('[data-testid="haven-test-app-frame"]');
+await page.evaluate(() => window.__havenTestHost!.setCapabilities("main", ["read"])); // relaunches the app
+await expect(app.getByText("You can only view")).toBeVisible();
+
+await page.evaluate(() => window.__havenTestHost!.setLocale("de-DE"));
+await page.evaluate(() => window.__havenTestHost!.setNextScan({ fileName: "receipt.pdf", mimeType: "application/pdf", size: 1024 }));
+await app.getByRole("button", { name: "Scan" }).click();
+expect(await page.evaluate(() => window.__havenTestHost!.log.scans)).toHaveLength(1);
+```
+
+`setNextScan()` decides only the next scan (pass `bytes` to attach real content); `setScanMode()` decides the ones after it. `setDirectoryUsers()` and `setEnforceCapabilities()` apply to the next call.
+
+The Level 1 and 2 helpers take the same options: `createMockMindooDBAppSession({ enforceCapabilities: true, directoryUsers: generateDirectoryUsers(120) })`, with `setCapabilities()`, `setEnforceCapabilities()` and `setDirectoryUsers()` on the controller, and `createMemoryAttachments()` for a database's `methods.attachments`. `createFakeBridgeHost({ onResponse })` reports every answer with its duration.
+
+Lower-level pieces, if you build your own page: `createBrowserTestHost({ frame, appUrl, ...mockOptions })` wires one iframe to a fake host, and `host.acceptConnection(message, ports)` answers a handshake you received yourself.
+
+Keep the test page out of production builds. The starter template builds it only for `vite dev` and when `HAVEN_TEST_HOST=1` is set (for preview deployments), so the app's public URL keeps showing its landing page.
+
 ## When to use which level
 
 Choose Level 1 when:

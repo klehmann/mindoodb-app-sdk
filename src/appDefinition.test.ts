@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   MINDOODB_APP_DEFINITION_FORMAT,
   MINDOODB_APP_DEFINITION_VERSION,
+  mindooDBAppAcceptMatchesType,
   resolveMindooDBAppDefinitionUrl,
+  resolveMindooDBAppListingAssetUrl,
+  resolveMindooDBAppLocalizedText,
+  validateMindooDBAppAccepts,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 
@@ -108,6 +112,21 @@ describe("validateMindooDBAppDefinition", () => {
     ]);
   });
 
+  it("keeps a valid agentToolPrefix and rejects a reserved or malformed one", () => {
+    expect(validateMindooDBAppDefinition(baseDefinition({ agentToolPrefix: "vega" })).definition?.agentToolPrefix).toBe(
+      "vega",
+    );
+    for (const agentToolPrefix of ["haven", "Vega", "vega-app", "vega_", "a_very_long_prefix_x"]) {
+      expect(validateMindooDBAppDefinition(baseDefinition({ agentToolPrefix })).errors).toHaveLength(1);
+    }
+  });
+
+  it("keeps the device feature flags, motion sensors included", () => {
+    const result = validateMindooDBAppDefinition(baseDefinition({ allowCamera: true, allowMicrophone: true, allowMotion: true }));
+    expect(result.definition).toMatchObject({ allowCamera: true, allowMicrophone: true, allowMotion: true });
+    expect(validateMindooDBAppDefinition(baseDefinition({ allowMotion: "yes" })).errors.join()).toMatch(/allowMotion/);
+  });
+
   it("rejects a non-object payload", () => {
     expect(validateMindooDBAppDefinition("nope").errors).toEqual([
       "App definition must be a JSON object.",
@@ -139,5 +158,122 @@ describe("resolveMindooDBAppDefinitionUrl", () => {
 
   it("returns an empty string for blank input", () => {
     expect(resolveMindooDBAppDefinitionUrl("   ")).toBe("");
+  });
+});
+
+describe("app definition listing", () => {
+  it("normalizes a full listing", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        listing: {
+          summary: { en: " Plans trips. ", de: "Plant Reisen." },
+          description: "First paragraph.\n\nSecond paragraph.",
+          icon: "icon.svg",
+          screenshots: ["shots/1.webp", { file: "https://cdn.example.com/2.webp", caption: "Board" }],
+          publisher: { name: " Mindoo ", url: "https://mindoo.de" },
+        },
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.listing).toEqual({
+      summary: { en: "Plans trips.", de: "Plant Reisen." },
+      description: "First paragraph.\n\nSecond paragraph.",
+      icon: "icon.svg",
+      screenshots: [{ file: "shots/1.webp" }, { file: "https://cdn.example.com/2.webp", caption: "Board" }],
+      publisher: { name: "Mindoo", url: "https://mindoo.de" },
+    });
+  });
+
+  it("rejects unsafe asset URLs and localized maps without en", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        listing: {
+          summary: { de: "Nur Deutsch" },
+          icon: "javascript:alert(1)",
+          screenshots: [{ file: "//evil.example.com/x.png" }, { file: "data:image/png;base64,AA" }],
+          publisher: { name: "X", url: "http://insecure.example.com" },
+        },
+      }),
+    );
+    expect(definition).toBeNull();
+    expect(errors).toHaveLength(5);
+  });
+
+  it("caps the number of screenshots", () => {
+    const { errors } = validateMindooDBAppDefinition(
+      baseDefinition({ listing: { screenshots: Array.from({ length: 9 }, (_, i) => `s${i}.png`) } }),
+    );
+    expect(errors[0]).toMatch(/not list more than 8/);
+  });
+
+  it("resolves localized text by locale, language and en fallback", () => {
+    const text = { en: "Hello", de: "Hallo", "de-CH": "Grüezi" };
+    expect(resolveMindooDBAppLocalizedText(text, "de-CH")).toBe("Grüezi");
+    expect(resolveMindooDBAppLocalizedText(text, "de-AT")).toBe("Hallo");
+    expect(resolveMindooDBAppLocalizedText(text, "fr")).toBe("Hello");
+    expect(resolveMindooDBAppLocalizedText("Plain", "fr")).toBe("Plain");
+    expect(resolveMindooDBAppLocalizedText(undefined, "fr")).toBe("");
+  });
+
+  it("resolves listing assets against the app origin only", () => {
+    expect(resolveMindooDBAppListingAssetUrl("icon.svg", "https://app.example.com")).toBe(
+      "https://app.example.com/icon.svg",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("shots/a.png", "https://app.example.com/sub/")).toBe(
+      "https://app.example.com/sub/shots/a.png",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("icon.svg", "http://127.0.0.1:4300")).toBe(
+      "http://127.0.0.1:4300/icon.svg",
+    );
+    expect(resolveMindooDBAppListingAssetUrl("javascript:alert(1)", "https://app.example.com")).toBeNull();
+  });
+});
+
+describe("app definition accepts", () => {
+  it("keeps valid entries and normalizes MIME patterns", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        accepts: [
+          {
+            id: "attach",
+            label: { en: "Attach", de: "Anhängen" },
+            types: ["Image/*", "application/pdf"],
+            multiple: true,
+          },
+          { id: "import-assets", label: "Import assets", types: ["*/*"], folders: true, maxBytes: 1000 },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.accepts).toEqual([
+      {
+        id: "attach",
+        label: { en: "Attach", de: "Anhängen" },
+        types: ["image/*", "application/pdf"],
+        folders: undefined,
+        multiple: true,
+        maxBytes: undefined,
+      },
+      { id: "import-assets", label: "Import assets", types: ["*/*"], folders: true, multiple: undefined, maxBytes: 1000 },
+    ]);
+  });
+
+  it("rejects bad ids, duplicate ids, missing labels and invalid types", () => {
+    const bad = (accepts: unknown) => validateMindooDBAppDefinition(baseDefinition({ accepts })).errors;
+    expect(bad("x")).toHaveLength(1);
+    expect(bad([{ id: "Bad Id", label: "x", types: ["*/*"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: ["*/*"] }, { id: "a", label: "y", types: ["*/*"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", types: ["*/*"] }]).length).toBeGreaterThan(0);
+    expect(bad([{ id: "a", label: "x", types: ["not a type"] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: [] }])).toHaveLength(1);
+    expect(bad([{ id: "a", label: "x", types: ["*/*"], maxBytes: -1 }])).toHaveLength(1);
+  });
+
+  it("matches MIME patterns", () => {
+    expect(mindooDBAppAcceptMatchesType("image/*", "image/png")).toBe(true);
+    expect(mindooDBAppAcceptMatchesType("image/*", "application/pdf")).toBe(false);
+    expect(mindooDBAppAcceptMatchesType("*/*", "")).toBe(true);
+    expect(mindooDBAppAcceptMatchesType("text/plain", "text/plain; charset=utf-8")).toBe(true);
+    expect(validateMindooDBAppAccepts([{ id: "a", label: "x", types: ["*/*"] }]).errors).toEqual([]);
   });
 });

@@ -87,12 +87,16 @@ export function sanitizeHostShortcutBindings(value: unknown): MindooDBAppHostSho
 /**
  * Stops wheel chaining out of a hosted app document into Haven's workspace
  * scroller once the app page (or its `body`) has reached its end.
+ *
+ * The root gets `none`, not `contain`: `contain` still lets iOS rubber-band
+ * the frame's own root scroller, so a drag on a non-scrollable area (a fixed
+ * dialog header, say) slides every fixed overlay in the app with the finger.
  */
 export function applyHostedDocumentOverscrollContain(doc: Document | undefined = globalThis.document) {
   if (!doc?.documentElement) {
     return;
   }
-  doc.documentElement.style.overscrollBehavior = "contain";
+  doc.documentElement.style.overscrollBehavior = "none";
   if (doc.body) {
     doc.body.style.overscrollBehavior = "contain";
   }

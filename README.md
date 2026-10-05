@@ -22,26 +22,17 @@ A **MindooDB App** is any web application that uses this SDK to communicate with
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Haven (browser tab)                                    │
-│                                                         │
-│  ┌──────────────┐   ┌─────────────┐   ┌─────────────┐  │
-│  │  Haven UI    │──▶│ Bridge Host │──▶│  MindooDB    │  │
-│  │  (theme,     │   │  (RPC +     │   │  (encrypted  │  │
-│  │   viewport)  │   │   streams)  │   │   databases) │  │
-│  └──────────────┘   └──────┬──────┘   └─────────────┘  │
-│                            │                            │
-│              postMessage + MessagePort                  │
-│                            │                            │
-│  ┌─────────────────────────┼─────────────────────────┐  │
-│  │  Your App (sandboxed iframe / window)             │  │
-│  │                         │                         │  │
-│  │              ┌──────────▼──────────┐              │  │
-│  │              │  mindoodb-app-sdk   │              │  │
-│  │              └─────────────────────┘              │  │
-│  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph haven["Haven (browser tab)"]
+    direction TB
+    ui["Haven UI<br/>(theme, viewport)"] --> bridge["Bridge Host<br/>(RPC + streams)"]
+    bridge --> db["MindooDB<br/>(encrypted databases)"]
+    subgraph app["Your App (sandboxed iframe / window)"]
+      sdk["mindoodb-app-sdk"]
+    end
+    bridge -- "postMessage + MessagePort" --> sdk
+  end
 ```
 
 The bridge carries RPC calls (documents, views, database info), binary attachment streams, and push events (theme changes, viewport resizes) over a single `MessagePort`.
@@ -271,6 +262,77 @@ Show a notice when the app does not have host focus, or when a long task finishe
 
 Haven uses the app's registration label as the headline and ignores any title from the app. Pass the same `id` to update that notice in place. Omit `id` to add another notice. An id only matches notices from this launch. Omit `durationMs` and the notice stays until the user dismisses it or clicks it. A duration is clamped to about 1–8 seconds, which fits a short progress step such as "10%". Clicking the notice brings that launch back. The close button only dismisses it.
 
+### Agent tools (WebMCP)
+
+An app can offer its own operations to AI agents. Haven registers them with the browser's agent interface ([WebMCP](https://webmachinelearning.github.io/webmcp/)) next to Haven's own tools, so an agent in the browser — or a local agent connected through a WebMCP bridge — can call "create a mind map", "list open tasks" or "attach this file" instead of clicking through the UI.
+
+The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's tool prefix (`vega_maps_list` for `"agentToolPrefix": "vega"` in `haven-app.json`; without it Haven derives one from the app id or label), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
+
+Agents only see an app's tools while the user has **Agent tools** switched on in Haven (Settings → General) **and** has allowed this app (**Offer tools to AI agents** in the app's settings). Neither can be set by `haven-app.json`. `registerTools()` works either way; `enabled` in its answer says whether agents can call the tools right now.
+
+```ts
+import { createViewLanguage, MindooDBAppAgentToolError } from "mindoodb-app-sdk";
+
+const v = createViewLanguage<{ title: string; status: string; due: string }>();
+
+if (session.agent) {
+  await session.agent.registerTools([
+    {
+      name: "tasks_search",
+      description:
+        "Finds tasks by part of the title. Returns taskId, title, status and due date. " +
+        "Use the taskId with todo_tasks_complete.",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: { query: { type: "string", description: "Part of the title." } },
+      },
+      annotations: { readOnlyHint: true, untrustedContentHint: true },
+      async execute(input) {
+        const result = await database.documents.query({
+          filter: v.contains(v.lower(v.field("title")), v.string(String(input.query).toLowerCase())),
+          fields: ["title", "status", "due"],
+          limit: 20,
+        });
+        return { tasks: result.rows.map((row) => ({ taskId: row.docId, ...row.fields })) };
+      },
+    },
+    {
+      name: "tasks_complete",
+      description: "Marks a task as done. taskId comes from todo_tasks_search; never pass a title.",
+      inputSchema: {
+        type: "object",
+        required: ["taskId"],
+        properties: { taskId: { type: "string" } },
+      },
+      async execute(input) {
+        const taskId = String(input.taskId ?? "");
+        const task = await database.documents.get(taskId).catch(() => null);
+        if (!task) {
+          throw new MindooDBAppAgentToolError("NOT_FOUND", `No task "${taskId}".`, "call todo_tasks_search");
+        }
+        await database.documents.update(taskId, { set: { status: "done" } });
+        return { taskId, status: "done" };
+      },
+    },
+  ]);
+
+  // What the user has open, for "this task" / "the selected one". Small and semantic.
+  await session.agent.setContext({ view: "list", selectedTaskId: null });
+}
+```
+
+- **`registerTools(tools)`** replaces the app's whole tool set; call it again when the set changes (e.g. after a document opens). At most 64 tools; names are lower case, digits and `_`, starting with a letter. Fewer is better: every tool costs the model context on each request and makes choosing harder, so large apps register the tools of the area the user has open and add the rest on demand.
+- **`description`** is written for a model: what the tool does, when to use it, where ids come from, what it returns. **`inputSchema`** is a JSON Schema object; use `enum` for fixed choices.
+- **`annotations`**: `readOnlyHint` for reads; `consequentialHint` for anything the user should confirm (sending, sharing, deleting) — Haven shows its own confirmation dialog and a refusal reaches the agent as `NOT_ALLOWED`; `untrustedContentHint` when the result contains text other people wrote.
+- **Errors**: throw `MindooDBAppAgentToolError(code, message, requiredAction?)` with `NOT_FOUND`, `INVALID_INPUT`, `INVALID_STATE`, `STATE_CHANGED`, `NOT_ALLOWED` or `FAILED`; `requiredAction` tells the agent what to do next ("call todo_tasks_search"). Any other exception becomes `FAILED`. Haven passes the agent one JSON error.
+- **Results** must be JSON. Return what changed (ids, new values), not just `ok`.
+- **`setContext(context)`** shows the app's state to agents in `haven_get_context` under the focused app.
+- **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
+- A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
+
+`session.agent` is absent on hosts without agent tools, so check for it. Test tools by calling `execute` directly in unit tests; the reference implementation is `src/features/agent/` in [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega). How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
+
 ### Host-owned drag
 
 When two apps run as visible workspace chicklets, native HTML5 drag dies at the iframe boundary. The SDK therefore hands the gesture to Haven: the source starts it, Haven draws a PNG ghost above every frame, and the target hit-tests the drop.
@@ -297,6 +359,38 @@ const unbind = session.drag.bindSource(cardEl, {
 
 `bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). After start, the source frame keeps the pressed pointer (browsers do not retarget mouse-capture into Haven) and forwards `pointermove` / `pointerup` to the host. You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview, then `reportPointer` / `release`. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
 
+### Receiving files and content
+
+Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:
+
+```json
+"accepts": [
+  {
+    "id": "attach",
+    "label": { "en": "Attach to the open document", "de": "An das offene Dokument anhängen" },
+    "types": ["image/*", "application/pdf", "*/*"]
+  },
+  { "id": "import-assets", "label": "Import as asset set", "types": ["*/*"], "folders": true, "maxBytes": 524288000 }
+]
+```
+
+Each entry is one choice in Haven's picker. `types` are MIME patterns (`text/plain` for shared text, `text/uri-list` for links), `folders: true` allows whole folders with relative paths, `multiple: false` limits it to one item, `maxBytes` caps the total size. Open apps are listed first.
+
+```ts
+session.onIncomingContent(async (content) => {
+  if (content.acceptId !== "attach") {
+    return { status: "rejected", message: "Unknown action" };
+  }
+  for (const item of content.items) {
+    const blob = await item.read(); // streamed from Haven in 1 MiB chunks
+    await attachments.add(item.path, blob);
+  }
+  return { status: "accepted", message: `${content.items.length} attachment(s) added` };
+});
+```
+
+Register the handler once, early. Haven waits for it before delivering, so a launch started for a delivery receives it as soon as the handler exists. `item.path` is relative (`assets/logo.png` inside a shared folder) and never absolute. What the app does with the content is up to the app. The returned `status` and `message` are shown to the user; a throwing handler counts as `rejected`. In tests, `createMockMindooDBAppSession().emitIncomingContent({ acceptId, items })` plays Haven's part.
+
 ### Databases and capabilities
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
@@ -310,6 +404,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
+| `directory`   | List the tenant's users (`directory.listUsers()`), resolve signing keys |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -324,6 +419,21 @@ if (!db.capabilities.includes("delete")) {
 ```
 
 When the database is readable, `documents.list()` can also expose deleted document IDs by setting `status: "all"` or `status: "deleted"`. This is useful for app-side indexes and sync checkpoints.
+
+### Directory users
+
+With the `directory` capability, `db.directory.listUsers()` returns the tenant's active usernames, e.g. for a recipient picker. For large directories ask for pages instead, with an optional case-insensitive search:
+
+```ts
+let cursor: string | null = null;
+do {
+  const page = await db.directory.listUsers({ query: "ann", cursor, limit: 50 });
+  addOptions(page.users);
+  cursor = page.nextCursor;
+} while (cursor);
+```
+
+Hosts that do not page yet answer with the full list; the SDK then filters and pages it on the client, so the paged form works with every Haven version.
 
 ### Sealed channels
 
@@ -770,23 +880,11 @@ Two layers are available:
 
 The end-to-end flow is the same in both cases:
 
-```
-            ┌────────────────────────────────────────────────────┐
-  edit ───► │ App buffer (local string + pending splices)        │ ──► flush
-            └─────────────────────────┬──────────────────────────┘
-                                      │ documents.update({
-                                      │   text: [{ path, baseHeads, edits }]
-                                      │ })
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ Haven applies edits at `baseHeads` and merges with │
-            │ concurrent changes via Automerge                   │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ canonical merged document
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ App reconciles its editor with the canonical text  │
-            └────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  edit(["edit"]) --> buffer["App buffer<br/>(local string + pending splices)"]
+  buffer -- "flush: documents.update({ text: [{ path, baseHeads, edits }] })" --> merge["Haven applies edits at baseHeads<br/>and merges with concurrent changes via Automerge"]
+  merge -- "canonical merged document" --> reconcile["App reconciles its editor<br/>with the canonical text"]
 ```
 
 #### Text patch shape
@@ -1016,24 +1114,14 @@ If you must use binary sync, Haven decrypts the canonical document, merges incom
 
 Typical flow:
 
-```
-            ┌────────────────────────────────────────────────────┐
-  open  ──► │ getAutomergeSnapshot → load local replica          │
-            └─────────────────────────┬──────────────────────────┘
-                                      │
-  edit  ──► │ Local Automerge doc (or span edits applied locally)  │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ getChangesSince(baseHeads)
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-  save  ──► │ applyAutomergeChanges({ baseHeads, replicaHeads,   │
-            │                       changes })                   │
-            └─────────────────────────┬──────────────────────────┘
-                                      │ Haven merges + persists
-                                      ▼
-            ┌────────────────────────────────────────────────────┐
-            │ Apply result.changesSince locally (or skip if empty) │
-            └────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  open(["open"]) --> snapshot["getAutomergeSnapshot<br/>→ load local replica"]
+  snapshot --> local["Local Automerge doc<br/>(or span edits applied locally)"]
+  editStep(["edit"]) --> local
+  local -- "getChangesSince(baseHeads)" --> apply["applyAutomergeChanges({<br/>baseHeads, replicaHeads, changes })"]
+  saveStep(["save"]) --> apply
+  apply -- "Haven merges + persists" --> result["Apply result.changesSince locally<br/>(or skip if empty)"]
 ```
 
 Bridge RPCs: `documents.automerge.getSnapshot` and `documents.automerge.applyChanges`.
@@ -1692,6 +1780,45 @@ wrangler deploy
 
 Other static hosting options work just as well: Netlify, Vercel, any web server serving your `dist/` folder.
 
+### Sharing an app by its URL
+
+Anyone who opens your app's address directly — not from inside Haven — has no host to talk to. Instead of letting the bridge handshake time out into an error, branch on `isLaunchedByHaven()` before mounting and show a landing page:
+
+```ts
+import { isLaunchedByHaven, renderHavenAppLandingPage } from "mindoodb-app-sdk";
+
+if (isLaunchedByHaven()) {
+  createApp(App).mount("#app");
+} else {
+  void renderHavenAppLandingPage();
+}
+```
+
+Haven puts `mindoodbAppLaunchId` into every launch URL, so the check is synchronous. `renderHavenAppLandingPage()` reads `haven-app.json` from the same origin and shows the app's name, summary, description and screenshots, plus a button to `https://haven.mindoodb.com/?app=<your app URL>` (pass `havenUrl` for another Haven instance). Haven then walks a new user through setup with your app installed at the end, or offers an existing user to add it.
+
+What the page shows comes from the optional `listing` in `haven-app.json`. Haven's setup wizard shows the same fields:
+
+```json
+{
+  "listing": {
+    "summary": { "en": "Plan trips together.", "de": "Reisen gemeinsam planen." },
+    "description": { "en": "First paragraph.\n\nSecond paragraph." },
+    "descriptionMarkdown": { "en": "**Plan** together.\n\n- Shared board\n- [Website](https://trips.example.com)" },
+    "icon": "icon.svg",
+    "screenshots": [{ "file": "screenshots/board.webp", "caption": { "en": "The trip board" } }],
+    "publisher": { "name": "Mindoo GmbH", "url": "https://mindoo.de" }
+  }
+}
+```
+
+Texts are a string or a per-locale map with an `en` fallback. Image paths are relative to the app origin or absolute `https:` URLs. The listing is display-only and grants nothing.
+
+Opening the app URL directly also puts share tags into `index.html` (`twitter:card` = `summary`, plus the Open Graph tags other apps read), with the app icon as the image. A production build takes the absolute URL from `publicUrl` in `haven-app.json`. `vite dev` uses the dev server's own origin instead, so `http://127.0.0.1:<port>/` previews against itself. Crawlers do not run the landing page's JavaScript, which is why the tags are in the HTML file.
+
+`description` is plain text. `descriptionMarkdown` is the same text with formatting, in a small Markdown subset: paragraphs, headings, bullet and numbered lists, `**bold**`, `_italic_`, `` `code` ``, `[text](https://…)`, `[text](mailto:…)` and bare `https://…` links. Links to any other scheme render as plain text. Readers that know `descriptionMarkdown` show it instead of `description`; older Haven versions ignore it, so set both if they matter. `listingMarkdownToPlainText()` derives the plain version. A publisher `url` (`https:` only) turns the publisher name into a link.
+
+For automated and manual tests use a separate test URL that frames the app with a mock host instead — see "Browser test host" in [`TESTING.md`](./TESTING.md). End users never see that page, and they never see mock data.
+
 ### Haven-hosted bundles
 
 Instead of Haven loading your app from your server on every launch, you can hand Haven the build itself. Haven stores it in its own cache and serves it from a service worker on an opaque origin, so the app loads offline and runs in a stricter sandbox than an external URL gets.
@@ -1797,6 +1924,10 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `hasHostFocus()`                      | `Promise<boolean>`                   |
 | `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
 | `notify(input)`                       | `Promise<{ id: string }>`            |
+| `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
+| `agent?.setContext(context)`          | `Promise<void>`                      |
+| `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |
+| `agent?.takeFile(fileRef)`            | `Promise<File>`                      |
 | `drag.setProfile(profile)`            | `Promise<void>`                      |
 | `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
 | `drag.cancel()`                       | `Promise<void>`                      |

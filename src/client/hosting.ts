@@ -7,6 +7,44 @@ import type { MindooDBAppHostingMode } from "../types";
 export const MINDOODB_APP_HOSTING_QUERY_PARAM = "mindoodbAppHosting";
 
 /**
+ * Query parameter Haven appends to every app launch URL. The bridge handshake is keyed
+ * on it, so its absence means nobody launched this page.
+ */
+export const MINDOODB_APP_LAUNCH_ID_QUERY_PARAM = "mindoodbAppLaunchId";
+
+/**
+ * Reads the launch id Haven put into the current URL, or `null` when there is none.
+ *
+ * @param search Optional query string, defaults to `window.location.search`.
+ */
+export function readMindooDBAppLaunchId(search?: string): string | null {
+  const raw = search ?? (typeof window === "undefined" ? "" : window.location.search);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const launchId = new URLSearchParams(raw).get(MINDOODB_APP_LAUNCH_ID_QUERY_PARAM)?.trim();
+    return launchId || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when Haven (or a test host) launched this page, decided synchronously from the URL.
+ *
+ * Someone who opens the app's address directly — a link in an email, a shared URL — has
+ * no host to talk to. Branch on this before calling `connect()` and show a landing page
+ * instead (see `renderHavenAppLandingPage`), rather than letting the handshake time out
+ * into an error message.
+ *
+ * @param search Optional query string, defaults to `window.location.search`.
+ */
+export function isLaunchedByHaven(search?: string): boolean {
+  return readMindooDBAppLaunchId(search) !== null;
+}
+
+/**
  * Reads the hosting mode synchronously from the current URL.
  *
  * Boot-time decisions — registering a service worker, installing the storage shim —
