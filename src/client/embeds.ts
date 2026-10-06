@@ -26,12 +26,87 @@ function toRect(rect: MindooDBAppEmbedRect): MindooDBAppEmbedRect {
   };
 }
 
+/** A component's rectangle: the container's, in this app's viewport. */
+function containerRect(container: HTMLElement): MindooDBAppEmbedRect {
+  const bounds = container.getBoundingClientRect();
+  return toRect({ left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height });
+}
+
+/** What Haven answers to `embeds.open`; older Havens send only the id. */
+interface EmbedOpenResponse {
+  embedId: string;
+  frame?: { url: string; allow?: string };
+}
+
+/**
+ * Reports the container's rectangle whenever it may have moved: Haven needs it to
+ * lay an overlay over the container and, with `frame` placement, to position
+ * menus and drag feedback of the component.
+ */
+class ContainerTracker {
+  private frameRequest: number | null = null;
+  private readonly observer: ResizeObserver | null;
+  private readonly schedule = () => {
+    if (this.frameRequest !== null) {
+      return;
+    }
+    this.frameRequest = window.requestAnimationFrame(() => {
+      this.frameRequest = null;
+      this.report(containerRect(this.container));
+    });
+  };
+
+  constructor(
+    private readonly container: HTMLElement,
+    private readonly report: (rect: MindooDBAppEmbedRect) => void,
+  ) {
+    this.observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(this.schedule);
+    this.observer?.observe(container);
+    window.addEventListener("resize", this.schedule);
+    window.addEventListener("scroll", this.schedule, true);
+  }
+
+  dispose() {
+    this.observer?.disconnect();
+    window.removeEventListener("resize", this.schedule);
+    window.removeEventListener("scroll", this.schedule, true);
+    if (this.frameRequest !== null) {
+      window.cancelAnimationFrame(this.frameRequest);
+    }
+  }
+}
+
+/**
+ * The frame for `frame` placement. It loads Haven's relay page, which frames the
+ * component; this app never sees the component's document or its connection.
+ */
+function createComponentFrame(container: HTMLElement, url: string, allow: string | undefined) {
+  const frame = container.ownerDocument.createElement("iframe");
+  frame.src = url;
+  if (allow) {
+    frame.setAttribute("allow", allow);
+  }
+  frame.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+  frame.dataset.mindoodbEmbed = "";
+  Object.assign(frame.style, {
+    position: "absolute",
+    inset: "0",
+    width: "100%",
+    height: "100%",
+    border: "0",
+    display: "block",
+  });
+  container.appendChild(frame);
+  return frame;
+}
+
 /** One component shown inside this app; settles once when Haven reports it closed. */
 class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
   public readonly closed: Promise<MindooDBAppEmbedClosedEvent>;
   private resolveClosed!: (event: MindooDBAppEmbedClosedEvent) => void;
   private closedEvent: MindooDBAppEmbedClosedEvent | null = null;
   private readonly listeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
+  private tracker: ContainerTracker | null = null;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -39,10 +114,21 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     public readonly componentKey: string,
     public readonly databaseId: string,
     public readonly docId: string,
+    public readonly frame: HTMLIFrameElement | null,
+    container: HTMLElement | undefined,
   ) {
     this.closed = new Promise((resolve) => {
       this.resolveClosed = resolve;
     });
+    if (container) {
+      this.tracker = new ContainerTracker(container, (rect) => {
+        void this.setRect(rect).catch(() => {});
+      });
+    }
+  }
+
+  get placement(): "frame" | "overlay" {
+    return this.frame ? "frame" : "overlay";
   }
 
   async setRect(rect: MindooDBAppEmbedRect) {
@@ -54,6 +140,11 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
 
   async setVisible(visible: boolean) {
     if (this.closedEvent) {
+      return;
+    }
+    if (this.frame) {
+      // Part of this app's page: hiding it is this app's business.
+      this.frame.style.visibility = visible ? "" : "hidden";
       return;
     }
     await this.rpc.call("embeds.setVisible", { embedId: this.embedId, visible: visible === true });
@@ -83,6 +174,9 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
       return;
     }
     this.closedEvent = event;
+    this.tracker?.dispose();
+    this.tracker = null;
+    this.frame?.remove();
     this.resolveClosed(event);
     this.listeners.forEach((listener) => {
       try {
@@ -98,9 +192,11 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
 /**
  * `session.components`, `session.embeds` and `session.embedding`.
  *
- * Haven does all the work: it finds the components, runs the embedded app in a
- * sandbox and positions its frame over the rectangle this app reports. This class
- * only forwards calls and turns `embed-event` pushes into closed events.
+ * Haven does all the work: it finds the components and runs the embedded app in a
+ * sandbox. With a `container` the SDK puts Haven's relay page into it, otherwise
+ * Haven positions the component over the rectangle this app reports. This class
+ * forwards calls, keeps that rectangle current and turns `embed-event` pushes into
+ * closed events.
  */
 export class MindooDBAppEmbedsClient {
   public readonly components: MindooDBAppComponentsApi;
@@ -135,15 +231,25 @@ export class MindooDBAppEmbedsClient {
     };
     this.embeds = {
       open: async (input: MindooDBAppEmbedOpenInput) => {
-        const response = await this.rpc.call<{ embedId: string }>("embeds.open", {
-          input: { ...input, rect: toRect(input.rect) },
+        const { container, rect, ...rest } = input;
+        const initialRect = container ? containerRect(container) : toRect(rect ?? { left: 0, top: 0, width: 0, height: 0 });
+        const response = await this.rpc.call<EmbedOpenResponse>("embeds.open", {
+          // `frame`: Haven hands back a page for the container instead of laying
+          // the component over this app. Havens that do not know it ignore it.
+          input: { ...rest, rect: initialRect, ...(container ? { placement: "frame" } : {}) },
         });
+        const frame =
+          container && response.frame?.url
+            ? createComponentFrame(container, response.frame.url, response.frame.allow)
+            : null;
         const embed = new MindooDBAppEmbedImpl(
           this.rpc,
           response.embedId,
           input.componentKey,
           input.databaseId,
           input.docId,
+          frame,
+          container,
         );
         const early = this.early.get(embed.embedId);
         if (early) {

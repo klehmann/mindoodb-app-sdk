@@ -3447,6 +3447,12 @@ export interface CreateMockMindooDBAppSessionOptions {
   components?: MindooDBAppComponentInfo[];
   /** Called whenever the app opens, moves or closes an embed. */
   onEmbedChange?: (embeds: readonly MockEmbedState[]) => void;
+  /**
+   * Answer `embeds.open` with a `container` like a current Haven: with this page
+   * for the SDK to frame (e.g. `about:blank`). Without it the host behaves like an
+   * older Haven and the component is laid over the container.
+   */
+  embedFrameUrl?: string;
 }
 
 /**
@@ -4002,8 +4008,13 @@ export function createFakeBridgeHost(
             (params.query ?? undefined) as MindooDBAppComponentQuery | undefined,
           ),
         };
-      case "embeds.open":
-        return { embedId: await state.embedHost.openEmbed(params.input as MindooDBAppEmbedOpenInput) };
+      case "embeds.open": {
+        const input = params.input as MindooDBAppEmbedOpenInput & { placement?: string };
+        const embedId = await state.embedHost.openEmbed(input);
+        return input.placement === "frame" && options.embedFrameUrl
+          ? { embedId, frame: { url: options.embedFrameUrl } }
+          : { embedId };
+      }
       case "embeds.setRect":
         state.embedHost.setRect(String(params.embedId), params.rect as MindooDBAppEmbedRect);
         return { ok: true };
