@@ -1628,8 +1628,23 @@ export interface MindooDBAppEmbedOpenInput {
   docId: string;
   /** Default `edit`. `view` gives the component read access only. */
   intent?: "edit" | "view";
-  /** Where the component appears, in this app's viewport. */
-  rect: MindooDBAppEmbedRect;
+  /**
+   * The element to show the component in (recommended). The SDK puts a frame into
+   * it that fills it (`position: absolute; inset: 0`, so give the element a
+   * position), and the component then belongs to this app's page: it scrolls,
+   * clips and stacks with it, and this app's menus and dialogs cover it as usual.
+   * The frame holds a page of Haven's that loads the component, so this app never
+   * reaches into the component or its connection.
+   *
+   * Havens that predate this lay the component over the element instead; the SDK
+   * then keeps the rectangle in step with the element itself.
+   */
+  container?: HTMLElement;
+  /**
+   * Without `container`: where Haven lays the component over this app, in this
+   * app's viewport. Keep it current with `setRect`.
+   */
+  rect?: MindooDBAppEmbedRect;
   /** Default true. */
   visible?: boolean;
 }
@@ -1652,7 +1667,19 @@ export interface MindooDBAppEmbed {
   readonly componentKey: string;
   readonly databaseId: string;
   readonly docId: string;
-  /** Move or resize; coordinates are in this app's viewport. */
+  /**
+   * `frame`: the component is a frame in `container` and stacks like any element
+   * of this page. `overlay`: Haven lays it over this page, above everything in it,
+   * so hide it (`setVisible(false)`) while a menu or dialog of this app would
+   * overlap it.
+   */
+  readonly placement: "frame" | "overlay";
+  /** The component's frame in `container` (`frame` placement), else null. */
+  readonly frame: HTMLIFrameElement | null;
+  /**
+   * Move or resize; coordinates are in this app's viewport. Not needed with a
+   * `container`, whose rectangle the SDK follows itself.
+   */
   setRect(rect: MindooDBAppEmbedRect): Promise<void>;
   /** Hide without closing, e.g. while a dialog of the host covers it. */
   setVisible(visible: boolean): Promise<void>;
@@ -1672,7 +1699,7 @@ export interface MindooDBAppComponentsApi {
 /** Show another app's component inside this app. */
 export interface MindooDBAppEmbedsApi {
   /**
-   * Shows the component over `rect`. Haven copies the root document and its
+   * Shows the component in `container` (or over `rect`). Haven copies the root document and its
    * children into a sandbox, runs the component against it and writes the changes
    * back to `databaseId`, which this app must be allowed to read and (for `edit`)
    * update. The first time, Haven asks the user to allow the pairing.

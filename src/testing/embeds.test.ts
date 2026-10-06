@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * Components and embeds through the mock host: in process (`createMockMindooDBAppSession`)
  * and over the real bridge port (`createFakeBridgeHost`), which is what an app's
@@ -68,6 +69,51 @@ describe("mock components and embeds", () => {
     const session = await mock.bridge.connect();
     await session.embedding.complete({ saved: true });
     expect(mock.getEmbeddingFinish()).toEqual({ reason: "completed", result: { saved: true } });
+  });
+
+  it("puts the component's frame into the container and removes it when it closes", async () => {
+    const host = createFakeBridgeHost({
+      components: [sheet],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+      embedFrameUrl: "about:blank#relay",
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const embed = await session.embeds.open({ componentKey: sheet.key, databaseId: "crm", docId: "sheet1", container });
+      expect(embed.placement).toBe("frame");
+      expect(container.querySelector("iframe")?.getAttribute("src")).toBe("about:blank#relay");
+      await embed.setVisible(false);
+      expect(embed.frame?.style.visibility).toBe("hidden");
+      host.closeEmbed(embed.embedId, "completed");
+      await embed.closed;
+      expect(container.querySelector("iframe")).toBeNull();
+      container.remove();
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("falls back to an overlay over the container on Havens without frames", async () => {
+    const host = createFakeBridgeHost({
+      components: [sheet],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      const container = document.createElement("div");
+      const embed = await session.embeds.open({ componentKey: sheet.key, databaseId: "crm", docId: "sheet1", container });
+      expect(embed.placement).toBe("overlay");
+      expect(embed.frame).toBeNull();
+      expect(container.childElementCount).toBe(0);
+      expect(host.listEmbeds()).toHaveLength(1);
+      await embed.close();
+    } finally {
+      host.dispose();
+    }
   });
 
   it("works over the bridge port, including the closed push", async () => {

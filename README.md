@@ -435,18 +435,29 @@ const embed = await session.embeds.open({
   componentKey: sheet.key,
   databaseId: "crm",
   docId: doc.id,
-  rect: panel.getBoundingClientRect(), // in this app's viewport
+  container: panel, // a positioned element; the component fills it
 });
-new ResizeObserver(() => void embed.setRect(panel.getBoundingClientRect())).observe(panel);
 const closed = await embed.closed; // { reason: "completed" | "cancelled" | "closed" | "error", result? }
 ```
 
-Haven lays the component's frame over the rectangle, above the host's frame, so the
-host cannot draw on top of it; hide it with `embed.setVisible(false)` while a dialog of
-the host should be visible. The first time a host embeds a component, Haven asks the user.
+The SDK puts a frame into `container`, so the component is part of the host's page: it
+scrolls, clips and resizes with it, and the host's menus and dialogs cover it like any
+other element. The frame holds a page from Haven's origin that loads the component and
+hands its connection to Haven, so the host cannot reach into the component or its data
+channel. Haven tells the SDK where the container is (for the component's own menus);
+the SDK follows the container's size and position by itself.
+
+Havens that predate this lay the component over the container instead, above the host's
+frame (`embed.placement === "overlay"`). The host then cannot draw on top of it: hide it
+with `embed.setVisible(false)` while a menu or dialog of the host should be visible.
+Without a `container`, pass `rect` (in this app's viewport) and keep it current with
+`embed.setRect` to get that overlay explicitly.
+
+The first time a host embeds a component, Haven asks the user.
 In tests, `createMockMindooDBAppSession({ components })` records embeds
 (`listEmbeds`, `closeEmbed`), and the `/__haven-test/` page draws a stand-in with
-Done/Cancel buttons.
+Done/Cancel buttons over the container. `createFakeBridgeHost({ embedFrameUrl })`
+answers like a current Haven, so the SDK frames that URL in the container.
 
 ### Databases and capabilities
 

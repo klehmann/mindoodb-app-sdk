@@ -80,6 +80,15 @@ export function createMockEmbedHost(
     options.onEmbedChange?.([...embeds.values()].map((entry) => ({ ...entry, rect: { ...entry.rect } })));
   }
 
+  /** The mock has no relay page, so it behaves like an overlay Haven. */
+  function mockRect(input: MindooDBAppEmbedOpenInput): MindooDBAppEmbedRect {
+    if (input.rect) {
+      return { ...input.rect };
+    }
+    const bounds = input.container?.getBoundingClientRect();
+    return { left: bounds?.left ?? 0, top: bounds?.top ?? 0, width: bounds?.width ?? 0, height: bounds?.height ?? 0 };
+  }
+
   async function openEmbed(input: MindooDBAppEmbedOpenInput) {
     const component = components.find((entry) => entry.key === input.componentKey);
     if (!component) {
@@ -104,7 +113,7 @@ export function createMockEmbedHost(
       databaseId: input.databaseId,
       docId: input.docId,
       intent,
-      rect: { ...input.rect },
+      rect: mockRect(input),
       visible: input.visible !== false,
     });
     notifyChange();
@@ -127,6 +136,8 @@ export function createMockEmbedHost(
   }
 
   class MockEmbed implements MindooDBAppEmbed {
+    readonly placement = "overlay" as const;
+    readonly frame = null;
     readonly closed: Promise<MindooDBAppEmbedClosedEvent>;
     private resolve!: (event: MindooDBAppEmbedClosedEvent) => void;
     private listeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
