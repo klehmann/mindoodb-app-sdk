@@ -1100,6 +1100,26 @@ function extractMockSummaryFields(
         });
     }
   }
+  // Slim `_encryptFor` projection, as MindooDB's `projectRecipients`: who the
+  // document is shared with and whether that entry is still active, without
+  // the signing keys and fingerprints of the full entries.
+  if ((setup?.includeRecipients ?? true) && !isExcluded("_encryptFor")) {
+    const encryptFor = data._encryptFor;
+    if (encryptFor && typeof encryptFor === "object" && !Array.isArray(encryptFor)) {
+      const projected: Record<string, Record<string, unknown>> = {};
+      for (const [id, entry] of Object.entries(encryptFor as Record<string, unknown>)) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+        const raw = entry as Record<string, unknown>;
+        const info: Record<string, unknown> = { kind: raw.kind === "device" ? "device" : "user" };
+        if (typeof raw.label === "string") info.label = raw.label;
+        for (const key of ["addedAt", "removedAt"]) {
+          if (typeof raw[key] === "number" && Number.isFinite(raw[key])) info[key] = raw[key];
+        }
+        projected[id] = info;
+      }
+      if (Object.keys(projected).length > 0) fields._encryptFor = projected;
+    }
+  }
   return fields;
 }
 
