@@ -116,6 +116,68 @@ describe("mock components and embeds", () => {
     }
   });
 
+  it("tells the host when the component has unsaved changes and saves on request", async () => {
+    const host = createFakeBridgeHost({
+      components: [sheet],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      const embed = await session.embeds.open({ componentKey: sheet.key, databaseId: "crm", docId: "sheet1" });
+      expect(embed.dirty).toBeUndefined();
+      const seen: boolean[] = [];
+      embed.onDirtyChange((dirty) => seen.push(dirty));
+
+      host.setEmbedDirty(embed.embedId, true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(embed.dirty).toBe(true);
+
+      await embed.save();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(embed.dirty).toBe(false);
+      expect(seen).toEqual([true, false]);
+
+      host.setEmbedDirty(embed.embedId, true);
+      host.failNextEmbedSave("Disk full");
+      await expect(embed.save()).rejects.toThrow("Disk full");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(embed.dirty).toBe(true);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("lets a component report unsaved changes and answer save requests", async () => {
+    const host = createFakeBridgeHost({ databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read"] } }] });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      await session.embedding.setDirty(true);
+      expect(host.getEmbeddingDirty()).toBe(true);
+
+      // Without a handler the host learns that saving on request is not supported.
+      await expect(host.requestEmbeddingSave()).rejects.toThrow("unsupported");
+
+      let saves = 0;
+      const stop = session.embedding.onSaveRequest(async () => {
+        saves += 1;
+        await session.embedding.setDirty(false);
+      });
+      await host.requestEmbeddingSave();
+      expect(saves).toBe(1);
+      expect(host.getEmbeddingDirty()).toBe(false);
+
+      stop();
+      session.embedding.onSaveRequest(() => {
+        throw new Error("Not now");
+      });
+      await expect(host.requestEmbeddingSave()).rejects.toThrow("Not now");
+    } finally {
+      host.dispose();
+    }
+  });
+
   it("works over the bridge port, including the closed push", async () => {
     const host = createFakeBridgeHost({
       components: [sheet],

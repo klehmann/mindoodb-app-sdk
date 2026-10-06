@@ -447,6 +447,30 @@ hands its connection to Haven, so the host cannot reach into the component or it
 channel. Haven tells the SDK where the container is (for the component's own menus);
 the SDK follows the container's size and position by itself.
 
+**Unsaved changes.** A component reports whether it has changes it has not saved yet,
+and saves when its host asks:
+
+```ts
+// component
+watch(isDirty, (dirty) => void session.embedding.setDirty(dirty));
+session.embedding.onSaveRequest(() => saveFile()); // throw to report a failure
+
+// host, e.g. when the user closes the tab
+if (embed.dirty) {
+  const choice = await askSaveDiscardCancel();
+  if (choice === "cancel") return;
+  if (choice === "save") await embed.save(); // rejects with the component's error
+  await embed.close({ discard: choice === "discard" });
+} else {
+  await embed.close(); // the component may still flush (onBeforeClose)
+}
+```
+
+`embed.dirty` is `undefined` until the component reports anything, so a component that
+never does is closed without asking; `embed.onDirtyChange` lets the host mark it (e.g. a
+dot in its tab). `embed.save()` rejects with `unsupported` when the component has no save
+handler.
+
 Havens that predate this lay the component over the container instead, above the host's
 frame (`embed.placement === "overlay"`). The host then cannot draw on top of it: hide it
 with `embed.setVisible(false)` while a menu or dialog of the host should be visible.
@@ -457,7 +481,9 @@ The first time a host embeds a component, Haven asks the user.
 In tests, `createMockMindooDBAppSession({ components })` records embeds
 (`listEmbeds`, `closeEmbed`), and the `/__haven-test/` page draws a stand-in with
 Done/Cancel buttons over the container. `createFakeBridgeHost({ embedFrameUrl })`
-answers like a current Haven, so the SDK frames that URL in the container.
+answers like a current Haven, so the SDK frames that URL in the container. Both
+controllers simulate unsaved changes: `setEmbedDirty`, `failNextEmbedSave`, and for an
+app under test that is a component, `getEmbeddingDirty` and `requestEmbeddingSave`.
 
 ### Databases and capabilities
 

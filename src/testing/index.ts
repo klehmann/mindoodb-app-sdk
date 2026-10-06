@@ -3518,6 +3518,14 @@ export interface MockMindooDBAppSessionController {
   setComponents(components: MindooDBAppComponentInfo[]): void;
   /** For an app under test that runs as a component: its `session.embedding` call. */
   getEmbeddingFinish(): MockEmbeddingFinish | null;
+  /** As if the embedded component reported (un)saved changes; the app's embed follows. */
+  setEmbedDirty(embedId: string, dirty: boolean): void;
+  /** Makes the app's next `embed.save()` fail with this message. */
+  failNextEmbedSave(message: string): void;
+  /** For an app under test that runs as a component: its last `embedding.setDirty`. */
+  getEmbeddingDirty(): boolean | undefined;
+  /** For an app under test that runs as a component: asks it to save, as its host would. */
+  requestEmbeddingSave(): Promise<void>;
 }
 
 export type { MockEmbeddingFinish, MockEmbedState } from "./mockEmbeds.js";
@@ -3605,6 +3613,10 @@ export function createMockMindooDBAppSession(
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     setComponents: (components) => state.embedHost.setComponents(components),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
+    setEmbedDirty: (embedId, dirty) => state.embedHost.setEmbedDirty(embedId, dirty),
+    failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
+    getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
+    requestEmbeddingSave: () => state.embedHost.requestEmbeddingSave(),
   };
 }
 
@@ -3700,6 +3712,17 @@ export interface FakeBridgeHostController {
   closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
   /** For an app under test that runs as a component: its `session.embedding` call. */
   getEmbeddingFinish(): MockEmbeddingFinish | null;
+  /** As if the embedded component reported (un)saved changes; pushes the `embed-event`. */
+  setEmbedDirty(embedId: string, dirty: boolean): void;
+  /** Makes the app's next `embed.save()` fail with this message. */
+  failNextEmbedSave(message: string): void;
+  /** For an app under test that runs as a component: its last `embedding.setDirty`. */
+  getEmbeddingDirty(): boolean | undefined;
+  /**
+   * For an app under test that runs as a component: pushes the host's save request
+   * over the port and resolves or rejects with the app's answer.
+   */
+  requestEmbeddingSave(): Promise<void>;
 }
 
 /** What the fake host's built-in dispatch returns for a method it does not know. */
@@ -3719,6 +3742,14 @@ export function createFakeBridgeHost(
       port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "closed", ...event } }),
     );
   });
+  state.embedHost.onDirty((event) => {
+    connectedPorts.forEach((port) =>
+      port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "dirty", ...event } }),
+    );
+  });
+  /** Save requests pushed to the app as a component, waiting for `embedding.respond`. */
+  const embeddingRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  let embeddingRequestCounter = 0;
   const beforeCloseWaiters = new Map<string, () => void>();
   let beforeCloseCounter = 0;
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
@@ -4024,6 +4055,22 @@ export function createFakeBridgeHost(
       case "embeds.close":
         state.embedHost.closeEmbed(String(params.embedId), "closed");
         return { ok: true };
+      case "embeds.save":
+        await state.embedHost.saveEmbed(String(params.embedId));
+        return { ok: true };
+      case "embedding.setDirty":
+        state.embedHost.setEmbeddingDirty(params.dirty === true);
+        return { ok: true };
+      case "embedding.respond": {
+        const pending = embeddingRequests.get(String(params.requestId));
+        embeddingRequests.delete(String(params.requestId));
+        if (params.ok === true) {
+          pending?.resolve();
+        } else {
+          pending?.reject(new Error(typeof params.error === "string" ? params.error : "Save failed."));
+        }
+        return { ok: true };
+      }
       case "embedding.finish":
         state.embedHost.finishEmbedding({
           reason: params.reason === "cancelled" ? "cancelled" : "completed",
@@ -4907,6 +4954,19 @@ export function createFakeBridgeHost(
     listEmbeds: () => state.embedHost.listEmbeds(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
+    setEmbedDirty: (embedId, dirty) => state.embedHost.setEmbedDirty(embedId, dirty),
+    failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
+    getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
+    requestEmbeddingSave() {
+      embeddingRequestCounter += 1;
+      const requestId = `embedding-request-${embeddingRequestCounter}`;
+      return new Promise<void>((resolve, reject) => {
+        embeddingRequests.set(requestId, { resolve, reject });
+        connectedPorts.forEach((port) =>
+          port.postMessage({ protocol: PROTOCOL, kind: "embedding-request", requestId, request: "save" }),
+        );
+      });
+    },
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {

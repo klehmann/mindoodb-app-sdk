@@ -22,6 +22,8 @@ export interface MockEmbedState {
   intent: "edit" | "view";
   rect: MindooDBAppEmbedRect;
   visible: boolean;
+  /** What the component last reported (`setEmbedDirty`); `undefined` until then. */
+  dirty?: boolean;
 }
 
 /** How an app running as an embedded component finished (`session.embedding`). */
@@ -55,6 +57,26 @@ export interface MockEmbedHost {
   finishEmbedding(finish: MockEmbeddingFinish): void;
   /** Closed events, for the port host to forward as `embed-event` pushes. */
   onClosed(listener: (event: MindooDBAppEmbedClosedEvent) => void): () => void;
+  /** As if the component reported unsaved changes (`session.embedding.setDirty`). */
+  setEmbedDirty(embedId: string, dirty: boolean): void;
+  /** Dirty reports, for the port host to forward as `embed-event` pushes. */
+  onDirty(listener: (event: { embedId: string; dirty: boolean }) => void): () => void;
+  /**
+   * `embed.save()` from the app: the stand-in component saves, i.e. reports clean,
+   * unless {@link failNextSave} set an error.
+   */
+  saveEmbed(embedId: string): Promise<void>;
+  /** Makes the next `embed.save()` fail with this message, as a component might. */
+  failNextSave(message: string): void;
+  /** For an app under test that runs as a component: its last `embedding.setDirty`. */
+  getEmbeddingDirty(): boolean | undefined;
+  setEmbeddingDirty(dirty: boolean): void;
+  /**
+   * For an app under test that runs as a component: asks it to save as its host
+   * would (`embed.save()`); resolves or rejects with its save handler.
+   */
+  requestEmbeddingSave(): Promise<void>;
+  setSaveRequestHandler(handler: (() => void | Promise<void>) | null): void;
 }
 
 /**
@@ -73,6 +95,10 @@ export function createMockEmbedHost(
   const embeds = new Map<string, MockEmbedState>();
   const handles = new Map<string, MockEmbed>();
   const closedListeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
+  const dirtyListeners = new Set<(event: { embedId: string; dirty: boolean }) => void>();
+  let nextSaveError: string | null = null;
+  let embeddingDirty: boolean | undefined;
+  let saveRequestHandler: (() => void | Promise<void>) | null = null;
   let embedCounter = 0;
   let embeddingFinish: MockEmbeddingFinish | null = null;
 
@@ -139,6 +165,27 @@ export function createMockEmbedHost(
     readonly placement = "overlay" as const;
     readonly frame = null;
     readonly closed: Promise<MindooDBAppEmbedClosedEvent>;
+    dirty: boolean | undefined = undefined;
+    private dirtyListeners = new Set<(dirty: boolean) => void>();
+
+    onDirtyChange(listener: (dirty: boolean) => void) {
+      this.dirtyListeners.add(listener);
+      return () => {
+        this.dirtyListeners.delete(listener);
+      };
+    }
+
+    setDirtyState(dirty: boolean) {
+      if (this.settled || this.dirty === dirty) {
+        return;
+      }
+      this.dirty = dirty;
+      this.dirtyListeners.forEach((listener) => listener(dirty));
+    }
+
+    async save() {
+      await saveEmbed(this.embedId);
+    }
     private resolve!: (event: MindooDBAppEmbedClosedEvent) => void;
     private listeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
     private settled: MindooDBAppEmbedClosedEvent | null = null;
@@ -162,7 +209,7 @@ export function createMockEmbedHost(
       setVisible(this.embedId, visible);
     }
 
-    async close() {
+    async close(_options?: { discard?: boolean }) {
       closeEmbed(this.embedId, "closed");
       return await this.closed;
     }
@@ -193,6 +240,29 @@ export function createMockEmbedHost(
       entry.rect = { ...rect };
       notifyChange();
     }
+  }
+
+  function setEmbedDirty(embedId: string, dirty: boolean) {
+    const entry = embeds.get(embedId);
+    if (!entry || entry.dirty === dirty) {
+      return;
+    }
+    entry.dirty = dirty;
+    handles.get(embedId)?.setDirtyState(dirty);
+    dirtyListeners.forEach((listener) => listener({ embedId, dirty }));
+    notifyChange();
+  }
+
+  async function saveEmbed(embedId: string) {
+    if (!embeds.has(embedId)) {
+      throw new Error("Unknown embed.");
+    }
+    const error = nextSaveError;
+    nextSaveError = null;
+    if (error) {
+      throw new Error(error);
+    }
+    setEmbedDirty(embedId, false);
   }
 
   function setVisible(embedId: string, visible: boolean) {
@@ -230,6 +300,17 @@ export function createMockEmbedHost(
       async cancel(message?: string) {
         embeddingFinish = { reason: "cancelled", ...(message ? { message } : {}) };
       },
+      async setDirty(dirty: boolean) {
+        embeddingDirty = dirty === true;
+      },
+      onSaveRequest(handler) {
+        saveRequestHandler = handler;
+        return () => {
+          if (saveRequestHandler === handler) {
+            saveRequestHandler = null;
+          }
+        };
+      },
     },
     openEmbed,
     setRect,
@@ -252,6 +333,32 @@ export function createMockEmbedHost(
       return () => {
         closedListeners.delete(listener);
       };
+    },
+    setEmbedDirty,
+    onDirty(listener) {
+      dirtyListeners.add(listener);
+      return () => {
+        dirtyListeners.delete(listener);
+      };
+    },
+    saveEmbed,
+    failNextSave(message) {
+      nextSaveError = message;
+    },
+    getEmbeddingDirty() {
+      return embeddingDirty;
+    },
+    setEmbeddingDirty(dirty) {
+      embeddingDirty = dirty;
+    },
+    async requestEmbeddingSave() {
+      if (!saveRequestHandler) {
+        throw new Error("unsupported");
+      }
+      await saveRequestHandler();
+    },
+    setSaveRequestHandler(handler) {
+      saveRequestHandler = handler;
     },
   };
 }

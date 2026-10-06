@@ -1,5 +1,6 @@
 import type {
   MindooDBAppBridgeEmbedEventMessage,
+  MindooDBAppBridgeEmbeddingRequestMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppComponentInfo,
   MindooDBAppComponentQuery,
@@ -15,6 +16,12 @@ import type { PortRpcClient } from "./portRpcClient";
 
 function isEmbedEventMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeEmbedEventMessage {
   return message.kind === "embed-event";
+}
+
+function isEmbeddingRequestMessage(
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeEmbeddingRequestMessage {
+  return message.kind === "embedding-request";
 }
 
 function toRect(rect: MindooDBAppEmbedRect): MindooDBAppEmbedRect {
@@ -106,6 +113,8 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
   private resolveClosed!: (event: MindooDBAppEmbedClosedEvent) => void;
   private closedEvent: MindooDBAppEmbedClosedEvent | null = null;
   private readonly listeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
+  private readonly dirtyListeners = new Set<(dirty: boolean) => void>();
+  private dirtyState: boolean | undefined = undefined;
   private tracker: ContainerTracker | null = null;
 
   constructor(
@@ -131,6 +140,39 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     return this.frame ? "frame" : "overlay";
   }
 
+  get dirty() {
+    return this.dirtyState;
+  }
+
+  onDirtyChange(listener: (dirty: boolean) => void) {
+    this.dirtyListeners.add(listener);
+    return () => {
+      this.dirtyListeners.delete(listener);
+    };
+  }
+
+  /** The component reported its unsaved-changes state. */
+  setDirtyState(dirty: boolean) {
+    if (this.closedEvent || this.dirtyState === dirty) {
+      return;
+    }
+    this.dirtyState = dirty;
+    this.dirtyListeners.forEach((listener) => {
+      try {
+        listener(dirty);
+      } catch (error) {
+        console.error("MindooDB embed dirty listener failed.", error);
+      }
+    });
+  }
+
+  async save() {
+    if (this.closedEvent) {
+      return;
+    }
+    await this.rpc.call("embeds.save", { embedId: this.embedId });
+  }
+
   async setRect(rect: MindooDBAppEmbedRect) {
     if (this.closedEvent) {
       return;
@@ -150,9 +192,12 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     await this.rpc.call("embeds.setVisible", { embedId: this.embedId, visible: visible === true });
   }
 
-  async close() {
+  async close(options?: { discard?: boolean }) {
     if (!this.closedEvent) {
-      await this.rpc.call("embeds.close", { embedId: this.embedId });
+      await this.rpc.call("embeds.close", {
+        embedId: this.embedId,
+        ...(options?.discard ? { discard: true } : {}),
+      });
     }
     return await this.closed;
   }
@@ -186,6 +231,7 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
       }
     });
     this.listeners.clear();
+    this.dirtyListeners.clear();
   }
 }
 
@@ -205,11 +251,31 @@ export class MindooDBAppEmbedsClient {
   private readonly open = new Map<string, MindooDBAppEmbedImpl>();
   /** Events that arrived before `embeds.open` resolved with their id. */
   private readonly early = new Map<string, MindooDBAppEmbedClosedEvent>();
+  private readonly earlyDirty = new Map<string, boolean>();
   private readonly stopListening: () => void;
+  /** This app as a component: what to do when its host asks it to save. */
+  private saveHandler: (() => void | Promise<void>) | null = null;
 
   constructor(private readonly rpc: PortRpcClient) {
     this.stopListening = this.rpc.addMessageListener((message) => {
-      if (!isEmbedEventMessage(message) || message.event?.type !== "closed") {
+      if (isEmbeddingRequestMessage(message)) {
+        void this.answerRequest(message);
+        return;
+      }
+      if (!isEmbedEventMessage(message)) {
+        return;
+      }
+      if (message.event?.type === "dirty") {
+        const { embedId, dirty } = message.event;
+        const embed = this.open.get(embedId);
+        if (embed) {
+          embed.setDirtyState(dirty === true);
+        } else {
+          this.earlyDirty.set(embedId, dirty === true);
+        }
+        return;
+      }
+      if (message.event?.type !== "closed") {
         return;
       }
       const { type: _type, ...event } = message.event;
@@ -251,6 +317,11 @@ export class MindooDBAppEmbedsClient {
           frame,
           container,
         );
+        const earlyDirty = this.earlyDirty.get(embed.embedId);
+        if (earlyDirty !== undefined) {
+          this.earlyDirty.delete(embed.embedId);
+          embed.setDirtyState(earlyDirty);
+        }
         const early = this.early.get(embed.embedId);
         if (early) {
           this.early.delete(embed.embedId);
@@ -274,7 +345,38 @@ export class MindooDBAppEmbedsClient {
           ...(message ? { message: String(message) } : {}),
         });
       },
+      setDirty: async (dirty: boolean) => {
+        await this.rpc.call("embedding.setDirty", { dirty: dirty === true });
+      },
+      onSaveRequest: (handler: () => void | Promise<void>) => {
+        this.saveHandler = handler;
+        return () => {
+          if (this.saveHandler === handler) {
+            this.saveHandler = null;
+          }
+        };
+      },
     };
+  }
+
+  /** Runs the save handler and tells Haven how it went; Haven answers the host. */
+  private async answerRequest(message: MindooDBAppBridgeEmbeddingRequestMessage) {
+    let response: { ok: boolean; error?: string };
+    if (message.request !== "save" || !this.saveHandler) {
+      response = { ok: false, error: "unsupported" };
+    } else {
+      try {
+        await this.saveHandler();
+        response = { ok: true };
+      } catch (error) {
+        response = { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    try {
+      await this.rpc.call("embedding.respond", { requestId: message.requestId, ...response });
+    } catch (error) {
+      console.warn("[mindoodb-app-sdk] Could not answer the host's request.", error);
+    }
   }
 
   dispose() {
