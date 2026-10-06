@@ -460,8 +460,10 @@ if (embed.dirty) {
   const choice = await askSaveDiscardCancel();
   if (choice === "cancel") return;
   if (choice === "save") await embed.save(); // rejects with the component's error
+  await embed.close({ discard: choice === "discard" });
+} else {
+  await embed.close(); // the component may still flush (onBeforeClose)
 }
-await embed.close();
 ```
 
 `embed.dirty` is `undefined` until the component reports anything, so a component that

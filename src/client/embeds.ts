@@ -192,9 +192,12 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     await this.rpc.call("embeds.setVisible", { embedId: this.embedId, visible: visible === true });
   }
 
-  async close() {
+  async close(options?: { discard?: boolean }) {
     if (!this.closedEvent) {
-      await this.rpc.call("embeds.close", { embedId: this.embedId });
+      await this.rpc.call("embeds.close", {
+        embedId: this.embedId,
+        ...(options?.discard ? { discard: true } : {}),
+      });
     }
     return await this.closed;
   }

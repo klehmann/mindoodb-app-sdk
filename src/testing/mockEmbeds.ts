@@ -209,7 +209,7 @@ export function createMockEmbedHost(
       setVisible(this.embedId, visible);
     }
 
-    async close() {
+    async close(_options?: { discard?: boolean }) {
       closeEmbed(this.embedId, "closed");
       return await this.closed;
     }

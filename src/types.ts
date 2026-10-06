@@ -1697,8 +1697,12 @@ export interface MindooDBAppEmbed {
    * with the component's error, or with `unsupported` when it does not save on request.
    */
   save(): Promise<void>;
-  /** Let the component save, then close it. Resolves with the closed event. */
-  close(): Promise<MindooDBAppEmbedClosedEvent>;
+  /**
+   * Let the component save, then close it. Resolves with the closed event.
+   * `discard: true` closes without giving the component that chance, after the user
+   * chose not to keep its unsaved changes.
+   */
+  close(options?: { discard?: boolean }): Promise<MindooDBAppEmbedClosedEvent>;
   /** Called once when the component closes, whoever closed it. */
   onClosed(listener: (event: MindooDBAppEmbedClosedEvent) => void): () => void;
   /** Settles with the closed event. */
