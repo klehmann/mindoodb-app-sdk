@@ -964,6 +964,25 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(full?.data.boardItems).toEqual([{ id: "board_1", kind: "drawing" }]);
   });
 
+  it("projects the recipients of people-encrypted documents into query rows, like MindooDB", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{ info: { id: "main", title: "Main", capabilities: ["read", "create", "update", "directory"] } }],
+    });
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    await database.documents.create({ set: { type: "secret" }, recipients: ["cn=Ada Lovelace/o=Mindoo"] });
+
+    const rows = (await database.documents.query({ filter: 'v.eq(v.field("type"), "secret")' })).rows;
+    const recipients = rows[0].fields._encryptFor as Record<string, { kind: string }>;
+    expect(Object.keys(recipients).join(" ")).toContain("Ada Lovelace");
+    expect(Object.values(recipients).every((entry) => entry.kind === "user")).toBe(true);
+
+    // `includeRecipients: false` (or excluding `_encryptFor`) leaves them out.
+    await database.setSummarySetup({ includeRecipients: false });
+    const without = (await database.documents.query({ filter: 'v.eq(v.field("type"), "secret")' })).rows;
+    expect(without[0].fields._encryptFor).toBeUndefined();
+  });
+
   it("joins related documents through include slots in the mock bridge", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [
