@@ -134,6 +134,13 @@ export interface MindooDBAppDefinition {
    */
   accepts?: MindooDBAppAcceptSpec[];
   /**
+   * Editors this app offers to other apps. A host app (a CRM, a project file) asks
+   * Haven for the components that fit a document and shows one embedded in its own
+   * page; Haven runs this app in a sandbox that holds only that document and its
+   * children. See {@link MindooDBAppComponentSpec}.
+   */
+  components?: MindooDBAppComponentSpec[];
+  /**
    * What a person sees before installing: the app's landing page when its URL is
    * opened directly, and Haven's setup wizard when it arrives through a shared link.
    * Display-only; nothing in here affects what the app is granted.
@@ -158,6 +165,51 @@ export interface MindooDBAppAcceptSpec {
   multiple?: boolean;
   /** Largest total size the app handles; larger deliveries are not offered. */
   maxBytes?: number;
+}
+
+/** What a host may ask a component for. */
+export type MindooDBAppComponentIntent = "create" | "edit" | "view";
+
+/** A plain field value a component matches documents on. */
+export type MindooDBAppComponentFieldValue = string | number | boolean;
+
+/** How a component's child documents point at their root document. */
+export interface MindooDBAppComponentChildren {
+  /** Top-level field on a child that holds the root document's id, e.g. `parentId`. */
+  linkField: string;
+  /** Fields every child carries, e.g. `{ "type": "wordChunk" }`. */
+  match?: Record<string, MindooDBAppComponentFieldValue>;
+}
+
+/**
+ * An editor this app offers to other apps, declared in `components` of haven-app.json.
+ *
+ * A component works on one **root document** (the spreadsheet, the Word file) plus,
+ * optionally, child documents that point at it through `children.linkField`. The host
+ * app owns the root document's database; Haven copies just the root and its children
+ * into an in-memory sandbox, hands the sandbox to this app as its only database and
+ * writes the changes back. The app cannot see anything else in the host's database,
+ * and it may only create documents that are children of the root.
+ */
+export interface MindooDBAppComponentSpec {
+  /** Stable id, unique within the app. Lowercase letters, digits, `-` and `_`. */
+  id: string;
+  /** Shown in the host's "New" and "Open with" menus, e.g. "Spreadsheet". */
+  label: MindooDBAppLocalizedText;
+  description?: MindooDBAppLocalizedText;
+  /** Icon path relative to the app origin, or an `https:` URL. */
+  icon?: string;
+  /** What hosts may ask for. `create` makes the component appear under "New". */
+  intents: MindooDBAppComponentIntent[];
+  /** Top-level fields a root document carries, e.g. `{ "form": "teamgrid" }`. At least one. */
+  match: Record<string, MindooDBAppComponentFieldValue>;
+  /**
+   * Further top-level fields of a new, empty root document (`create` intent). The
+   * host writes these plus `match` and then opens the component on it.
+   */
+  create?: Record<string, unknown>;
+  /** Child documents that belong to a root, e.g. the chunks of a Word document. */
+  children?: MindooDBAppComponentChildren;
 }
 
 /**
@@ -501,6 +553,192 @@ export function mindooDBAppAcceptMatchesType(pattern: string, type: string): boo
   );
 }
 
+export const MINDOODB_APP_COMPONENTS_MAX = 16;
+const COMPONENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+const COMPONENT_FIELD_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const COMPONENT_INTENTS: readonly MindooDBAppComponentIntent[] = ["create", "edit", "view"];
+const COMPONENT_CREATE_MAX_BYTES = 16 * 1024;
+
+function readComponentFieldMatch(
+  value: unknown,
+  label: string,
+  errors: string[],
+): Record<string, MindooDBAppComponentFieldValue> | undefined {
+  if (!isPlainObject(value)) {
+    errors.push(`${label} must be an object of field values.`);
+    return undefined;
+  }
+  const result: Record<string, MindooDBAppComponentFieldValue> = {};
+  for (const [field, fieldValue] of Object.entries(value)) {
+    if (!COMPONENT_FIELD_PATTERN.test(field)) {
+      errors.push(`${label} has an invalid field name ${JSON.stringify(field)}.`);
+      return undefined;
+    }
+    if (typeof fieldValue !== "string" && typeof fieldValue !== "number" && typeof fieldValue !== "boolean") {
+      errors.push(`${label}.${field} must be a string, number or boolean.`);
+      return undefined;
+    }
+    result[field] = fieldValue;
+  }
+  return result;
+}
+
+function readComponents(value: unknown, errors: string[]): MindooDBAppComponentSpec[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("App definition components must be an array.");
+    return undefined;
+  }
+  if (value.length > MINDOODB_APP_COMPONENTS_MAX) {
+    errors.push(`App definition components must not have more than ${MINDOODB_APP_COMPONENTS_MAX} entries.`);
+    return undefined;
+  }
+  const result: MindooDBAppComponentSpec[] = [];
+  const ids = new Set<string>();
+  value.forEach((entry, index) => {
+    const label = `App definition components[${index}]`;
+    const errorCount = errors.length;
+    if (!isPlainObject(entry)) {
+      errors.push(`${label} must be an object.`);
+      return;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!COMPONENT_ID_PATTERN.test(id)) {
+      errors.push(`${label}.id must be 1-48 lowercase letters, digits, "-" or "_", received ${JSON.stringify(entry.id)}.`);
+      return;
+    }
+    if (ids.has(id)) {
+      errors.push(`${label}.id "${id}" is used twice.`);
+      return;
+    }
+    ids.add(id);
+    const text = readLocalizedText(entry.label, `${label}.label`, 80, errors);
+    if (!text) {
+      if (errors.length === errorCount) {
+        errors.push(`${label}.label is required.`);
+      }
+      return;
+    }
+    const description = readLocalizedText(entry.description, `${label}.description`, 300, errors);
+    const icon = readListingAssetPath(entry.icon, `${label}.icon`, errors);
+    if (!Array.isArray(entry.intents) || !entry.intents.length) {
+      errors.push(`${label}.intents must be a non-empty array of "create", "edit" or "view".`);
+      return;
+    }
+    const intents: MindooDBAppComponentIntent[] = [];
+    for (const intent of entry.intents) {
+      if (!COMPONENT_INTENTS.includes(intent as MindooDBAppComponentIntent)) {
+        errors.push(`${label}.intents contains an unknown intent ${JSON.stringify(intent)}.`);
+        return;
+      }
+      if (!intents.includes(intent as MindooDBAppComponentIntent)) {
+        intents.push(intent as MindooDBAppComponentIntent);
+      }
+    }
+    const match = readComponentFieldMatch(entry.match, `${label}.match`, errors);
+    if (!match) {
+      return;
+    }
+    if (!Object.keys(match).length) {
+      errors.push(`${label}.match must name at least one field, or the component would claim every document.`);
+      return;
+    }
+    let create: Record<string, unknown> | undefined;
+    if (entry.create !== undefined) {
+      if (!isPlainObject(entry.create)) {
+        errors.push(`${label}.create must be an object of initial field values.`);
+        return;
+      }
+      for (const field of Object.keys(entry.create)) {
+        if (!COMPONENT_FIELD_PATTERN.test(field)) {
+          errors.push(`${label}.create has an invalid field name ${JSON.stringify(field)}.`);
+          return;
+        }
+        if (field in match) {
+          errors.push(`${label}.create must not repeat the match field "${field}".`);
+          return;
+        }
+      }
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(entry.create);
+      } catch {
+        errors.push(`${label}.create must be plain JSON.`);
+        return;
+      }
+      if (serialized.length > COMPONENT_CREATE_MAX_BYTES) {
+        errors.push(`${label}.create must not be larger than ${COMPONENT_CREATE_MAX_BYTES} bytes.`);
+        return;
+      }
+      create = JSON.parse(serialized) as Record<string, unknown>;
+    }
+    let children: MindooDBAppComponentChildren | undefined;
+    if (entry.children !== undefined) {
+      if (!isPlainObject(entry.children)) {
+        errors.push(`${label}.children must be an object.`);
+        return;
+      }
+      const linkField = typeof entry.children.linkField === "string" ? entry.children.linkField.trim() : "";
+      if (!COMPONENT_FIELD_PATTERN.test(linkField)) {
+        errors.push(`${label}.children.linkField must be a top-level field name.`);
+        return;
+      }
+      const childMatch =
+        entry.children.match === undefined
+          ? undefined
+          : readComponentFieldMatch(entry.children.match, `${label}.children.match`, errors);
+      if (entry.children.match !== undefined && !childMatch) {
+        return;
+      }
+      if (childMatch && linkField in childMatch) {
+        errors.push(`${label}.children.match must not name the link field "${linkField}".`);
+        return;
+      }
+      children = { linkField, ...(childMatch && Object.keys(childMatch).length ? { match: childMatch } : {}) };
+    }
+    if (errors.length !== errorCount) {
+      return;
+    }
+    result.push({
+      id,
+      label: text,
+      ...(description ? { description } : {}),
+      ...(icon ? { icon } : {}),
+      intents,
+      match,
+      ...(create ? { create } : {}),
+      ...(children ? { children } : {}),
+    });
+  });
+  return result.length ? result : undefined;
+}
+
+/**
+ * Validates a `components` list on its own, for hosts that read it from another
+ * manifest format (Haven's app store catalog).
+ */
+export function validateMindooDBAppComponents(value: unknown): {
+  components: MindooDBAppComponentSpec[] | undefined;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const components = readComponents(value, errors);
+  return { components: errors.length ? undefined : components, errors };
+}
+
+/** Whether every field in `match` has exactly that value in `data`. */
+export function mindooDBAppComponentFieldsMatch(
+  match: Readonly<Record<string, MindooDBAppComponentFieldValue>>,
+  data: Readonly<Record<string, unknown>> | null | undefined,
+): boolean {
+  if (!data) {
+    return false;
+  }
+  return Object.entries(match).every(([field, value]) => data[field] === value);
+}
+
 /** Relative paths stay on the app origin; absolute URLs must be `https:`. */
 function readListingAssetPath(value: unknown, label: string, errors: string[]): string | undefined {
   if (value === undefined || value === null) {
@@ -706,6 +944,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const listing = readListing(raw.listing, errors);
   const accepts = readAccepts(raw.accepts, errors);
+  const components = readComponents(raw.components, errors);
   const agentToolPrefix = readOptionalString(raw, "agentToolPrefix", errors);
   if (
     agentToolPrefix !== undefined
@@ -755,6 +994,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       defaultLaunchDatabaseId,
       databases,
       accepts,
+      components,
       listing,
     },
     errors: [],

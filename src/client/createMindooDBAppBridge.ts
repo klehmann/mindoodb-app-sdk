@@ -39,9 +39,13 @@
  */
 import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
 import { MindooDBAppAgentApiImpl } from "./agentTools";
+import { MindooDBAppEmbedsClient } from "./embeds";
 import { MindooDBAppIncomingApiImpl } from "./incomingContent";
 import { PortRpcClient } from "./portRpcClient";
 import type {
+  MindooDBAppComponentsApi,
+  MindooDBAppEmbeddingApi,
+  MindooDBAppEmbedsApi,
   MindooDBAppIncomingContentHandler,
   MindooDBAppAutomergePatchResult,
   MindooDBAppAttachmentApi,
@@ -1619,6 +1623,10 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly storage: MindooDBAppStorageApi;
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
+  private readonly embedsClient: MindooDBAppEmbedsClient;
+  public readonly components: MindooDBAppComponentsApi;
+  public readonly embeds: MindooDBAppEmbedsApi;
+  public readonly embedding: MindooDBAppEmbeddingApi;
   private readonly beforeCloseListeners = new Set<() => void | Promise<void>>();
   private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
   private readonly stopHostShortcuts: () => void;
@@ -1639,6 +1647,10 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.drag = new MindooDBAppDragApiImpl(this.rpc);
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
+    this.embedsClient = new MindooDBAppEmbedsClient(this.rpc);
+    this.components = this.embedsClient.components;
+    this.embeds = this.embedsClient.embeds;
+    this.embedding = this.embedsClient.embedding;
     this.storage = {
       snapshot: async (options) =>
         await this.rpc.call<Record<string, string>>("appStorage.snapshot", {
@@ -1923,6 +1935,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.drag.dispose();
     this.agent.dispose();
     this.incoming.dispose();
+    this.embedsClient.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
     } finally {

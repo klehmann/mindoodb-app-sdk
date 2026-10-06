@@ -391,6 +391,63 @@ session.onIncomingContent(async (content) => {
 
 Register the handler once, early. Haven waits for it before delivering, so a launch started for a delivery receives it as soon as the handler exists. `item.path` is relative (`assets/logo.png` inside a shared folder) and never absolute. What the app does with the content is up to the app. The returned `status` and `message` are shown to the user; a throwing handler counts as `rejected`. In tests, `createMockMindooDBAppSession().emitIncomingContent({ acceptId, items })` plays Haven's part.
 
+### Components: embedding another app's editor
+
+An app can offer an editor to other apps, and an app can show such an editor inside
+its own page — like an embedded control. TeamGrid offers its spreadsheet this way; a
+CRM shows it next to its own folder tree without knowing about TeamGrid beforehand.
+
+**Offering a component** (in `haven-app.json`):
+
+```json
+"components": [
+  {
+    "id": "sheet",
+    "label": { "en": "Spreadsheet", "de": "Tabelle" },
+    "icon": "icons/sheet.svg",
+    "intents": ["create", "edit", "view"],
+    "match": { "form": "teamgrid" },
+    "create": { "title": "" },
+    "children": { "linkField": "parentId", "match": { "type": "sheetChunk" } }
+  }
+]
+```
+
+`match` names the fields a root document carries; `children` (optional) says which
+documents belong to a root. When a host opens the component, Haven copies the root and
+its children into an in-memory sandbox and launches the app with that sandbox as its
+only database. The launch context then carries `embed` (`docId`, `databaseId`,
+`intent`, `hostAppLabel`): open that document, hide "New"/"Open", and finish with
+
+```ts
+await session.embedding.complete({ title }); // or session.embedding.cancel()
+```
+
+Haven writes every change back to the host's database as it happens and only lets the
+component create documents that are children of the root.
+
+**Embedding a component** (host app):
+
+```ts
+const [sheet] = await session.components.list({ intent: "create" });
+const doc = await db.documents.create({ set: { ...sheet.createFields, crm: { folders: ["Offers"] } } });
+const embed = await session.embeds.open({
+  componentKey: sheet.key,
+  databaseId: "crm",
+  docId: doc.id,
+  rect: panel.getBoundingClientRect(), // in this app's viewport
+});
+new ResizeObserver(() => void embed.setRect(panel.getBoundingClientRect())).observe(panel);
+const closed = await embed.closed; // { reason: "completed" | "cancelled" | "closed" | "error", result? }
+```
+
+Haven lays the component's frame over the rectangle, above the host's frame, so the
+host cannot draw on top of it; hide it with `embed.setVisible(false)` while a dialog of
+the host should be visible. The first time a host embeds a component, Haven asks the user.
+In tests, `createMockMindooDBAppSession({ components })` records embeds
+(`listEmbeds`, `closeEmbed`), and the `/__haven-test/` page draws a stand-in with
+Done/Cancel buttons.
+
 ### Databases and capabilities
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.
