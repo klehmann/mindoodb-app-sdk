@@ -1683,6 +1683,20 @@ export interface MindooDBAppEmbed {
   setRect(rect: MindooDBAppEmbedRect): Promise<void>;
   /** Hide without closing, e.g. while a dialog of the host covers it. */
   setVisible(visible: boolean): Promise<void>;
+  /**
+   * Whether the component has changes it has not saved yet, as it last reported
+   * (`session.embedding.setDirty`). `undefined` until it reports anything: a
+   * component that never does cannot tell, so close it without asking.
+   */
+  readonly dirty: boolean | undefined;
+  /** Called whenever the component reports a different `dirty` state. */
+  onDirtyChange(listener: (dirty: boolean) => void): () => void;
+  /**
+   * Asks the component to save its pending changes (`session.embedding.onSaveRequest`),
+   * e.g. after the user chose "Save" when closing it. Resolves once it saved; rejects
+   * with the component's error, or with `unsupported` when it does not save on request.
+   */
+  save(): Promise<void>;
   /** Let the component save, then close it. Resolves with the closed event. */
   close(): Promise<MindooDBAppEmbedClosedEvent>;
   /** Called once when the component closes, whoever closed it. */
@@ -1716,13 +1730,38 @@ export interface MindooDBAppEmbeddingApi {
   complete(result?: unknown): Promise<void>;
   /** Closes without a result, e.g. when the user cancels. */
   cancel(message?: string): Promise<void>;
+  /**
+   * Tells the host whether there are changes not saved yet, so it can mark the
+   * component (e.g. a dot in its tab) and ask before closing it. Report every change
+   * of the state; Haven passes the latest one on.
+   */
+  setDirty(dirty: boolean): Promise<void>;
+  /**
+   * Handles the host's request to save (`embed.save()`). Resolve once saved, throw to
+   * report why it failed. One handler at a time; returns the unregister function.
+   */
+  onSaveRequest(handler: () => void | Promise<void>): () => void;
+}
+
+/** Haven → component: the host asked for something (`embed.save()`). */
+export interface MindooDBAppBridgeEmbeddingRequestMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "embedding-request";
+  requestId: string;
+  request: "save";
+}
+
+/** The component reported whether it has unsaved changes. */
+export interface MindooDBAppEmbedDirtyEvent {
+  embedId: string;
+  dirty: boolean;
 }
 
 /** Host → app: something happened to an embed this app opened. */
 export interface MindooDBAppBridgeEmbedEventMessage {
   protocol: "mindoodb-app-bridge";
   kind: "embed-event";
-  event: { type: "closed" } & MindooDBAppEmbedClosedEvent;
+  event: ({ type: "closed" } & MindooDBAppEmbedClosedEvent) | ({ type: "dirty" } & MindooDBAppEmbedDirtyEvent);
 }
 
 export type MindooDBAppBridgePortMessage =
@@ -1746,7 +1785,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage
   | MindooDBAppBridgeIncomingContentMessage
-  | MindooDBAppBridgeEmbedEventMessage;
+  | MindooDBAppBridgeEmbedEventMessage
+  | MindooDBAppBridgeEmbeddingRequestMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
