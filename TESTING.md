@@ -108,6 +108,24 @@ Each database entry can provide:
 - `methods.attachments`
 - `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.
 - `summarySetup` — the initial config returned by `db.getSummarySetup()`; `db.setSummarySetup()` overwrites it for the lifetime of the handle. The mock's `query()` reads seeded documents directly and ignores this config; use it to test your app's summary bootstrap logic.
+- `automerge: true` — back every document with a real Automerge document, as Haven does (off by default: plain JSON with `mock-head-N` heads). `create`/`update` then return real Automerge heads, `update` applies `set`/`unset`, `json` (with `Automerge.changeAt(json.baseHeads)` when given) and `text` patches as Automerge changes with Haven's rules (missing parents and lists are created, `unset` is idempotent, `counterIncrement` needs a counter, an empty `json` patch is rejected), and `get`/`list`/`query` return the plain projection (atomic strings as strings, counters as numbers, timestamps as ISO strings). `richText` snapshots replace the value at their path and `richTextSteps` are spliced into the text without marks. Seeds are built with a fixed actor, so two mocks from the same seed have identical heads. `mockDatabasesFromDefinition(definition, seed, { automerge: true })` and the test host URL setting `automerge=1` turn it on, too.
+
+#### Concurrent edits from another device
+
+`applyRemoteUpdate(databaseId, docId, input, { actor? })` on the controller (`createMockMindooDBAppSession`, `createFakeBridgeHost`, the browser test host and `window.__havenTestHost`) writes `input` as another device and syncs it in; live queries update as after any write. With `automerge: true` the device holds the history up to `input.json.baseHeads` (plus its own earlier changes) and writes as its own Automerge actor, so its edit truly merges with an app save at the same heads:
+
+```ts
+const doc = await database.documents.get("sheet-1");          // heads H
+await mock.applyRemoteUpdate("main", "sheet-1", {             // device B, at H
+  json: { baseHeads: doc!.heads, listInsert: [{ path: ["rows"], index: 1, values: ["remote"] }] },
+});
+const saved = await database.documents.update("sheet-1", {   // the app, also at H
+  json: { baseHeads: doc!.heads, listInsert: [{ path: ["rows"], index: 1, values: ["local"] }] },
+});
+// saved.data.rows keeps both entries; saved.heads has two heads
+```
+
+The relative order of concurrent inserts at the same index follows Automerge's op ids, as in Haven. Without `automerge`, `applyRemoteUpdate` is a plain update.
 
 ### Evaluating VirtualViews
 
@@ -364,7 +382,7 @@ mountHavenTestHost({
 });
 ```
 
-The panel keeps its settings in the page URL, so a scenario can be linked or opened by Playwright directly: `/__haven-test/?db=main:read,attachments&db=archive:none&enforce=1&users=120&locale=de-DE&theme=dark` (`db=<id>:none` unmaps a database; URL settings win over the options). The same controls are scriptable as `window.__havenTestHost`:
+The panel keeps its settings in the page URL, so a scenario can be linked or opened by Playwright directly: `/__haven-test/?db=main:read,attachments&db=archive:none&enforce=1&users=120&locale=de-DE&theme=dark` (`db=<id>:none` unmaps a database; `automerge=1` backs all databases with Automerge documents; URL settings win over the options). The same controls are scriptable as `window.__havenTestHost`:
 
 ```ts
 await page.goto("/__haven-test/?enforce=1");
@@ -376,6 +394,9 @@ await page.evaluate(() => window.__havenTestHost!.setLocale("de-DE"));
 await page.evaluate(() => window.__havenTestHost!.setNextScan({ fileName: "receipt.pdf", mimeType: "application/pdf", size: 1024 }));
 await app.getByRole("button", { name: "Scan" }).click();
 expect(await page.evaluate(() => window.__havenTestHost!.log.scans)).toHaveLength(1);
+
+// with ?automerge=1: another device edits the document the app has open
+await page.evaluate(() => window.__havenTestHost!.applyRemoteUpdate("main", "sheet-1", { set: { title: "Renamed elsewhere" } }));
 ```
 
 Agent tools are scriptable through `window.__havenTestHost.agent`, the same controller the Vitest helpers expose as `createFakeBridgeHost().agent`:

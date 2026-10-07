@@ -2,7 +2,9 @@ import type { MindooDBAppDefinition } from "../appDefinition";
 import type {
   MindooDBAppBridgeRpcRequest,
   MindooDBAppCapability,
+  MindooDBAppDocument,
   MindooDBAppHostTheme,
+  MindooDBAppUpdateDocumentInput,
 } from "../types";
 import {
   createFakeBridgeHost,
@@ -12,6 +14,7 @@ import {
   type FakeBridgeRpcResponse,
   type MockEmbedState,
   type MockMindooDBAppDatabaseDefinition,
+  type MockRemoteUpdateOptions,
 } from "./index";
 import { createMemoryAttachments } from "./memoryAttachments";
 import type { MockAgentCall, MockAgentHostController } from "./mockAgentTools";
@@ -104,6 +107,19 @@ export interface BrowserTestHost {
   setEnforceCapabilities(enforce: boolean): void;
   /** Replaces the usernames of the tenant directory (`directory.listUsers()`). */
   setDirectoryUsers(users: readonly string[]): void;
+  /**
+   * Another device edits a document and the change syncs in: the app's live queries
+   * update. With Automerge-backed databases (`automerge=1` / `automerge: true`) the
+   * edit is made at `input.json.baseHeads` by another actor and merged, so it is
+   * concurrent to app saves at the same heads. See
+   * `MockMindooDBAppSessionController.applyRemoteUpdate`.
+   */
+  applyRemoteUpdate(
+    databaseId: string,
+    docId: string,
+    input: MindooDBAppUpdateDocumentInput,
+    options?: MockRemoteUpdateOptions,
+  ): Promise<MindooDBAppDocument>;
   /** Reloads the app frame. The mock data survives; the app's in-memory state does not. */
   reloadApp(): void;
   dispose(): void;
@@ -169,6 +185,8 @@ export interface MockDatabasesFromDefinitionOptions {
    * `"none"`: the mock's stateless default.
    */
   attachments?: "memory" | "none";
+  /** Back documents with real Automerge documents (`MockMindooDBAppDatabaseDefinition.automerge`). */
+  automerge?: boolean;
 }
 
 /**
@@ -193,6 +211,7 @@ export function mockDatabasesFromDefinition(
             : capabilitiesForDefinitionPermissions(database.permissions),
         },
         documents: seed[database.logicalDatabaseId],
+        ...(options.automerge ? { automerge: true } : {}),
         ...(options.attachments === "none"
           ? {}
           : { methods: { attachments: createMemoryAttachments() } }),
@@ -207,10 +226,13 @@ export function mockDatabasesFromDefinition(
  * - `enforce=1` turns the capability checks on
  * - `users=<count>` fills the directory with generated users
  * - `locale=<tag>`, `theme=dark|light`
+ * - `automerge=1` backs every database with real Automerge documents (concurrent
+ *   `baseHeads` merges, real heads); `automerge=0` turns it off
  */
 export interface TestHostUrlSettings {
   overrides: Record<string, MockDatabaseOverride>;
   enforceCapabilities?: boolean;
+  automerge?: boolean;
   directoryUserCount?: number;
   locale?: string;
   theme?: "dark" | "light";
@@ -238,6 +260,8 @@ export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
   }
   const enforce = params.get("enforce");
   if (enforce !== null) settings.enforceCapabilities = enforce === "1" || enforce === "true";
+  const automerge = params.get("automerge");
+  if (automerge !== null) settings.automerge = automerge === "1" || automerge === "true";
   const users = Number.parseInt(params.get("users") ?? "", 10);
   if (Number.isFinite(users) && users >= 0) settings.directoryUserCount = users;
   const locale = params.get("locale");
@@ -452,6 +476,11 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
       host.setDirectoryUsers(users);
       onChange?.();
     },
+    async applyRemoteUpdate(databaseId, docId, input, updateOptions) {
+      const document = await host.applyRemoteUpdate(databaseId, docId, input, updateOptions);
+      onChange?.();
+      return document;
+    },
     reloadApp,
     dispose() {
       window.removeEventListener("message", onMessage);
@@ -468,7 +497,7 @@ export interface MountHavenTestHostOptions extends Omit<CreateBrowserTestHostOpt
   /** Locales offered in the panel's language switcher. */
   locales?: ReadonlyArray<{ tag: string; label: string }>;
   /**
-   * Read `db=`, `enforce=`, `users=`, `locale=` and `theme=` from the page URL (see
+   * Read `db=`, `enforce=`, `users=`, `locale=`, `theme=` and `automerge=` from the page URL (see
    * {@link readTestHostUrlSettings}) and keep the URL in sync with the panel. Default
    * true. URL settings win over the options passed here.
    */
@@ -605,7 +634,8 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     .map((database) => {
       const capabilities = url.overrides[database.info.id]?.capabilities;
       return capabilities ? { ...database, info: { ...database.info, capabilities } } : database;
-    });
+    })
+    .map((database) => (url.automerge === undefined ? database : { ...database, automerge: url.automerge }));
   const launchContext = {
     ...hostOptions.launchContext,
     ...(url.locale ? { locale: url.locale } : {}),
