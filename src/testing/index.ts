@@ -106,6 +106,7 @@ import type {
   MindooDBAppViewCursorDocumentListResult,
   MindooDBAppViewport,
   MindooDBAppUiPreferences,
+  MindooDBAppJsonPatch,
   MindooDBAppUpdateDocumentInput,
   MindooDBAppWritableAttachmentStream,
   MindooDBAppTextCursorPosition,
@@ -748,9 +749,15 @@ function mockDecryptionKeyId(document: MockStoredDocument): { decryptionKeyId?: 
   return { decryptionKeyId: document.decryptionKeyId };
 }
 
-function loadMockAutomergeDocument(document: MockStoredDocument): Automerge.Doc<Record<string, unknown>> {
+function loadMockAutomergeDocument(
+  document: MockStoredDocument,
+  actor?: string,
+): Automerge.Doc<Record<string, unknown>> {
   if (document.automergeBinary) {
-    return Automerge.load<Record<string, unknown>>(document.automergeBinary);
+    return Automerge.load<Record<string, unknown>>(
+      document.automergeBinary,
+      actor ? { actor } : undefined,
+    );
   }
   const initialDoc = Automerge.from<Record<string, unknown>>({
     ...structuredClone(document.data),
@@ -765,8 +772,519 @@ function persistMockAutomergeDocument(
   automergeDoc: Automerge.Doc<Record<string, unknown>>,
 ) {
   document.automergeBinary = Automerge.save(automergeDoc);
-  document.data = structuredClone(automergeDoc as unknown as Record<string, unknown>);
+  // Project from the saved bytes, not from `automergeDoc`: after `changeAt` on a
+  // loaded document Automerge 3.5's materialized view can repeat concurrent
+  // list/text inserts, while the history itself is correct.
+  document.data = projectMockAutomergeValue(
+    Automerge.load(document.automergeBinary),
+  ) as Record<string, unknown>;
   document.heads = Automerge.getHeads(automergeDoc);
+}
+
+/*
+ * Automerge-backed documents (`MockMindooDBAppDatabaseDefinition.automerge`).
+ *
+ * These helpers mirror `BaseMindooDB` in mindoodb (`applyJsonPatch`,
+ * `applyJsonPatchOperations`, `hydrateTypedValues`, …) and Haven's
+ * `saveDocumentToOpenedTargetDb`, so concurrent `baseHeads` edits merge the
+ * way they do in Haven. Keep them in sync with the host.
+ */
+
+/**
+ * Fixed actor ids keep the mock deterministic: two databases built from the
+ * same seed have identical heads, so `baseHeads` from one apply to the other.
+ */
+const MOCK_AUTOMERGE_SEED_ACTOR = "5eed0000000000000000000000000000";
+/** Actor of every write the app under test makes. */
+const MOCK_AUTOMERGE_LOCAL_ACTOR = "10ca1000000000000000000000000000";
+/** Default actor of `applyRemoteUpdate`, standing in for another device. */
+const MOCK_AUTOMERGE_REMOTE_ACTOR = "2e307e00000000000000000000000000";
+
+/**
+ * Plain-JS read view of an Automerge document or value, as Haven returns
+ * `document.data`: text and atomic strings become strings, counters numbers,
+ * timestamps ISO 8601 strings. Always a fresh copy.
+ */
+function projectMockAutomergeValue(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Automerge.isCounter(value)) {
+    return (value as Automerge.Counter).value;
+  }
+  if (Automerge.isImmutableString(value)) {
+    return String(value);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof Uint8Array) {
+    return value.slice();
+  }
+  if (depth > 100) {
+    throw new Error("Document value is nested too deeply");
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => projectMockAutomergeValue(entry, depth + 1));
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      projectMockAutomergeValue(entry, depth + 1),
+    ]),
+  );
+}
+
+/**
+ * Mirrors the host's `hydrateTypedValues`: `$mindoo` typed values become their
+ * CRDT representation (atomic → `ImmutableString`, counter → `Counter`,
+ * timestamp → `Date`), plain objects and arrays are copied, `undefined`
+ * object entries are dropped. Throws for malformed tags.
+ */
+function hydrateMockAutomergeValues(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (depth > 100) {
+    throw new Error("Document value is nested too deeply");
+  }
+  if (
+    value instanceof Uint8Array ||
+    value instanceof Date ||
+    Automerge.isCounter(value) ||
+    Automerge.isImmutableString(value)
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    // JSON semantics, like Haven's stripUndefinedDeep: Automerge cannot hold `undefined`.
+    return value.map((entry) =>
+      entry === undefined ? null : hydrateMockAutomergeValues(entry, depth + 1),
+    );
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, MINDOODB_APP_VALUE_TAG)) {
+    switch (record[MINDOODB_APP_VALUE_TAG]) {
+      case "atomic":
+        if (typeof record.value !== "string") {
+          throw new Error('Typed value "atomic" needs a string value');
+        }
+        return new Automerge.ImmutableString(record.value);
+      case "counter":
+        assertMockCounterAmount(record.value, 'Typed value "counter"');
+        return new Automerge.Counter(record.value as number);
+      case "timestamp":
+        return new Date(toMockTimestamp(record.value));
+      default:
+        throw new Error(
+          `Unknown typed value ${JSON.stringify(record[MINDOODB_APP_VALUE_TAG])}; the "${MINDOODB_APP_VALUE_TAG}" key is reserved`,
+        );
+    }
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (entry !== undefined) {
+      result[key] = hydrateMockAutomergeValues(entry, depth + 1);
+    }
+  }
+  return result;
+}
+
+/** A new Automerge document holding `values` (top-level fields), as one change. */
+function createMockAutomergeDocument(
+  values: Record<string, unknown>,
+  actor: string,
+  time?: number,
+): Automerge.Doc<Record<string, unknown>> {
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+  const initial = Automerge.init<Record<string, unknown>>({ actor });
+  const options = time === undefined ? {} : { time };
+  if (entries.length === 0) {
+    return Automerge.emptyChange(initial, options);
+  }
+  return Automerge.change(initial, options, (doc) => {
+    for (const [key, value] of entries) {
+      doc[key] = hydrateMockAutomergeValues(value);
+    }
+  });
+}
+
+function validateMockJsonPath(path: Array<string | number>, label: string) {
+  if (!Array.isArray(path) || path.length === 0) {
+    throw new Error(`${label} path must contain at least one segment`);
+  }
+  for (const segment of path) {
+    if (typeof segment !== "string" && typeof segment !== "number") {
+      throw new Error(`${label} path segments must be strings or numbers`);
+    }
+  }
+}
+
+function assertMockNonNegativeInteger(value: unknown, label: string) {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+}
+
+/** Mirrors the host's `validateJsonPatch`. */
+function validateMockJsonPatch(patch: MindooDBAppJsonPatch) {
+  const operationCount =
+    (patch.set?.length ?? 0) +
+    (patch.unset?.length ?? 0) +
+    (patch.listDelete?.length ?? 0) +
+    (patch.listInsert?.length ?? 0) +
+    (patch.textSplice?.length ?? 0) +
+    (patch.textMark?.length ?? 0) +
+    (patch.textUnmark?.length ?? 0) +
+    (patch.counterIncrement?.length ?? 0);
+  if (operationCount === 0) {
+    throw new Error("JSON patch must include at least one operation");
+  }
+  for (const operation of patch.set ?? []) {
+    validateMockJsonPath(operation.path, "JSON set");
+    hydrateMockAutomergeValues(operation.value);
+  }
+  for (const operation of patch.unset ?? []) {
+    validateMockJsonPath(operation.path, "JSON unset");
+  }
+  for (const operation of patch.listDelete ?? []) {
+    validateMockJsonPath(operation.path, "JSON listDelete");
+    assertMockNonNegativeInteger(operation.index, "JSON listDelete index");
+    assertMockNonNegativeInteger(operation.deleteCount, "JSON listDelete deleteCount");
+  }
+  for (const operation of patch.listInsert ?? []) {
+    validateMockJsonPath(operation.path, "JSON listInsert");
+    assertMockNonNegativeInteger(operation.index, "JSON listInsert index");
+    if (!Array.isArray(operation.values)) {
+      throw new Error("JSON listInsert values must be an array");
+    }
+    hydrateMockAutomergeValues(operation.values);
+  }
+  for (const operation of patch.textSplice ?? []) {
+    validateMockJsonPath(operation.path, "JSON textSplice");
+    assertMockNonNegativeInteger(operation.index, "JSON textSplice index");
+    assertMockNonNegativeInteger(operation.deleteCount, "JSON textSplice deleteCount");
+    if (operation.insert !== undefined && typeof operation.insert !== "string") {
+      throw new Error("JSON textSplice insert must be a string");
+    }
+  }
+  for (const operation of [...(patch.textMark ?? []), ...(patch.textUnmark ?? [])]) {
+    validateMockJsonPath(operation.path, "JSON text mark");
+    assertMockNonNegativeInteger(operation.index, "JSON text mark index");
+    if (!Number.isInteger(operation.length) || operation.length <= 0) {
+      throw new Error("JSON text mark length must be a positive integer");
+    }
+  }
+  for (const operation of patch.counterIncrement ?? []) {
+    validateMockJsonPath(operation.path, "JSON counterIncrement");
+    assertMockCounterAmount(operation.delta, "JSON counterIncrement delta");
+  }
+}
+
+type MockAutomergeTarget = Record<string | number, any>;
+
+function ensureMockAutomergeParent(
+  target: MockAutomergeTarget,
+  path: Array<string | number>,
+): MockAutomergeTarget {
+  let parent: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index];
+    const nextSegment = path[index + 1];
+    if (parent[segment] === undefined || parent[segment] === null) {
+      parent[segment] = typeof nextSegment === "number" ? [] : {};
+    }
+    parent = parent[segment];
+    if (parent === null || typeof parent !== "object") {
+      throw new Error(
+        `Cannot apply JSON patch through non-object path segment '${String(segment)}'`,
+      );
+    }
+  }
+  return parent;
+}
+
+function readMockAutomergeValue(target: MockAutomergeTarget, path: Array<string | number>) {
+  let value: any = target;
+  for (const segment of path) {
+    value = value?.[segment];
+  }
+  return value;
+}
+
+function setMockAutomergeValue(
+  target: MockAutomergeTarget,
+  path: Array<string | number>,
+  value: unknown,
+) {
+  const parent = ensureMockAutomergeParent(target, path);
+  parent[path[path.length - 1]] = value;
+}
+
+/** Idempotent like the host: a missing parent counts as already absent. */
+function unsetMockAutomergeValue(target: MockAutomergeTarget, path: Array<string | number>) {
+  let parent: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    parent = parent?.[path[index]];
+    if (parent === null || typeof parent !== "object") {
+      return;
+    }
+  }
+  delete parent[path[path.length - 1]];
+}
+
+function readMockAutomergeList(target: MockAutomergeTarget, path: Array<string | number>): unknown[] {
+  const value = readMockAutomergeValue(target, path);
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Cannot apply JSON list operation to non-array value at '${path.map(String).join(".")}'`,
+    );
+  }
+  return value;
+}
+
+/** Creates a missing list (and its parents); existing non-arrays still throw. */
+function ensureMockAutomergeList(target: MockAutomergeTarget, path: Array<string | number>): unknown[] {
+  const parent = ensureMockAutomergeParent(target, path);
+  const leaf = path[path.length - 1];
+  if (parent[leaf] === undefined || parent[leaf] === null) {
+    // Assign through the proxy, then re-read so the splice hits the tracked list.
+    parent[leaf] = [];
+  }
+  return readMockAutomergeList(target, path);
+}
+
+function clampMockIndex(index: number, length: number) {
+  if (!Number.isFinite(index)) {
+    return length;
+  }
+  return Math.max(0, Math.min(Math.trunc(index), length));
+}
+
+/** Creates a missing text field (and its parents); existing non-strings throw. */
+function ensureMockAutomergeText(target: MockAutomergeTarget, path: Array<string | number>, label: string) {
+  const value = readMockAutomergeValue(target, path);
+  if (value === undefined || value === null) {
+    setMockAutomergeValue(target, path, "");
+  } else if (typeof value !== "string") {
+    throw new Error(
+      `Cannot apply ${label} to non-string value at '${path.map(String).join(".")}'`,
+    );
+  }
+}
+
+function spliceMockAutomergeText(
+  target: MockAutomergeTarget,
+  path: Array<string | number>,
+  index: number,
+  deleteCount: number,
+  insert: string,
+) {
+  const text = readMockAutomergeValue(target, path);
+  const length = typeof text === "string" ? text.length : 0;
+  const start = clampMockIndex(index, length);
+  Automerge.splice(
+    target as Automerge.Doc<unknown>,
+    path,
+    start,
+    Math.max(0, Math.min(deleteCount, length - start)),
+    insert,
+  );
+}
+
+/** Mirrors the host's `reviveRichTextValue` for mark values. */
+function reviveMockRichTextValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => reviveMockRichTextValue(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.type === "immutableString" && typeof record.value === "string") {
+    return new Automerge.ImmutableString(record.value);
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, reviveMockRichTextValue(entry)]),
+  );
+}
+
+/** Mirrors the host's `applyJsonPatchOperations`, in the same order. */
+function applyMockAutomergeJsonOperations(
+  target: MockAutomergeTarget,
+  patch: MindooDBAppJsonPatch,
+) {
+  for (const operation of patch.set ?? []) {
+    setMockAutomergeValue(target, operation.path, hydrateMockAutomergeValues(operation.value));
+  }
+  for (const operation of patch.unset ?? []) {
+    unsetMockAutomergeValue(target, operation.path);
+  }
+  for (const operation of patch.listDelete ?? []) {
+    readMockAutomergeList(target, operation.path).splice(operation.index, operation.deleteCount);
+  }
+  for (const operation of patch.listInsert ?? []) {
+    ensureMockAutomergeList(target, operation.path).splice(
+      operation.index,
+      0,
+      ...(hydrateMockAutomergeValues(operation.values) as unknown[]),
+    );
+  }
+  for (const operation of patch.textSplice ?? []) {
+    ensureMockAutomergeText(target, operation.path, "JSON textSplice");
+    spliceMockAutomergeText(
+      target,
+      operation.path,
+      operation.index,
+      operation.deleteCount,
+      operation.insert ?? "",
+    );
+  }
+  for (const operation of patch.textMark ?? []) {
+    for (const [name, value] of Object.entries(operation.marks)) {
+      Automerge.mark(
+        target as Automerge.Doc<unknown>,
+        operation.path,
+        { start: operation.index, end: operation.index + operation.length, expand: "none" },
+        name,
+        reviveMockRichTextValue(value) as Automerge.MarkValue,
+      );
+    }
+  }
+  for (const operation of patch.textUnmark ?? []) {
+    for (const name of operation.names) {
+      Automerge.unmark(
+        target as Automerge.Doc<unknown>,
+        operation.path,
+        { start: operation.index, end: operation.index + operation.length, expand: "none" },
+        name,
+      );
+    }
+  }
+  for (const operation of patch.counterIncrement ?? []) {
+    const parent = ensureMockAutomergeParent(target, operation.path);
+    const leaf = operation.path[operation.path.length - 1];
+    const existing = parent[leaf];
+    if (existing === undefined || existing === null) {
+      parent[leaf] = new Automerge.Counter(operation.delta);
+    } else if (Automerge.isCounter(existing)) {
+      existing.increment(operation.delta);
+    } else {
+      throw new Error(
+        `Cannot increment non-counter value at '${operation.path.map(String).join(".")}'; create it with MindooValue.counter() first`,
+      );
+    }
+  }
+}
+
+/** `Automerge.changeAt` at `baseHeads` when given, else `Automerge.change` — like the host. */
+function changeMockAutomergeDocument(
+  doc: Automerge.Doc<Record<string, unknown>>,
+  baseHeads: string[] | undefined,
+  apply: (target: MockAutomergeTarget) => void,
+): Automerge.Doc<Record<string, unknown>> {
+  if (baseHeads && baseHeads.length > 0) {
+    const { newDoc } = Automerge.changeAt(doc, baseHeads, apply);
+    // Reload so later changes and reads see a correct materialized view (see
+    // persistMockAutomergeDocument).
+    return Automerge.load(Automerge.save(newDoc), { actor: Automerge.getActorId(doc) });
+  }
+  return Automerge.change(doc, apply);
+}
+
+/**
+ * Applies a bridge `documents.update` input to an Automerge document the way
+ * Haven does: top-level `set`/`unset` as one change, then `json` (at
+ * `json.baseHeads`), then each `text` patch (at its `baseHeads`), each as its
+ * own change. `richText` snapshots replace the value at their path;
+ * `richTextSteps` are spliced into the text (marks are not modelled).
+ */
+function applyMockAutomergeUpdate(
+  doc: Automerge.Doc<Record<string, unknown>>,
+  patch: MindooDBAppUpdateDocumentInput,
+): Automerge.Doc<Record<string, unknown>> {
+  let next = doc;
+  if (patch.set || (patch.unset?.length ?? 0) > 0) {
+    next = Automerge.change(next, (target) => {
+      for (const [key, value] of Object.entries(patch.set ?? {})) {
+        if (value !== undefined) {
+          target[key] = hydrateMockAutomergeValues(value);
+        }
+      }
+      for (const key of patch.unset ?? []) {
+        delete target[key];
+      }
+    });
+  }
+  if (patch.json) {
+    const json = patch.json;
+    validateMockJsonPatch(json);
+    next = changeMockAutomergeDocument(next, json.baseHeads, (target) =>
+      applyMockAutomergeJsonOperations(target, json),
+    );
+  }
+  for (const textPatch of patch.text ?? []) {
+    validateMockJsonPath(textPatch.path, "Text patch");
+    next = changeMockAutomergeDocument(next, textPatch.baseHeads, (target) => {
+      ensureMockAutomergeText(target, textPatch.path, "text patch");
+      for (const edit of textPatch.edits) {
+        spliceMockAutomergeText(target, textPatch.path, edit.index, edit.deleteCount, edit.insert ?? "");
+      }
+    });
+  }
+  for (const richTextPatch of patch.richText ?? []) {
+    validateMockJsonPath(richTextPatch.path, "Rich-text patch");
+    const spans = richTextPatch.spansSequence?.at(-1) ?? richTextPatch.spans ?? [];
+    next = Automerge.change(next, (target) => {
+      setMockAutomergeValue(target, richTextPatch.path, hydrateMockAutomergeValues(structuredClone(spans)));
+    });
+  }
+  for (const stepPatch of patch.richTextSteps ?? []) {
+    validateMockJsonPath(stepPatch.path, "Rich-text steps patch");
+    next = changeMockAutomergeDocument(next, stepPatch.baseHeads, (target) => {
+      const current = readMockAutomergeValue(target, stepPatch.path);
+      if (current !== undefined && current !== null && typeof current !== "string") {
+        // A span snapshot written by `richText`: continue on its plain text.
+        setMockAutomergeValue(
+          target,
+          stepPatch.path,
+          materializeMockRichTextValue(projectMockAutomergeValue(current)),
+        );
+      }
+      ensureMockAutomergeText(target, stepPatch.path, "rich-text steps");
+      for (const step of stepPatch.steps) {
+        spliceMockAutomergeText(target, stepPatch.path, step.index, step.deleteCount, step.insert ?? "");
+      }
+    });
+  }
+  return next;
+}
+
+/**
+ * Another device's copy of `doc` with actor `actor`: it knows the history up
+ * to `baseHeads` (everything when omitted) plus its own earlier changes, so
+ * its edit is truly concurrent to whatever else happened since `baseHeads`.
+ */
+function forkMockAutomergeDocument(
+  doc: Automerge.Doc<Record<string, unknown>>,
+  baseHeads: string[] | undefined,
+  actor: string,
+): Automerge.Doc<Record<string, unknown>> {
+  if (!baseHeads || baseHeads.length === 0) {
+    return Automerge.clone(doc, { actor });
+  }
+  const heads = new Set(baseHeads);
+  let ownLatest: string | undefined;
+  for (const change of Automerge.getAllChanges(doc)) {
+    const decoded = Automerge.decodeChange(change);
+    if (decoded.actor === actor) {
+      ownLatest = decoded.hash;
+    }
+  }
+  if (ownLatest) {
+    heads.add(ownLatest);
+  }
+  return Automerge.clone(Automerge.view(doc, [...heads]), { actor });
 }
 
 function getFieldValue(source: Record<string, unknown>, field: string) {
@@ -1966,14 +2484,16 @@ function createDatabaseHandle(
   listViewDocuments: () => EvaluatingViewDocument[];
   documents: Map<string, MockStoredDocument>;
   notifyLiveQueries: () => void;
+  applyRemoteUpdate: MockApplyRemoteUpdate;
 } {
   let createCounter = 0;
   let changeCounter = 0;
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const storedDocuments = new Map<string, MockStoredDocument>();
+  const automergeMode = definition.automerge === true;
 
   for (const seed of definition.documents ?? []) {
-    storedDocuments.set(seed.id, {
+    const stored: MockStoredDocument = {
       id: seed.id,
       data: structuredClone(seed.data),
       heads: seed.heads ? [...seed.heads] : undefined,
@@ -1984,7 +2504,15 @@ function createDatabaseHandle(
       decryptionKeyId: seed.decryptionKeyId,
       authorLabel: seed.authorLabel,
       createdAt: seed.createdAt,
-    });
+    };
+    if (automergeMode) {
+      // Fixed actor and time: the same seed gives the same heads in every mock.
+      persistMockAutomergeDocument(
+        stored,
+        createMockAutomergeDocument(seed.data, MOCK_AUTOMERGE_SEED_ACTOR, 0),
+      );
+    }
+    storedDocuments.set(seed.id, stored);
   }
 
   type MockLiveQuerySubscription = {
@@ -2049,6 +2577,15 @@ function createDatabaseHandle(
       throw new Error("Recipient mutators require a document created with `recipients`");
     }
     const updatedAt = new Date().toISOString();
+    if (automergeMode) {
+      return writeAutomergeDocument(
+        docId,
+        existing,
+        Automerge.change(loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR), (target) => {
+          target._encryptFor = hydrateMockAutomergeValues(nextEncryptFor);
+        }),
+      );
+    }
     const updated = {
       id: docId,
       data: { ...existing.data, _encryptFor: nextEncryptFor },
@@ -2070,6 +2607,37 @@ function createDatabaseHandle(
     });
     notifyLiveQueries();
     return updated;
+  }
+
+  /**
+   * Stores `automergeDoc` as the new state of `docId` (automerge mode),
+   * notifies live queries and returns the document as `update` does.
+   */
+  function writeAutomergeDocument(
+    docId: string,
+    existing: MockStoredDocument | undefined,
+    automergeDoc: Automerge.Doc<Record<string, unknown>>,
+  ): MindooDBAppDocument {
+    const stored: MockStoredDocument = {
+      ...(existing ?? {}),
+      id: docId,
+      data: {},
+      attachments: existing?.attachments ? structuredClone(existing.attachments) : [],
+      updatedAt: new Date().toISOString(),
+      isDeleted: false,
+      decryptionKeyId: existing?.decryptionKeyId ?? "default",
+    };
+    persistMockAutomergeDocument(stored, automergeDoc);
+    storedDocuments.set(docId, stored);
+    notifyLiveQueries();
+    return {
+      id: docId,
+      data: structuredClone(stored.data),
+      heads: [...(stored.heads ?? [])],
+      attachments: structuredClone(stored.attachments ?? []),
+      updatedAt: stored.updatedAt,
+      ...mockDecryptionKeyId(stored),
+    };
   }
 
   const defaultDocuments: MindooDBAppDocumentApi = {
@@ -2350,7 +2918,9 @@ function createDatabaseHandle(
           if (existing.isDeleted) {
             existing.isDeleted = false;
             existing.updatedAt = new Date().toISOString();
-            existing.heads = [`mock-head-${++changeCounter}`];
+            if (!automergeMode) {
+              existing.heads = [`mock-head-${++changeCounter}`];
+            }
             notifyLiveQueries();
           }
           return {
@@ -2385,13 +2955,41 @@ function createDatabaseHandle(
           "recipients: [] with includeSelf: false would produce a document nobody can read",
         );
       }
+      const encryptFor = Array.isArray(input.recipients)
+        ? { _encryptFor: mockEncryptForMap(input.recipients) }
+        : {};
+      if (automergeMode) {
+        const stored: MockStoredDocument = {
+          id,
+          data: {},
+          attachments: [],
+          updatedAt: createdAt,
+          isDeleted: false,
+          decryptionKeyId: input.decryptionKeyId ?? "default",
+        };
+        persistMockAutomergeDocument(
+          stored,
+          createMockAutomergeDocument(
+            { ...(input.set ?? {}), ...encryptFor },
+            MOCK_AUTOMERGE_LOCAL_ACTOR,
+          ),
+        );
+        storedDocuments.set(id, stored);
+        notifyLiveQueries();
+        return {
+          id,
+          data: structuredClone(stored.data),
+          heads: [...(stored.heads ?? [])],
+          attachments: [],
+          updatedAt: createdAt,
+          ...mockDecryptionKeyId(stored),
+        };
+      }
       const created = {
         id,
         data: {
           ...(readMockTypedValues(input.set ?? {}) as Record<string, unknown>),
-          ...(Array.isArray(input.recipients)
-            ? { _encryptFor: mockEncryptForMap(input.recipients) }
-            : {}),
+          ...encryptFor,
         },
         heads: [`mock-head-${++changeCounter}`],
         attachments: [],
@@ -2424,6 +3022,12 @@ function createDatabaseHandle(
     async update(docId, patch) {
       const updatedAt = new Date().toISOString();
       const existing = storedDocuments.get(docId);
+      if (automergeMode) {
+        const current = existing?.automergeBinary
+          ? loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR)
+          : createMockAutomergeDocument(existing?.data ?? {}, MOCK_AUTOMERGE_LOCAL_ACTOR);
+        return writeAutomergeDocument(docId, existing, applyMockAutomergeUpdate(current, patch));
+      }
       const updated = {
         id: docId,
         data: applyDocumentUpdatePatch(existing?.data ?? {}, patch),
@@ -2526,7 +3130,7 @@ function createDatabaseHandle(
         storedDocuments.set(_docId, {
           ...existing,
           isDeleted: false,
-          heads: [`mock-head-${++changeCounter}`],
+          heads: automergeMode ? existing.heads : [`mock-head-${++changeCounter}`],
           updatedAt: new Date().toISOString(),
         });
         notifyLiveQueries();
@@ -2811,6 +3415,28 @@ function createDatabaseHandle(
         })),
     documents: storedDocuments,
     notifyLiveQueries: refreshLiveQueries,
+    async applyRemoteUpdate(docId, input, options) {
+      const existing = storedDocuments.get(docId);
+      if (!existing || existing.isDeleted) {
+        throw new Error(`Document ${docId} was not found.`);
+      }
+      if (!automergeMode || !existing.automergeBinary) {
+        // Plain JSON mock: no history to merge with, so this is a normal update.
+        return await defaultDocuments.update(docId, input);
+      }
+      const current = loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR);
+      // The device's copy already stands at `json.baseHeads` (plus its own earlier
+      // changes), so the JSON patch applies to that state as a plain change.
+      const remote = applyMockAutomergeUpdate(
+        forkMockAutomergeDocument(
+          current,
+          input.json?.baseHeads,
+          options?.actor ?? MOCK_AUTOMERGE_REMOTE_ACTOR,
+        ),
+        input.json ? { ...input, json: { ...input.json, baseHeads: undefined } } : input,
+      );
+      return writeAutomergeDocument(docId, existing, Automerge.merge(current, remote));
+    },
   };
 }
 
@@ -2827,6 +3453,12 @@ type MockSessionState = {
   setDirectoryUsers: (users: readonly string[]) => void;
   getDirectoryUsers: () => string[];
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
+  applyRemoteUpdate: (
+    databaseId: string,
+    docId: string,
+    input: MindooDBAppUpdateDocumentInput,
+    options?: MockRemoteUpdateOptions,
+  ) => Promise<MindooDBAppDocument>;
   getLicensedProducts: () => string[];
   proposedApps: MindooDBAppProposeAppInput[];
   createViewNavigator: (
@@ -2878,6 +3510,7 @@ function createMockSessionState(
   const databaseViewDocumentLists = new Map<string, () => EvaluatingViewDocument[]>();
   const databaseDocumentStores = new Map<string, Map<string, MockStoredDocument>>();
   const databaseLiveQueryRefreshers = new Map<string, () => void>();
+  const databaseRemoteUpdaters = new Map<string, MockApplyRemoteUpdate>();
   const databasePeers: MockDatabasePeers = {
     getDocuments: (databaseId) => databaseDocumentStores.get(databaseId),
     refreshAllLiveQueries: () => {
@@ -2974,6 +3607,7 @@ function createMockSessionState(
     databaseViewApis.clear();
     databaseDocumentStores.clear();
     databaseLiveQueryRefreshers.clear();
+    databaseRemoteUpdaters.clear();
     databaseInfos = definitions.map((definition) => ({
       ...definition.info,
       capabilities: [...definition.info.capabilities],
@@ -2992,6 +3626,7 @@ function createMockSessionState(
       databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
       databaseDocumentStores.set(definition.info.id, created.documents);
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
+      databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
       databaseViewApis.set(definition.info.id, {
         async create(input: MindooDBAppCreateViewNavigatorInput) {
           const build = () =>
@@ -3287,6 +3922,13 @@ function createMockSessionState(
       }
       return database;
     },
+    async applyRemoteUpdate(databaseId, docId, input, updateOptions) {
+      const applyRemoteUpdate = databaseRemoteUpdaters.get(databaseId);
+      if (!applyRemoteUpdate) {
+        throw new Error(`Unknown test database: ${databaseId}`);
+      }
+      return await applyRemoteUpdate(docId, input, updateOptions);
+    },
     getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
     },
@@ -3397,7 +4039,34 @@ export interface MockMindooDBAppDatabaseDefinition {
    * results the same way they would in Haven.
    */
   summarySetup?: MindooDBAppSummarySetup | null;
+  /**
+   * Back every document with a real Automerge document, like Haven: `update`
+   * applies `set`/`unset`, `json` (at `json.baseHeads`) and `text` patches as
+   * Automerge changes, heads are real Automerge heads, and `applyRemoteUpdate`
+   * on the controller writes as another device so concurrent edits truly
+   * merge. Off by default (plain JSON with `mock-head-N` heads).
+   */
+  automerge?: boolean;
 }
+
+/** Options of `applyRemoteUpdate`. */
+export interface MockRemoteUpdateOptions {
+  /**
+   * Automerge actor id (hex) of the simulated device. Defaults to one fixed
+   * "remote" actor; pass different ids to simulate several devices.
+   */
+  actor?: string;
+}
+
+/**
+ * Applies `input` as another device would and merges it into the stored
+ * document; see `MockMindooDBAppSessionController.applyRemoteUpdate`.
+ */
+type MockApplyRemoteUpdate = (
+  docId: string,
+  input: MindooDBAppUpdateDocumentInput,
+  options?: MockRemoteUpdateOptions,
+) => Promise<MindooDBAppDocument>;
 
 /**
  * Stands in for the host-owned sealed channel.
@@ -3495,6 +4164,20 @@ export interface MockMindooDBAppSessionController {
   setEnforceCapabilities(enforce: boolean): void;
   /** Replaces the directory's usernames (see `directoryUsers`). */
   setDirectoryUsers(users: readonly string[]): void;
+  /**
+   * Writes `input` to a document as another device would, then syncs it in:
+   * live queries update like after any write. With `automerge: true` on the
+   * database the edit is made by a different Automerge actor on the history
+   * up to `input.json.baseHeads` (the current state when omitted) and merged,
+   * so it is truly concurrent to app writes at the same heads. Without it, it
+   * is a plain update. Bypasses capability checks (it is not the app writing).
+   */
+  applyRemoteUpdate(
+    databaseId: string,
+    docId: string,
+    input: MindooDBAppUpdateDocumentInput,
+    options?: MockRemoteUpdateOptions,
+  ): Promise<MindooDBAppDocument>;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
@@ -3599,6 +4282,7 @@ export function createMockMindooDBAppSession(
     setCapabilities: state.setCapabilities,
     setEnforceCapabilities: state.setEnforceCapabilities,
     setDirectoryUsers: state.setDirectoryUsers,
+    applyRemoteUpdate: state.applyRemoteUpdate,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
     emitUiPreferencesChange: state.emitUiPreferencesChange,
@@ -3709,6 +4393,13 @@ export interface FakeBridgeHostController {
   /** See {@link CreateMockMindooDBAppSessionOptions.directoryUsers}. */
   setDirectoryUsers(users: readonly string[]): void;
   getDirectoryUsers(): string[];
+  /** See {@link MockMindooDBAppSessionController.applyRemoteUpdate}. */
+  applyRemoteUpdate(
+    databaseId: string,
+    docId: string,
+    input: MindooDBAppUpdateDocumentInput,
+    options?: MockRemoteUpdateOptions,
+  ): Promise<MindooDBAppDocument>;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Closes an embed and pushes the `embed-event` to the app. */
@@ -4986,6 +5677,7 @@ export function createFakeBridgeHost(
     getEnforceCapabilities: state.getEnforceCapabilities,
     setDirectoryUsers: state.setDirectoryUsers,
     getDirectoryUsers: state.getDirectoryUsers,
+    applyRemoteUpdate: state.applyRemoteUpdate,
     listEmbeds: () => state.embedHost.listEmbeds(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
