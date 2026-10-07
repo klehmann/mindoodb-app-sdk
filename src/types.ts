@@ -1681,7 +1681,11 @@ export interface MindooDBAppEmbed {
    * `container`, whose rectangle the SDK follows itself.
    */
   setRect(rect: MindooDBAppEmbedRect): Promise<void>;
-  /** Hide without closing, e.g. while a dialog of the host covers it. */
+  /**
+   * Hide without closing, e.g. while a dialog of the host covers it, or (also with
+   * `frame` placement) while it sits in a background tab: a hidden component gets
+   * no drops of host-owned drags.
+   */
   setVisible(visible: boolean): Promise<void>;
   /**
    * Whether the component has changes it has not saved yet, as it last reported
