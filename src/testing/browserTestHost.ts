@@ -14,6 +14,7 @@ import {
   type MockMindooDBAppDatabaseDefinition,
 } from "./index";
 import { createMemoryAttachments } from "./memoryAttachments";
+import type { MockAgentCall, MockAgentHostController } from "./mockAgentTools";
 
 /**
  * A stand-in Haven for a real browser: the app runs in an iframe, exactly as Haven frames
@@ -76,6 +77,12 @@ export interface CreateBrowserTestHostOptions extends CreateFakeBridgeHostOption
 export interface BrowserTestHost {
   host: FakeBridgeHostController;
   log: BrowserTestHostLog;
+  /**
+   * Haven's agent-tool side (same as `host.agent`): the app's declared tools and
+   * context, `call(tool, input)` as an agent would, `importFile()` to hand the app a
+   * file for `takeFile`, and `getFile()` for what it handed over with `provideFile`.
+   */
+  agent: MockAgentHostController;
   /**
    * Decides the outcome of the app's next `attachments.scan()`: a file to "scan", or
    * `null` to act as if the user cancelled. Later scans follow {@link setScanMode}.
@@ -308,6 +315,10 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
 
   const host = createFakeBridgeHost({
     ...hostOptions,
+    onAgentChange() {
+      hostOptions.onAgentChange?.();
+      changed();
+    },
     onRequest(request) {
       log.requests.push(request);
       const params = (request.params ?? {}) as Record<string, unknown>;
@@ -408,6 +419,7 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
   return {
     host,
     log,
+    agent: host.agent,
     setNextScan(scan) {
       nextScan = scan;
     },
@@ -524,6 +536,10 @@ const STYLE = `
 .htest__meta{margin-left:auto;color:#5b6478;font-size:11px;white-space:nowrap}
 .htest__error{color:#b42318}
 .htest pre{margin:4px 0 2px;padding:6px 8px;background:#fff;border:1px solid #e4e8f1;border-radius:6px;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
+.htest textarea{width:100%;min-height:70px;font:11px/1.4 ui-monospace,monospace;border:1px solid #c9d0e0;border-radius:6px;padding:6px}
+.htest__tag{display:inline-block;padding:0 6px;border-radius:999px;background:#e4e8f1;color:#334155;font-size:10px;margin-left:4px}
+.htest__tag--warn{background:#fee4e2;color:#912018}
+.htest__shot{max-width:100%;border:1px solid #e4e8f1;border-radius:6px;margin-top:4px;background:#fff}
 @media (max-width:720px){.htest{grid-template-columns:1fr;grid-template-rows:65vh auto}.htest__panel{border-left:0;border-top:1px solid #d7dce8}}
 `;
 
@@ -790,7 +806,11 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     lists.requests.replaceChildren(...log.requests.slice(-50).reverse().map(requestEntry));
   }
 
+  let agentReady = false;
   const testHost = createBrowserTestHost({
+    // Haven's consent dialog, as a browser confirm (scripts can switch it with agent.setConsent)
+    agentConsent: ({ tool, input }) =>
+      window.confirm(`An agent wants to run "${tool}" (marked consequential).\n\n${previewJson(input, 200, 10, 3)}\n\nAllow?`),
     ...hostOptions,
     databases,
     launchContext,
@@ -800,7 +820,11 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
         ? generateDirectoryUsers(url.directoryUserCount)
         : hostOptions.directoryUsers,
     frame,
-    onChange: render,
+    onChange: () => {
+      render();
+      // the agent section is built after the host exists
+      if (agentReady) renderAgent();
+    },
     onEmbedChange(embeds) {
       hostOptions.onEmbedChange?.(embeds);
       renderEmbeds(embeds);
@@ -952,12 +976,225 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     hint("What attachments.scan() returns; the file is attached to the document like in Haven."),
   );
 
+  // Agent tools: what the app offers to agents, a call form, the file exchange
+  const agentState = document.createElement("div");
+  agentState.className = "htest__muted";
+  const agentEnabled = document.createElement("label");
+  agentEnabled.className = "htest__check";
+  const agentEnabledBox = document.createElement("input");
+  agentEnabledBox.type = "checkbox";
+  agentEnabledBox.dataset.testid = "haven-test-agent-enabled";
+  agentEnabledBox.checked = testHost.agent.isEnabled();
+  agentEnabledBox.addEventListener("change", () => testHost.agent.setEnabled(agentEnabledBox.checked));
+  agentEnabled.append(agentEnabledBox, "Agent access on (registerTools answers enabled)");
+  const agentTools = document.createElement("ul");
+  const toolSelect = document.createElement("select");
+  toolSelect.dataset.testid = "haven-test-agent-tool";
+  toolSelect.setAttribute("aria-label", "Agent tool");
+  const toolInput = document.createElement("textarea");
+  toolInput.dataset.testid = "haven-test-agent-input";
+  toolInput.setAttribute("aria-label", "Tool input (JSON)");
+  toolInput.value = "{}";
+  const toolResult = document.createElement("div");
+  toolResult.dataset.testid = "haven-test-agent-result";
+  const callButton = button("Call tool", () => void runTool());
+  callButton.dataset.testid = "haven-test-agent-call";
+  const agentContext = document.createElement("pre");
+  agentContext.dataset.testid = "haven-test-agent-context";
+  const agentFiles = document.createElement("ul");
+  const agentCalls = document.createElement("ul");
+  const importInput = document.createElement("input");
+  importInput.type = "file";
+  importInput.multiple = true;
+  importInput.dataset.testid = "haven-test-agent-import";
+  importInput.setAttribute("aria-label", "Import files for the app");
+  importInput.addEventListener("change", () => {
+    void (async () => {
+      for (const file of importInput.files ?? []) {
+        await testHost.agent.importFile({ name: file.name, mimeType: file.type, data: file });
+      }
+      importInput.value = "";
+    })();
+  });
+
+  /** A result as the agent would see it; data-URL images are also shown. */
+  function showOutcome(target: HTMLElement, call: MockAgentCall) {
+    const pre = document.createElement("pre");
+    const outcome = call.outcome;
+    if (!outcome) {
+      pre.textContent = "running…";
+      target.replaceChildren(pre);
+      return;
+    }
+    if (outcome.ok) {
+      pre.textContent = previewJson(outcome.result, 2000, 60, 8);
+    } else {
+      pre.className = "htest__error";
+      pre.textContent = `${outcome.error.code}: ${outcome.error.message}${outcome.error.requiredAction ? `\n→ ${outcome.error.requiredAction}` : ""}`;
+    }
+    const images: string[] = [];
+    const collect = (value: unknown, depth: number) => {
+      if (depth > 4 || images.length >= 4) return;
+      if (typeof value === "string" && /^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,/.test(value)) images.push(value);
+      else if (value && typeof value === "object") for (const child of Object.values(value)) collect(child, depth + 1);
+    };
+    if (outcome.ok) collect(outcome.result, 0);
+    target.replaceChildren(
+      pre,
+      ...images.map((src) => {
+        const img = document.createElement("img");
+        img.className = "htest__shot";
+        img.src = src;
+        img.alt = "image in the tool result";
+        return img;
+      }),
+    );
+  }
+
+  async function runTool() {
+    let input: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(toolInput.value || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The input must be a JSON object.");
+      input = parsed as Record<string, unknown>;
+    } catch (error) {
+      const pre = document.createElement("pre");
+      pre.className = "htest__error";
+      pre.textContent = error instanceof Error ? error.message : String(error);
+      toolResult.replaceChildren(pre);
+      return;
+    }
+    callButton.disabled = true;
+    try {
+      await testHost.agent.call(toolSelect.value, input);
+      const last = testHost.agent.calls().at(-1);
+      if (last) showOutcome(toolResult, last);
+    } finally {
+      callButton.disabled = false;
+    }
+  }
+
+  function download(name: string, mimeType: string, data: Uint8Array): HTMLAnchorElement {
+    const link = document.createElement("a");
+    link.textContent = name;
+    link.download = name;
+    link.href = URL.createObjectURL(new Blob([data.slice().buffer as ArrayBuffer], { type: mimeType }));
+    return link;
+  }
+
+  const openCalls = new Set<string>();
+  function renderAgent() {
+    const agent = testHost.agent;
+    const tools = agent.tools();
+    agentState.textContent = `prefix "${agent.prefix}" · ${tools.length} tool(s) · ${agent.isEnabled() ? "access on" : "access off"}`;
+    agentEnabledBox.checked = agent.isEnabled();
+    agentTools.replaceChildren(
+      ...tools.map((tool) => {
+        const li = document.createElement("li");
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const name = document.createElement("span");
+        name.textContent = `${agent.prefix}_${tool.name}`;
+        summary.append(name);
+        const hints = tool.annotations ?? {};
+        if (hints.readOnlyHint) summary.append(Object.assign(document.createElement("span"), { className: "htest__tag", textContent: "read-only" }));
+        if (hints.consequentialHint) summary.append(Object.assign(document.createElement("span"), { className: "htest__tag htest__tag--warn", textContent: "asks first" }));
+        const description = document.createElement("p");
+        description.textContent = tool.description;
+        const schema = document.createElement("pre");
+        schema.textContent = previewJson(tool.inputSchema, 400, 60, 10);
+        details.append(summary, description, schema);
+        li.append(details);
+        return li;
+      }),
+    );
+    const selected = toolSelect.value;
+    toolSelect.replaceChildren(...tools.map((tool) => new Option(`${agent.prefix}_${tool.name}`, tool.name)));
+    if (tools.some((tool) => tool.name === selected)) toolSelect.value = selected;
+    callButton.disabled = tools.length === 0;
+    agentContext.textContent = previewJson(agent.context(), 400, 30, 6);
+    agentFiles.replaceChildren(
+      ...agent.files().map((file) => {
+        const li = document.createElement("li");
+        const ref = document.createElement("code");
+        ref.textContent = file.fileRef;
+        const copy = button("copy ref", () => void navigator.clipboard?.writeText(file.fileRef));
+        li.append(
+          file.source === "app" ? "from app: " : "for app: ",
+          file.source === "app" ? download(file.name, file.mimeType, file.data) : file.name,
+          ` (${file.data.length} bytes) `,
+          ref,
+          " ",
+          copy,
+        );
+        return li;
+      }),
+    );
+    agentCalls.replaceChildren(
+      ...agent
+        .calls()
+        .slice(-20)
+        .reverse()
+        .map((call) => {
+          const li = document.createElement("li");
+          const details = document.createElement("details");
+          const summary = document.createElement("summary");
+          const label = document.createElement("span");
+          label.textContent = call.tool;
+          if (call.outcome && !call.outcome.ok) label.className = "htest__error";
+          const meta = document.createElement("span");
+          meta.className = "htest__meta";
+          meta.textContent = call.outcome ? `${call.outcome.durationMs} ms` : "…";
+          summary.append(label, meta);
+          const body = document.createElement("div");
+          const input = document.createElement("pre");
+          input.textContent = previewJson(call.input);
+          details.append(summary, body);
+          details.addEventListener("toggle", () => {
+            if (details.open) {
+              openCalls.add(call.callId);
+              const out = document.createElement("div");
+              showOutcome(out, call);
+              body.replaceChildren(input, out);
+            } else openCalls.delete(call.callId);
+          });
+          if (openCalls.has(call.callId)) details.open = true;
+          li.append(details);
+          return li;
+        }),
+    );
+  }
+
+  const callRow = document.createElement("div");
+  callRow.className = "htest__row";
+  callRow.append(toolSelect, callButton);
+  section(
+    "Agent tools",
+    agentState,
+    agentEnabled,
+    agentTools,
+    callRow,
+    toolInput,
+    toolResult,
+    hint("Calls a tool as an agent would; tools marked “asks first” go through a confirm, like Haven's consent dialog."),
+  );
+  section(
+    "Agent files",
+    importInput,
+    hint("Import puts a file in the exchange for the app (takeFile); pass its fileRef to a tool. Files the app hands over (provideFile) can be downloaded."),
+    agentFiles,
+  );
+  section("Agent context", agentContext);
+  section("Agent calls (latest first)", agentCalls);
+
   section("Notifications", lists.notifications);
   section("Previews", lists.previews);
   section("Scans", lists.scans);
   section("Requests (latest first, click for details)", lists.requests);
 
   render();
+  agentReady = true;
+  renderAgent();
   syncUrl();
   window.__havenTestHost = testHost;
   return testHost;
