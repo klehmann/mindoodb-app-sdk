@@ -344,6 +344,7 @@ The page shows the app next to a control panel:
 - **Databases**: one checkbox per capability for every mapped database, plus **Enforce capabilities**. Changing a capability relaunches the app, as Haven does after a permission change. With enforcement on, the mock rejects every call the database was not granted with a `forbidden` error (and `documents.canCreate()` and friends answer `allowed: false`), so you can check the app's hints for missing rights.
 - **Directory**: fills the tenant directory with 0 to 500 generated users (`CN=Test User 001/O=Test`, …) for recipient pickers and paging.
 - **Scanner**: what `attachments.scan()` returns — cancel, a generated sample page, or a file you choose. The file is written to the document's attachments like Haven's scanner does, so the app can read it back.
+- **Agent tools**: the tools the app declared with `session.agent.registerTools()` (with the prefix agents see, `read-only` and `asks first` tags, description and input schema), a form to call one with a JSON input as an agent would, and the result as the agent gets it (images in the result are shown). Tools marked `consequentialHint` go through a confirm, like Haven's consent dialog. A checkbox switches agent access off. **Agent files** imports files for the app (each gets a `fileRef` for `takeFile`) and lists the files the app handed over with `provideFile` for download. **Agent context** shows what the app last passed to `setContext`.
 - A live log of notifications, attachment previews, scans and every RPC request. Click a request for its parameters, its result or error, and how long it took; binary values show as size plus a hex preview.
 
 `mockDatabasesFromDefinition` gives every database an in-memory attachment store (`attachments: "none"` restores the stateless default) and takes overrides for testing other mappings than the definition requests:
@@ -376,6 +377,21 @@ await page.evaluate(() => window.__havenTestHost!.setNextScan({ fileName: "recei
 await app.getByRole("button", { name: "Scan" }).click();
 expect(await page.evaluate(() => window.__havenTestHost!.log.scans)).toHaveLength(1);
 ```
+
+Agent tools are scriptable through `window.__havenTestHost.agent`, the same controller the Vitest helpers expose as `createFakeBridgeHost().agent`:
+
+```ts
+const agent = () => window.__havenTestHost!.agent;
+const fileRef = await page.evaluate(() =>
+  agent().importFile({ name: "logo.png", mimeType: "image/png", data: new Uint8Array([137, 80, 78, 71]) }),
+);
+const added = await page.evaluate((ref) => agent().call("image_add", { fileRef: ref }), fileRef);
+expect(added).toMatchObject({ ok: true });
+const exported = await page.evaluate(() => agent().call("deck_export", { format: "pptx" }));
+const file = await page.evaluate((ref) => agent().getFile(ref)?.name, (exported as any).result.files[0].fileRef);
+```
+
+`call()` takes the tool's own name or the prefixed one and never throws: failures come back as `{ ok: false, error: { code, message, requiredAction } }`, the codes an agent sees. The mock follows Haven: tool declarations are validated (name, at most 64 tools, 2000-character descriptions, an object `inputSchema`), the prefix is the definition's `agentToolPrefix` (pass it as the `agentToolPrefix` option) or derived from the app id, an app can only `takeFile()` what was imported for it, and file refs expire after ten minutes. `setConsent("allow" | "deny" | fn)` answers the consent step in scripts, `setEnabled(false)` switches access off, and `calls()` lists every call with its outcome.
 
 `setNextScan()` decides only the next scan (pass `bytes` to attach real content); `setScanMode()` decides the ones after it. `setDirectoryUsers()` and `setEnforceCapabilities()` apply to the next call.
 

@@ -113,6 +113,7 @@ import type {
 import { MINDOODB_APP_VALUE_TAG } from "../values";
 import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase } from "./capabilityGuard";
+import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
 import { pageUsers } from "../directoryPaging";
 
 const PROTOCOL = "mindoodb-app-bridge";
@@ -3648,8 +3649,10 @@ export type FakeBridgeRpcResponse =
   | { ok: true; result: unknown; durationMs: number }
   | { ok: false; error: MindooDBAppBridgeErrorPayload; durationMs: number };
 
-export interface CreateFakeBridgeHostOptions extends CreateMockMindooDBAppSessionOptions {
+export interface CreateFakeBridgeHostOptions extends CreateMockMindooDBAppSessionOptions, MockAgentHostOptions {
   windowMode?: "parent" | "opener";
+  /** Called when the app's agent tools, context or exchange files change, and after each tool call. */
+  onAgentChange?: () => void;
   requestHandlers?: Record<string, FakeBridgeRequestHandler>;
   /** Called for every RPC request the app sends, before it is answered. */
   onRequest?: (request: MindooDBAppBridgeRpcRequest) => void;
@@ -3723,6 +3726,11 @@ export interface FakeBridgeHostController {
    * over the port and resolves or rejects with the app's answer.
    */
   requestEmbeddingSave(): Promise<void>;
+  /**
+   * Haven's agent-tool side: the tools and context the app declared, files in the
+   * exchange, and `call()` to run a tool as an agent would.
+   */
+  readonly agent: MockAgentHostController;
 }
 
 /** What the fake host's built-in dispatch returns for a method it does not know. */
@@ -3737,6 +3745,21 @@ export function createFakeBridgeHost(
   );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
+  const agentHost = createMockAgentHost({
+    ...(options.agentToolPrefix !== undefined ? { agentToolPrefix: options.agentToolPrefix } : {}),
+    ...(options.agentToolsEnabled !== undefined ? { agentToolsEnabled: options.agentToolsEnabled } : {}),
+    ...(options.agentConsent !== undefined ? { agentConsent: options.agentConsent } : {}),
+    ...(options.agentInvokeTimeoutMs !== undefined ? { agentInvokeTimeoutMs: options.agentInvokeTimeoutMs } : {}),
+    appId: () => state.getLaunchContext().appId,
+    post(message) {
+      // the newest connection is the running app; older ports belong to reloaded frames
+      const port = [...connectedPorts].pop();
+      if (!port) return false;
+      port.postMessage(message);
+      return true;
+    },
+    onChange: () => options.onAgentChange?.(),
+  });
   state.embedHost.onClosed((event) => {
     connectedPorts.forEach((port) =>
       port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "closed", ...event } }),
@@ -3792,6 +3815,8 @@ export function createFakeBridgeHost(
         "Expected the bridge connection to transfer a MessagePort.",
       );
     }
+    // a new connection is a (re)launched app: its tools and context start over
+    if (connectedPorts.size > 0) agentHost.reset("The app was reloaded.");
     connectedPorts.add(port);
     port.addEventListener("message", (event: MessageEvent<unknown>) => {
       void handlePortMessage(port, event.data);
@@ -4847,6 +4872,10 @@ export function createFakeBridgeHost(
       beforeCloseWaiters.get(message.closeId)?.();
       return;
     }
+    if (message.kind === "agent-result") {
+      agentHost.handleResult(message);
+      return;
+    }
     if (message.kind === "workspace-focus-requested") {
       state.setHostFocused(true);
       const payload: MindooDBAppBridgeHostFocusChangedMessage = {
@@ -4886,6 +4915,11 @@ export function createFakeBridgeHost(
             port,
           });
           succeed(result);
+          return;
+        }
+        const agentResult = await agentHost.dispatch(message.method, message.params);
+        if (agentResult) {
+          succeed(agentResult.result);
           return;
         }
         const builtinResult = await handleBuiltinRequest(message);
@@ -4934,6 +4968,7 @@ export function createFakeBridgeHost(
   const controller: FakeBridgeHostController = {
     bridge: state.bridge,
     session: state.session,
+    agent: agentHost.controller,
     get launchId() {
       return state.getLaunchContext().launchId;
     },
@@ -5086,5 +5121,17 @@ export function createFakeBridgeHost(
   return controller;
 }
 export * from "./browserTestHost";
+export {
+  createMockAgentHost,
+  mockAgentToolPrefix,
+  validateMockAgentTools,
+  type MockAgentCall,
+  type MockAgentCallResult,
+  type MockAgentConsent,
+  type MockAgentFile,
+  type MockAgentHost,
+  type MockAgentHostController,
+  type MockAgentHostOptions,
+} from "./mockAgentTools";
 export { createMemoryAttachments } from "./memoryAttachments";
 export { MockForbiddenError } from "./capabilityGuard";
