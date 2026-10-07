@@ -185,9 +185,9 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
       return;
     }
     if (this.frame) {
-      // Part of this app's page: hiding it is this app's business.
+      // Part of this app's page: hiding it is this app's business. Haven still
+      // needs to know, so a hidden component gets no drops and no menus.
       this.frame.style.visibility = visible ? "" : "hidden";
-      return;
     }
     await this.rpc.call("embeds.setVisible", { embedId: this.embedId, visible: visible === true });
   }

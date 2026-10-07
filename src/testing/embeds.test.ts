@@ -87,6 +87,11 @@ describe("mock components and embeds", () => {
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe("about:blank#relay");
       await embed.setVisible(false);
       expect(embed.frame?.style.visibility).toBe("hidden");
+      // Haven hears it too: a hidden component is no drop target.
+      expect(host.listEmbeds()[0]?.visible).toBe(false);
+      await embed.setVisible(true);
+      expect(embed.frame?.style.visibility).toBe("");
+      expect(host.listEmbeds()[0]?.visible).toBe(true);
       host.closeEmbed(embed.embedId, "completed");
       await embed.closed;
       expect(container.querySelector("iframe")).toBeNull();
