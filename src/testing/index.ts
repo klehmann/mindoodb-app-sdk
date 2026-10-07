@@ -2489,8 +2489,18 @@ function createDatabaseHandle(
   let createCounter = 0;
   let changeCounter = 0;
   const defaultViewFactory = async () => createDefaultViewNavigator();
-  const storedDocuments = new Map<string, MockStoredDocument>();
   const automergeMode = definition.automerge === true;
+  // Changefeed position of every document: bumped on each write, so that in
+  // Automerge mode `list({ cursor })` reports what changed after a cursor, as
+  // MindooDB's changefeed does (each document once, at its latest change).
+  let changeSequence = 0;
+  const changedAt = new Map<string, number>();
+  const storedDocuments = new (class extends Map<string, MockStoredDocument> {
+    override set(id: string, document: MockStoredDocument) {
+      changedAt.set(id, ++changeSequence);
+      return super.set(id, document);
+    }
+  })();
 
   for (const seed of definition.documents ?? []) {
     const stored: MockStoredDocument = {
@@ -2700,7 +2710,9 @@ function createDatabaseHandle(
       const metadataOnly = query?.metadataOnly ?? false;
 
       const idPrefix = query?.idPrefix;
+      const after = automergeMode ? decodeMockListCursor(query?.cursor) : 0;
       const items = Array.from(storedDocuments.values())
+        .filter((document) => !automergeMode || (changedAt.get(document.id) ?? 0) > after)
         .filter((document) => !document.inaccessible)
         .filter((document) =>
           status === "all"
@@ -2713,8 +2725,14 @@ function createDatabaseHandle(
         .filter((document) =>
           metadataOnly ? true : matchesDocumentFilter(document, query?.filter),
         )
-        .sort((left, right) => left.id.localeCompare(right.id));
-      const page = items.slice(offset, offset + limit).map((document) => {
+        .sort((left, right) =>
+          automergeMode
+            ? (changedAt.get(left.id) ?? 0) - (changedAt.get(right.id) ?? 0)
+            : left.id.localeCompare(right.id),
+        );
+      const pageStart = automergeMode ? skip : offset;
+      const pageDocuments = items.slice(pageStart, pageStart + limit);
+      const page = pageDocuments.map((document) => {
         if (metadataOnly) {
           return {
             id: document.id,
@@ -2737,6 +2755,15 @@ function createDatabaseHandle(
           isDeleted: status !== "existing" ? document.isDeleted : undefined,
         };
       });
+      if (automergeMode) {
+        // Changefeed: the cursor is the change position of the last row
+        // returned; null when nothing changed after the given cursor.
+        const last = pageDocuments[pageDocuments.length - 1];
+        return {
+          items: page,
+          nextCursor: last ? String(changedAt.get(last.id) ?? after) : null,
+        };
+      }
       const nextCursor =
         offset + page.length < items.length
           ? String(offset + page.length)
@@ -2748,7 +2775,7 @@ function createDatabaseHandle(
     },
     async getHeadCursor(): Promise<MindooDBAppDocumentHeadCursorResult> {
       return {
-        cursor: String(storedDocuments.size),
+        cursor: String(automergeMode ? changeSequence : storedDocuments.size),
       };
     },
     async listInaccessible(
@@ -2921,6 +2948,8 @@ function createDatabaseHandle(
             if (!automergeMode) {
               existing.heads = [`mock-head-${++changeCounter}`];
             }
+            // Re-store it so the changefeed reports the undelete.
+            storedDocuments.set(callerId, existing);
             notifyLiveQueries();
           }
           return {

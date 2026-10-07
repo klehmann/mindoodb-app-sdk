@@ -233,6 +233,21 @@ describe("automerge-backed mock databases", () => {
     expect(doc?.data.title).toBe("C");
   });
 
+  it("reports changed documents through the changefeed", async () => {
+    const { mock, database } = await openMock();
+    await database.documents.create({ id: "other", set: { title: "Other" } });
+    const { cursor } = await database.documents.getHeadCursor();
+    expect(await database.documents.list({ cursor, metadataOnly: true })).toEqual({ items: [], nextCursor: null });
+    await mock.applyRemoteUpdate("main", "sheet-1", { json: { set: [{ path: ["title"], value: "Remote" }] } });
+    await database.documents.update("other", { json: { set: [{ path: ["title"], value: "Local" }] } });
+    const page = await database.documents.list({ cursor, metadataOnly: true });
+    expect(page.items.map((item) => item.id)).toEqual(["sheet-1", "other"]);
+    expect(await database.documents.list({ cursor: page.nextCursor, metadataOnly: true })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+  });
+
   it("merges concurrent text patches at their baseHeads", async () => {
     const { mock, database } = await openMock();
     const baseHeads = (await database.documents.get("sheet-1"))?.heads ?? [];
