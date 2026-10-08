@@ -17,6 +17,7 @@ import {
   type MockRemoteUpdateOptions,
 } from "./index";
 import { createMemoryAttachments } from "./memoryAttachments";
+import { mountTwoUserTestHost, type TestHostUser } from "./twoUserTestHost";
 import type { MockAgentCall, MockAgentHostController } from "./mockAgentTools";
 
 /**
@@ -502,6 +503,14 @@ export interface MountHavenTestHostOptions extends Omit<CreateBrowserTestHostOpt
    * true. URL settings win over the options passed here.
    */
   urlSettings?: boolean;
+  /**
+   * Two app frames side by side, each on its own replica of the databases, merged by
+   * "Sync" / auto-sync — for testing concurrent editing by hand. Also `?twoUsers=1`.
+   * See {@link mountTwoUserTestHost}.
+   */
+  twoUsers?: boolean;
+  /** Names of the two users in two-user mode (default Anna and Ben). */
+  users?: readonly [TestHostUser, TestHostUser];
 }
 
 /** The locales Haven's UI offers; the default of the panel's language switcher. */
@@ -619,12 +628,45 @@ function item(text: string): HTMLLIElement {
  * of notifications, previews, scans and requests (click an entry for details).
  * The returned host is also available as `window.__havenTestHost`.
  */
+/**
+ * "Single user" / "Two users": links to the same test page with or without
+ * `twoUsers=1`, keeping the other URL settings (db, enforce, users, locale, …).
+ */
+export function modeSwitch(current: "single" | "two"): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "htest__row htest__mode";
+  row.dataset.testid = "haven-test-mode";
+  for (const [mode, label] of [
+    ["single", "Single user"],
+    ["two", "Two users"],
+  ] as const) {
+    const url = new URL(window.location.href);
+    if (mode === "two") url.searchParams.set("twoUsers", "1");
+    else url.searchParams.delete("twoUsers");
+    if (mode === current) {
+      const active = document.createElement("strong");
+      active.textContent = label;
+      active.setAttribute("aria-current", "page");
+      row.append(active);
+    } else {
+      const link = document.createElement("a");
+      link.href = url.toString();
+      link.textContent = label;
+      link.dataset.testid = `haven-test-mode-${mode}`;
+      row.append(link);
+    }
+  }
+  return row;
+}
+
 export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserTestHost {
   const {
     container = document.body,
     title = "Haven test host",
     locales = TEST_HOST_LOCALES,
     urlSettings: useUrl = true,
+    twoUsers = false,
+    users,
     ...hostOptions
   } = options;
 
@@ -641,6 +683,16 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     ...(url.locale ? { locale: url.locale } : {}),
     ...(url.theme ? { theme: { mode: url.theme, preset: "mindoo" } as MindooDBAppHostTheme } : {}),
   };
+
+  const twoUsersFromUrl = useUrl && new URLSearchParams(window.location.search).get("twoUsers") === "1";
+  if (twoUsers || twoUsersFromUrl) {
+    const handle = mountTwoUserTestHost(
+      { ...hostOptions, databases, launchContext, container, title, ...(users ? { users } : {}) },
+      createBrowserTestHost,
+    );
+    window.__havenTestHost = handle.hosts[0];
+    return handle.hosts[0];
+  }
 
   const style = document.createElement("style");
   style.textContent = STYLE;
@@ -884,6 +936,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     }),
     button("Reload app", () => testHost.reloadApp()),
   );
+  section("Mode", modeSwitch("single"));
   section("Host", hostRow, focusState);
 
   // Language: Haven's locale changes live, the app gets onLocaleChange

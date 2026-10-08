@@ -108,7 +108,7 @@ Each database entry can provide:
 - `methods.attachments`
 - `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.
 - `summarySetup` — the initial config returned by `db.getSummarySetup()`; `db.setSummarySetup()` overwrites it for the lifetime of the handle. The mock's `query()` reads seeded documents directly and ignores this config; use it to test your app's summary bootstrap logic.
-- `automerge: true` — back every document with a real Automerge document, as Haven does (off by default: plain JSON with `mock-head-N` heads). `create`/`update` then return real Automerge heads, `update` applies `set`/`unset`, `json` (with `Automerge.changeAt(json.baseHeads)` when given) and `text` patches as Automerge changes with Haven's rules (missing parents and lists are created, `unset` is idempotent, `counterIncrement` needs a counter, an empty `json` patch is rejected), and `get`/`list`/`query` return the plain projection (atomic strings as strings, counters as numbers, timestamps as ISO strings). `richText` snapshots replace the value at their path and `richTextSteps` are spliced into the text without marks. Seeds are built with a fixed actor, so two mocks from the same seed have identical heads. `mockDatabasesFromDefinition(definition, seed, { automerge: true })` and the test host URL setting `automerge=1` turn it on, too.
+- `automerge: true` — back every document with a real Automerge document, as Haven does (off by default: plain JSON with `mock-head-N` heads). `create`/`update` then return real Automerge heads, `update` applies `set`/`unset`, `json` (with `Automerge.changeAt(json.baseHeads)` when given) and `text` patches as Automerge changes with Haven's rules (missing parents and lists are created, `unset` is idempotent, `counterIncrement` needs a counter, an empty `json` patch is rejected), and `get`/`list`/`query` return the plain projection (atomic strings as strings, counters as numbers, timestamps as ISO strings). `richText` patches run Automerge's `updateSpans` at their `baseHeads` and `richTextSteps` splice and mark at theirs, both validated and with MindooDB's recovery, and `getRichText` returns `Automerge.spans` — so values Automerge rejects (an `immutableString` as a mark value) fail here as they do in Haven. A `richText` snapshot written at older `baseHeads` is applied on a fork at those heads and merged back, as MindooDB does (Automerge 3.5's `updateSpans` inside `changeAt` indexes the current text), so a concurrent edit of the same text survives. As in MindooDB's `applyDocumentUpdate`, all parts of one `update` whose `baseHeads` agree are applied as one Automerge change (one history entry), all or nothing. Seeds are built with a fixed actor, so two mocks from the same seed have identical heads. `mockDatabasesFromDefinition(definition, seed, { automerge: true })` and the test host URL setting `automerge=1` turn it on, too.
 
 #### Concurrent edits from another device
 
@@ -421,6 +421,25 @@ The Level 1 and 2 helpers take the same options: `createMockMindooDBAppSession({
 Lower-level pieces, if you build your own page: `createBrowserTestHost({ frame, appUrl, ...mockOptions })` wires one iframe to a fake host, and `host.acceptConnection(message, ports)` answers a handshake you received yourself.
 
 Keep the test page out of production builds. The starter template builds it only for `vite dev` and when `HAVEN_TEST_HOST=1` is set (for preview deployments), so the app's public URL keeps showing its landing page.
+
+### Two users on two replicas
+
+The panel's **Mode** section switches between *Single user* and *Two users* (keeping the other URL settings). `/__haven-test/?twoUsers=1` (or `mountHavenTestHost({ twoUsers: true })`) shows the app twice, side by side, as two people on two devices: each frame is launched by its own mock Haven with its own replica of every database (`automerge: true`, distinct Automerge actors), so their edits really are concurrent. The bar on top:
+
+- **Auto-sync every 2 s** (on by default) merges the replicas with `syncMockReplicas`, like Haven's sync. Turn it off to keep the two apart — two devices offline — edit on both sides, then press **Sync** and watch the merge.
+- The status says "✓ in sync" or how many documents still differ.
+
+Each app sees the other's changes the way it would in Haven (changefeed, live queries, or its own polling). Use it to try "one changes the text, the other the color", "both add a slide", "both format the same word" by hand. Playwright reaches both frames as `[data-testid="haven-two-users-frame-1"]` / `-2`, and `window.__havenTwoUsers` scripts the mode (`sync()`, `setAutoSync(on)`, `differences()`, `hosts`).
+
+In Vitest, two mocks with distinct `automergeActor`s plus `syncMockReplicas(a, b)` do the same without a browser:
+
+```ts
+const a = createMockMindooDBAppSession({ databases: [def()], automergeActor: "a1".repeat(16) });
+const b = createMockMindooDBAppSession({ databases: [def()], automergeActor: "b2".repeat(16) });
+// … edit through each session, then:
+await syncMockReplicas(a, b); // documents, deletions and attachments, both ways
+expect(mockReplicaDifferences(a, b)).toBe(0);
+```
 
 ## When to use which level
 
