@@ -628,6 +628,37 @@ function item(text: string): HTMLLIElement {
  * of notifications, previews, scans and requests (click an entry for details).
  * The returned host is also available as `window.__havenTestHost`.
  */
+/**
+ * "Single user" / "Two users": links to the same test page with or without
+ * `twoUsers=1`, keeping the other URL settings (db, enforce, users, locale, …).
+ */
+export function modeSwitch(current: "single" | "two"): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "htest__row htest__mode";
+  row.dataset.testid = "haven-test-mode";
+  for (const [mode, label] of [
+    ["single", "Single user"],
+    ["two", "Two users"],
+  ] as const) {
+    const url = new URL(window.location.href);
+    if (mode === "two") url.searchParams.set("twoUsers", "1");
+    else url.searchParams.delete("twoUsers");
+    if (mode === current) {
+      const active = document.createElement("strong");
+      active.textContent = label;
+      active.setAttribute("aria-current", "page");
+      row.append(active);
+    } else {
+      const link = document.createElement("a");
+      link.href = url.toString();
+      link.textContent = label;
+      link.dataset.testid = `haven-test-mode-${mode}`;
+      row.append(link);
+    }
+  }
+  return row;
+}
+
 export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserTestHost {
   const {
     container = document.body,
@@ -905,6 +936,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     }),
     button("Reload app", () => testHost.reloadApp()),
   );
+  section("Mode", modeSwitch("single"));
   section("Host", hostRow, focusState);
 
   // Language: Haven's locale changes live, the app gets onLocaleChange

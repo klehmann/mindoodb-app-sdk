@@ -101,4 +101,22 @@ describe("two-user test host", () => {
       (await b.host.session.getLaunchContext()).user.username,
     );
   });
+
+  it("switches modes from the panel, keeping the other URL settings", () => {
+    window.history.replaceState(null, "", "/__haven-test/?enforce=1&locale=de-DE");
+    mountHavenTestHost({ appUrl: "https://app.example.com/", databases: [definition()] });
+    const toTwo = document.querySelector<HTMLAnchorElement>('[data-testid="haven-test-mode-two"]')!;
+    const two = new URL(toTwo.href);
+    expect(two.searchParams.get("twoUsers")).toBe("1");
+    expect(two.searchParams.get("enforce")).toBe("1");
+    expect(two.searchParams.get("locale")).toBe("de-DE");
+
+    document.body.replaceChildren();
+    window.history.replaceState(null, "", "/__haven-test/?twoUsers=1&locale=de-DE");
+    mountHavenTestHost({ appUrl: "https://app.example.com/", databases: [definition()] });
+    window.__havenTwoUsers!.setAutoSync(false);
+    const back = new URL(document.querySelector<HTMLAnchorElement>('[data-testid="haven-test-mode-single"]')!.href);
+    expect(back.searchParams.has("twoUsers")).toBe(false);
+    expect(back.searchParams.get("locale")).toBe("de-DE");
+  });
 });

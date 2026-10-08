@@ -14,6 +14,7 @@ import {
 } from "./index";
 import type { BrowserTestHost, CreateBrowserTestHostOptions } from "./browserTestHost";
 import { createMemoryAttachments, isMemoryAttachments } from "./memoryAttachments";
+import { modeSwitch } from "./browserTestHost";
 
 export interface TestHostUser {
   /** Shown above the user's frame. */
@@ -50,6 +51,7 @@ const STYLE = `
 .htu__badge{padding:2px 8px;border-radius:999px;background:#fde68a;color:#713f12;font-weight:600;font-size:11px;letter-spacing:.04em}
 .htu button{font:inherit;padding:5px 12px;border-radius:7px;border:1px solid #c9d0e0;background:#fff;cursor:pointer}
 .htu__status{font-weight:600}
+.htu .htest__mode{display:flex;gap:8px;align-items:center;padding:0 8px;border-left:1px solid #d7dce8;border-right:1px solid #d7dce8}
 .htu__panes{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#d7dce8;min-height:0}
 .htu__pane{display:grid;grid-template-rows:auto 1fr;min-height:0;background:#fff}
 .htu__pane h2{margin:0;padding:4px 10px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#5b6478;background:#f8f9fc;border-bottom:1px solid #e4e8f1}
@@ -109,12 +111,7 @@ export function mountTwoUserTestHost(
   const status = document.createElement("span");
   status.className = "htu__status";
   status.dataset.testid = "haven-two-users-status";
-  const single = document.createElement("a");
-  const singleUrl = new URL(window.location.href);
-  singleUrl.searchParams.delete("twoUsers");
-  single.href = singleUrl.toString();
-  single.textContent = "Single user";
-  bar.append(badge, syncButton, auto, status, single);
+  bar.append(badge, modeSwitch("two"), syncButton, auto, status);
   const panes = document.createElement("div");
   panes.className = "htu__panes";
   root.append(bar, panes);
