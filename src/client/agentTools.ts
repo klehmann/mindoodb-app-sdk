@@ -76,6 +76,7 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
         description: tool.description,
         inputSchema: toJson(tool.inputSchema),
         ...(tool.annotations ? { annotations: { ...tool.annotations } } : {}),
+        ...(tool.scope ? { scope: tool.scope } : {}),
       })),
     });
   }

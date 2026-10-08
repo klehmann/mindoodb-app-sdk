@@ -5,6 +5,7 @@ import type {
   MindooDBAppComponentsApi,
   MindooDBAppDatabase,
   MindooDBAppEmbed,
+  MindooDBAppEmbedAgentTools,
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbedCloseReason,
   MindooDBAppEmbeddingApi,
@@ -26,6 +27,10 @@ export interface MockEmbedState {
   visible: boolean;
   /** What the component last reported (`setEmbedDirty`); `undefined` until then. */
   dirty?: boolean;
+  /** Whether it is the active one of its app's embeds (`embed.setActive`, or the newest). */
+  active: boolean;
+  /** The agent tools it offers (`setEmbedAgentTools`), as the host app sees them. */
+  agentTools: MindooDBAppEmbedAgentTools | null;
 }
 
 /** How an app running as an embedded component finished (`session.embedding`). */
@@ -72,6 +77,15 @@ export interface MockEmbedHost {
   setEmbedDirty(embedId: string, dirty: boolean): void;
   /** Dirty reports, for the port host to forward as `embed-event` pushes. */
   onDirty(listener: (event: { embedId: string; dirty: boolean }) => void): () => void;
+  /** `embed.setActive()` from the app: the active one of its app's embeds. */
+  setActive(embedId: string): void;
+  /**
+   * As if the component registered these agent tools (names without prefix; `[]` or
+   * null for none). The prefix is the component's app id without `mindoodb-app-`.
+   */
+  setEmbedAgentTools(embedId: string, names: string[] | null, options?: { enabled?: boolean }): void;
+  /** Agent tool reports, for the port host to forward as `embed-event` pushes. */
+  onAgentTools(listener: (event: { embedId: string; agentTools: MindooDBAppEmbedAgentTools | null }) => void): () => void;
   /**
    * `embed.save()` from the app: the stand-in component saves, i.e. reports clean,
    * unless {@link failNextSave} set an error.
@@ -107,6 +121,8 @@ export function createMockEmbedHost(
   const handles = new Map<string, MockEmbed>();
   const closedListeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
   const dirtyListeners = new Set<(event: { embedId: string; dirty: boolean }) => void>();
+  const toolListeners = new Set<(event: { embedId: string; agentTools: MindooDBAppEmbedAgentTools | null }) => void>();
+  const toolNames = new Map<string, { names: string[]; enabled: boolean }>();
   let nextSaveError: string | null = null;
   let embeddingDirty: boolean | undefined;
   let saveRequestHandler: (() => void | Promise<void>) | null = null;
@@ -152,9 +168,54 @@ export function createMockEmbedHost(
       intent,
       rect: mockRect(input),
       visible: input.visible !== false,
+      active: false,
+      agentTools: null,
     });
-    notifyChange();
+    // Like Haven: the newest embed of an app is its active one until the host says otherwise.
+    setActive(embedId);
     return embedId;
+  }
+
+  function toolPrefix(component: MindooDBAppComponentInfo) {
+    return component.appId.replace(/^mindoodb-app-/, "").replace(/[^a-z0-9_]/g, "_") || "app";
+  }
+
+  function publishTools(entry: MockEmbedState) {
+    const declared = toolNames.get(entry.embedId);
+    const prefix = toolPrefix(entry.component);
+    const next: MindooDBAppEmbedAgentTools | null = declared?.names.length
+      ? { prefix, names: declared.names.map((name) => `${prefix}_${name}`), active: entry.active, enabled: declared.enabled }
+      : null;
+    if (JSON.stringify(next) === JSON.stringify(entry.agentTools)) {
+      return;
+    }
+    entry.agentTools = next;
+    handles.get(entry.embedId)?.setAgentToolsState(next);
+    toolListeners.forEach((listener) => listener({ embedId: entry.embedId, agentTools: next }));
+  }
+
+  function setActive(embedId: string) {
+    const target = embeds.get(embedId);
+    if (!target) {
+      return;
+    }
+    for (const entry of embeds.values()) {
+      if (entry.component.appId === target.component.appId) {
+        entry.active = entry.embedId === embedId;
+        publishTools(entry);
+      }
+    }
+    notifyChange();
+  }
+
+  function setEmbedAgentTools(embedId: string, names: string[] | null, toolOptions: { enabled?: boolean } = {}) {
+    const entry = embeds.get(embedId);
+    if (!entry) {
+      return;
+    }
+    toolNames.set(embedId, { names: [...(names ?? [])], enabled: toolOptions.enabled !== false });
+    publishTools(entry);
+    notifyChange();
   }
 
   function closeEmbed(embedId: string, reason: MindooDBAppEmbedCloseReason = "closed", result?: unknown) {
@@ -168,6 +229,7 @@ export function createMockEmbedHost(
     };
     handles.get(embedId)?.settle(event);
     handles.delete(embedId);
+    toolNames.delete(embedId);
     closedListeners.forEach((listener) => listener(event));
     notifyChange();
   }
@@ -196,6 +258,44 @@ export function createMockEmbedHost(
 
     async save() {
       await saveEmbed(this.embedId);
+    }
+
+    agentTools: MindooDBAppEmbedAgentTools | null = null;
+    private toolsListeners = new Set<(tools: MindooDBAppEmbedAgentTools | null) => void>();
+
+    async setActive() {
+      setActive(this.embedId);
+    }
+
+    onAgentToolsChange(listener: (tools: MindooDBAppEmbedAgentTools | null) => void) {
+      this.toolsListeners.add(listener);
+      return () => {
+        this.toolsListeners.delete(listener);
+      };
+    }
+
+    setAgentToolsState(tools: MindooDBAppEmbedAgentTools | null) {
+      this.agentTools = tools;
+      this.toolsListeners.forEach((listener) => listener(tools));
+    }
+
+    waitForAgentTools(timeoutMs = 10_000): Promise<MindooDBAppEmbedAgentTools | null> {
+      if (this.agentTools?.names.length) {
+        return Promise.resolve(this.agentTools);
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          stop();
+          resolve(null);
+        }, timeoutMs);
+        const stop = this.onAgentToolsChange((tools) => {
+          if (tools?.names.length) {
+            clearTimeout(timer);
+            stop();
+            resolve(tools);
+          }
+        });
+      });
     }
     private resolve!: (event: MindooDBAppEmbedClosedEvent) => void;
     private listeners = new Set<(event: MindooDBAppEmbedClosedEvent) => void>();
@@ -349,6 +449,14 @@ export function createMockEmbedHost(
       };
     },
     setEmbedDirty,
+    setActive,
+    setEmbedAgentTools,
+    onAgentTools(listener) {
+      toolListeners.add(listener);
+      return () => {
+        toolListeners.delete(listener);
+      };
+    },
     onDirty(listener) {
       dirtyListeners.add(listener);
       return () => {

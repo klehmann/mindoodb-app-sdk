@@ -327,9 +327,43 @@ if (session.agent) {
 - **`annotations`**: `readOnlyHint` for reads; `consequentialHint` for anything the user should confirm (sending, sharing, deleting) — Haven shows its own confirmation dialog and a refusal reaches the agent as `NOT_ALLOWED`; `untrustedContentHint` when the result contains text other people wrote.
 - **Errors**: throw `MindooDBAppAgentToolError(code, message, requiredAction?)` with `NOT_FOUND`, `INVALID_INPUT`, `INVALID_STATE`, `STATE_CHANGED`, `NOT_ALLOWED` or `FAILED`; `requiredAction` tells the agent what to do next ("call todo_tasks_search"). Any other exception becomes `FAILED`. Haven passes the agent one JSON error.
 - **Results** must be JSON. Return what changed (ids, new values), not just `ok`.
+- **`scope`**: `"app"` (default) for the app's own operations ("list documents", "create a map"), `"document"` for operations on the document it shows ("write this paragraph", "set these cells"). See *Agent tools of embedded components* below.
 - **`setContext(context)`** shows the app's state to agents in `haven_get_context` under the focused app.
 - **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
 - A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
+
+#### Agent tools of embedded components
+
+Agents work on three levels: Haven's own tools (`haven_*`), the tools of the app the
+user has open, and the tools of the components that app embeds. A host such as Mindoo
+CRM offers the *workbench*: finding, creating, filing, opening and closing documents.
+The embedded editors offer the *content* of the one document each shows.
+
+- **Embedded, an app offers only its `scope: "document"` tools.** It sees just its
+  sandbox, so "list documents" or "create a document" would mislead; the host has its
+  own tools for those. Register the same tool list either way; Haven drops the rest.
+- **One component per app is active.** When a host shows two documents of the same
+  app (two text documents side by side), the app's tool names belong to the active one:
+  the newest, until the host calls `embed.setActive()`, e.g. when a tab comes to the
+  front. Components of different apps (a spreadsheet next to a text) all keep theirs.
+  Haven prefers the launch in the focused app, so a component in the CRM wins over the
+  same app running in a background tab.
+- **The host learns about its components' tools**: `embed.agentTools` is
+  `{ prefix, names, active, enabled }` or `null`, `embed.onAgentToolsChange` follows it,
+  and `embed.waitForAgentTools(timeoutMs)` resolves once the component offers tools.
+  A host's "open document" tool can wait for it and tell the agent which tools to use
+  next:
+
+```ts
+const embed = await session.embeds.open({ componentKey, databaseId, docId, container });
+await embed.setActive();
+const tools = await embed.waitForAgentTools(5000);
+return { docKey, editorTools: tools ? { prefix: tools.prefix, names: tools.names } : null };
+```
+
+In tests, `host.setEmbedAgentTools(embedId, ["text_insert"])` acts as if the component
+registered tools, and an app under test launched with `launchContext.embed` offers only
+its document tools, as in Haven.
 
 `session.agent` is absent on hosts without agent tools, so check for it. Test tools by calling `execute` directly in unit tests; the reference implementation is `src/features/agent/` in [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega). How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
 
@@ -517,6 +551,9 @@ Done/Cancel buttons over the container. `createFakeBridgeHost({ embedFrameUrl })
 answers like a current Haven, so the SDK frames that URL in the container. Both
 controllers simulate unsaved changes: `setEmbedDirty`, `failNextEmbedSave`, and for an
 app under test that is a component, `getEmbeddingDirty` and `requestEmbeddingSave`.
+
+A host with agent tools marks the component in the front tab with `embed.setActive()`
+and reads `embed.agentTools`; see *Agent tools of embedded components*.
 
 ### Databases and capabilities
 

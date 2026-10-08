@@ -153,10 +153,44 @@ describe("mock components and embeds", () => {
     }
   });
 
+  it("tells the host which agent tools a component offers and which of an app's embeds is active", async () => {
+    const host = createFakeBridgeHost({
+      components: [sheet],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      const first = await session.embeds.open({ componentKey: sheet.key, databaseId: "crm", docId: "sheet1" });
+      const waiting = first.waitForAgentTools(1000);
+      const second = await session.embeds.open({ componentKey: sheet.key, databaseId: "crm", docId: "sheet1" });
+      host.setEmbedAgentTools(first.embedId, ["cells_read"]);
+      host.setEmbedAgentTools(second.embedId, ["cells_read"]);
+      // The newest embed of an app is the active one until the host says otherwise.
+      expect(await waiting).toEqual({ prefix: "teamgrid", names: ["teamgrid_cells_read"], active: false, enabled: true });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(second.agentTools?.active).toBe(true);
+      const seen: Array<boolean | undefined> = [];
+      first.onAgentToolsChange((tools) => seen.push(tools?.active));
+      await first.setActive();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(first.agentTools?.active).toBe(true);
+      expect(second.agentTools?.active).toBe(false);
+      expect(seen).toEqual([true]);
+      expect(host.listEmbeds().map((entry) => entry.active)).toEqual([true, false]);
+      host.closeEmbed(second.embedId);
+      await second.closed;
+      expect(second.agentTools).toBeNull();
+      expect(await second.waitForAgentTools(50)).toBeNull();
+    } finally {
+      host.dispose();
+    }
+  });
+
   it("lets a component look up the documents a reference may point at", async () => {
     const asked: Array<{ field: string; options: unknown }> = [];
     const host = createFakeBridgeHost({
-      databases: [crmDatabase()],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
       embeddingLookup: (field, options) => {
         asked.push({ field, options });
         return [{ docId: "company_1", fields: { subject: "Müller GmbH" } }];

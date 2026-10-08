@@ -6,6 +6,7 @@ import type {
   MindooDBAppComponentQuery,
   MindooDBAppComponentsApi,
   MindooDBAppEmbed,
+  MindooDBAppEmbedAgentTools,
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbeddingApi,
   MindooDBAppEmbeddingLookupOptions,
@@ -118,6 +119,8 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
   private readonly dirtyListeners = new Set<(dirty: boolean) => void>();
   private dirtyState: boolean | undefined = undefined;
   private tracker: ContainerTracker | null = null;
+  private toolsState: MindooDBAppEmbedAgentTools | null = null;
+  private readonly toolsListeners = new Set<(tools: MindooDBAppEmbedAgentTools | null) => void>();
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -173,6 +176,61 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
       return;
     }
     await this.rpc.call("embeds.save", { embedId: this.embedId });
+  }
+
+  async setActive() {
+    if (this.closedEvent) {
+      return;
+    }
+    await this.rpc.call("embeds.setActive", { embedId: this.embedId });
+  }
+
+  get agentTools() {
+    return this.toolsState;
+  }
+
+  onAgentToolsChange(listener: (tools: MindooDBAppEmbedAgentTools | null) => void) {
+    this.toolsListeners.add(listener);
+    return () => {
+      this.toolsListeners.delete(listener);
+    };
+  }
+
+  /** Haven reported the component's agent tools. */
+  setAgentToolsState(tools: MindooDBAppEmbedAgentTools | null) {
+    if (this.closedEvent) {
+      return;
+    }
+    this.toolsState = tools ? { ...tools, names: [...tools.names] } : null;
+    this.toolsListeners.forEach((listener) => {
+      try {
+        listener(this.toolsState);
+      } catch (error) {
+        console.error("MindooDB embed agent tools listener failed.", error);
+      }
+    });
+  }
+
+  waitForAgentTools(timeoutMs = 10_000): Promise<MindooDBAppEmbedAgentTools | null> {
+    if (this.toolsState?.names.length) {
+      return Promise.resolve(this.toolsState);
+    }
+    if (this.closedEvent) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      const finish = (tools: MindooDBAppEmbedAgentTools | null) => {
+        clearTimeout(timer);
+        stopTools();
+        stopClosed();
+        resolve(tools);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      const stopTools = this.onAgentToolsChange((tools) => {
+        if (tools?.names.length) finish(tools);
+      });
+      const stopClosed = this.onClosed(() => finish(null));
+    });
   }
 
   async setRect(rect: MindooDBAppEmbedRect) {
@@ -234,6 +292,15 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     });
     this.listeners.clear();
     this.dirtyListeners.clear();
+    this.toolsState = null;
+    this.toolsListeners.forEach((listener) => {
+      try {
+        listener(null);
+      } catch (error) {
+        console.error("MindooDB embed agent tools listener failed.", error);
+      }
+    });
+    this.toolsListeners.clear();
   }
 }
 
@@ -254,6 +321,7 @@ export class MindooDBAppEmbedsClient {
   /** Events that arrived before `embeds.open` resolved with their id. */
   private readonly early = new Map<string, MindooDBAppEmbedClosedEvent>();
   private readonly earlyDirty = new Map<string, boolean>();
+  private readonly earlyTools = new Map<string, MindooDBAppEmbedAgentTools | null>();
   private readonly stopListening: () => void;
   /** This app as a component: what to do when its host asks it to save. */
   private saveHandler: (() => void | Promise<void>) | null = null;
@@ -274,6 +342,16 @@ export class MindooDBAppEmbedsClient {
           embed.setDirtyState(dirty === true);
         } else {
           this.earlyDirty.set(embedId, dirty === true);
+        }
+        return;
+      }
+      if (message.event?.type === "agentTools") {
+        const { embedId, agentTools } = message.event;
+        const embed = this.open.get(embedId);
+        if (embed) {
+          embed.setAgentToolsState(agentTools ?? null);
+        } else {
+          this.earlyTools.set(embedId, agentTools ?? null);
         }
         return;
       }
@@ -323,6 +401,10 @@ export class MindooDBAppEmbedsClient {
         if (earlyDirty !== undefined) {
           this.earlyDirty.delete(embed.embedId);
           embed.setDirtyState(earlyDirty);
+        }
+        if (this.earlyTools.has(embed.embedId)) {
+          embed.setAgentToolsState(this.earlyTools.get(embed.embedId) ?? null);
+          this.earlyTools.delete(embed.embedId);
         }
         const early = this.early.get(embed.embedId);
         if (early) {

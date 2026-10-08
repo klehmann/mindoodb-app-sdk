@@ -1431,6 +1431,15 @@ export interface MindooDBAppAgentToolAnnotations {
   untrustedContentHint?: boolean;
 }
 
+/**
+ * Where a tool makes sense. `app` (the default): the app's own operations, such as
+ * "list documents" or "create a map". `document`: operations on the document the
+ * app shows, such as "write this paragraph". Embedded as a component in another
+ * app, an app only offers its `document` tools: it sees just that one document,
+ * and the host app has its own tools for everything else.
+ */
+export type MindooDBAppAgentToolScope = "app" | "document";
+
 /** What an app tells Haven about one agent tool; everything but the implementation. */
 export interface MindooDBAppAgentToolDescriptor {
   /**
@@ -1443,6 +1452,8 @@ export interface MindooDBAppAgentToolDescriptor {
   /** JSON Schema of the input object. */
   inputSchema: Record<string, unknown>;
   annotations?: MindooDBAppAgentToolAnnotations;
+  /** Default `app`; see {@link MindooDBAppAgentToolScope}. */
+  scope?: MindooDBAppAgentToolScope;
 }
 
 /** One agent tool an app offers. `execute` runs inside the app; its result must be JSON. */
@@ -1720,6 +1731,44 @@ export interface MindooDBAppEmbed {
   onClosed(listener: (event: MindooDBAppEmbedClosedEvent) => void): () => void;
   /** Settles with the closed event. */
   readonly closed: Promise<MindooDBAppEmbedClosedEvent>;
+  /**
+   * Marks this component as the active one of this app's components, e.g. when its
+   * tab comes to the front. When several components of the same app are open (two
+   * text documents side by side), agents reach the active one's tools; the others
+   * keep theirs for when they become active.
+   */
+  setActive(): Promise<void>;
+  /**
+   * The agent tools the component offers right now (its `document` tools), or null
+   * while it offers none. Its tools reach agents under `prefix`, e.g. `teamedit`.
+   */
+  readonly agentTools: MindooDBAppEmbedAgentTools | null;
+  /** Called whenever the component's agent tools change. */
+  onAgentToolsChange(listener: (tools: MindooDBAppEmbedAgentTools | null) => void): () => void;
+  /**
+   * Resolves with the component's agent tools once it offers some, e.g. so a host's
+   * "open document" tool can tell the agent which tools to use next; null after
+   * `timeoutMs` (default 10 s) or when the component closes.
+   */
+  waitForAgentTools(timeoutMs?: number): Promise<MindooDBAppEmbedAgentTools | null>;
+}
+
+/** The agent tools of an embedded component, as its host sees them. */
+export interface MindooDBAppEmbedAgentTools {
+  /** Prefix agents see in front of the tool names, e.g. `teamedit`. */
+  prefix: string;
+  /** Full names as agents see them, e.g. `teamedit_text_insert`. */
+  names: string[];
+  /** Whether this component's tools are the ones agents reach now (the active one of its app). */
+  active: boolean;
+  /** Whether agents may call them (agent tools on in Haven, and allowed for that app). */
+  enabled: boolean;
+}
+
+/** Pushed when an embedded component's agent tools change. */
+export interface MindooDBAppEmbedAgentToolsEvent {
+  embedId: string;
+  agentTools: MindooDBAppEmbedAgentTools | null;
 }
 
 /** Components other apps offer (`components` in their haven-app.json). */
@@ -1800,7 +1849,10 @@ export interface MindooDBAppEmbedDirtyEvent {
 export interface MindooDBAppBridgeEmbedEventMessage {
   protocol: "mindoodb-app-bridge";
   kind: "embed-event";
-  event: ({ type: "closed" } & MindooDBAppEmbedClosedEvent) | ({ type: "dirty" } & MindooDBAppEmbedDirtyEvent);
+  event:
+    | ({ type: "closed" } & MindooDBAppEmbedClosedEvent)
+    | ({ type: "dirty" } & MindooDBAppEmbedDirtyEvent)
+    | ({ type: "agentTools" } & MindooDBAppEmbedAgentToolsEvent);
 }
 
 export type MindooDBAppBridgePortMessage =
