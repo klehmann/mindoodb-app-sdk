@@ -334,6 +334,50 @@ describe("app definition components", () => {
     expect(errors.join("\n")).toMatch(message);
   });
 
+  it("keeps the category, contracts and references of a component", () => {
+    const { components, errors } = validateMindooDBAppComponents([
+      {
+        id: "person",
+        label: "Person",
+        intents: ["create", "edit"],
+        match: { form: "contactperson" },
+        category: "form",
+        provides: [{ contract: "mindoo.contacts.person@1", fields: { parents: "companyIds" } }],
+        references: [
+          {
+            field: "companyIds",
+            to: "mindoo.contacts.company@1",
+            match: { form: "contactcompany" },
+            show: ["subject", "filingId", "subject"],
+          },
+        ],
+      },
+    ]);
+    expect(errors).toEqual([]);
+    expect(components?.[0]).toMatchObject({
+      category: "form",
+      provides: [{ contract: "mindoo.contacts.person@1", fields: { parents: "companyIds" } }],
+      references: [
+        { field: "companyIds", to: "mindoo.contacts.company@1", match: { form: "contactcompany" }, show: ["subject", "filingId"] },
+      ],
+    });
+  });
+
+  it.each([
+    [{ category: "Editor" }, /category/],
+    [{ provides: [{ contract: "contacts.person" }] }, /mindoo\.contacts\.company@1/],
+    [{ provides: [{ contract: "mindoo.contacts.person@1", fields: { parents: "a.b" } }] }, /fields/],
+    [{ references: [{ field: "form", match: { form: "x" }, show: ["subject"] }] }, /not a match field/],
+    [{ references: [{ field: "companyIds", match: {}, show: ["subject"] }] }, /at least one field/],
+    [{ references: [{ field: "companyIds", match: { form: "x" }, show: [] }] }, /show/],
+    [{ references: [{ field: "companyIds", match: { form: "x" }, show: ["subject"], to: "x" }] }, /\.to/],
+  ])("rejects roles %o", (patch, message) => {
+    const { errors } = validateMindooDBAppComponents([
+      { id: "sheet", label: "Sheet", intents: ["edit"], match: { form: "teamgrid" }, ...patch },
+    ]);
+    expect(errors.join("\n")).toMatch(message);
+  });
+
   it("matches plain field values", () => {
     expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "teamgrid", x: 1 })).toBe(true);
     expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "other" })).toBe(false);

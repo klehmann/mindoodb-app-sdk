@@ -34,6 +34,7 @@ export {
   MINDOODB_APP_LISTING_MAX_SCREENSHOTS,
   MINDOODB_APP_ACCEPTS_MAX,
   MINDOODB_APP_COMPONENTS_MAX,
+  MINDOODB_APP_COMPONENT_CONTRACT_PATTERN,
   mindooDBAppComponentFieldsMatch,
   validateMindooDBAppComponents,
   MINDOODB_APP_LISTING_SUMMARY_MAX,
@@ -46,9 +47,12 @@ export {
 } from "./appDefinition";
 export type {
   MindooDBAppAcceptSpec,
+  MindooDBAppComponentCategory,
   MindooDBAppComponentChildren,
+  MindooDBAppComponentContract,
   MindooDBAppComponentFieldValue,
   MindooDBAppComponentIntent,
+  MindooDBAppComponentReference,
   MindooDBAppComponentSpec,
   MindooDBAppDefinition,
   MindooDBAppDefinitionDatabase,

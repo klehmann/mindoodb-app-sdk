@@ -8,6 +8,8 @@ import type {
   MindooDBAppEmbed,
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbeddingApi,
+  MindooDBAppEmbeddingLookupOptions,
+  MindooDBAppEmbeddingLookupResult,
   MindooDBAppEmbedOpenInput,
   MindooDBAppEmbedRect,
   MindooDBAppEmbedsApi,
@@ -347,6 +349,15 @@ export class MindooDBAppEmbedsClient {
       },
       setDirty: async (dirty: boolean) => {
         await this.rpc.call("embedding.setDirty", { dirty: dirty === true });
+      },
+      lookup: async (field: string, options?: MindooDBAppEmbeddingLookupOptions) => {
+        const result = await this.rpc.call("embedding.lookup", {
+          field: String(field),
+          ...(options?.query ? { query: String(options.query) } : {}),
+          ...(options?.docIds ? { docIds: options.docIds.map(String) } : {}),
+          ...(options?.limit ? { limit: Number(options.limit) } : {}),
+        });
+        return (Array.isArray(result) ? result : []) as MindooDBAppEmbeddingLookupResult[];
       },
       onSaveRequest: (handler: () => void | Promise<void>) => {
         this.saveHandler = handler;

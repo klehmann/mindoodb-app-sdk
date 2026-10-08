@@ -426,6 +426,39 @@ await session.embedding.complete({ title }); // or session.embedding.cancel()
 Haven writes every change back to the host's database as it happens and only lets the
 component create documents that are children of the root.
 
+**Kinds, contracts and references.** Three optional fields let hosts pick components by
+what they do instead of by app:
+
+```json
+{
+  "id": "person",
+  "label": { "en": "Person", "de": "Person" },
+  "intents": ["create", "edit", "view"],
+  "match": { "form": "contactperson" },
+  "category": "form",
+  "provides": [{ "contract": "mindoo.contacts.person@1", "fields": { "parents": "companyIds" } }],
+  "references": [
+    { "field": "companyIds", "to": "mindoo.contacts.company@1", "match": { "form": "contactcompany" }, "show": ["subject"] }
+  ]
+}
+```
+
+- `category`: `editor` (content: a document, a spreadsheet, a map) or `form` (a record: a
+  company, a person); hosts may treat a component without one as an `editor`. A CRM
+  offers its editors under "New" and uses its forms elsewhere.
+- `provides`: contracts the root documents fulfil (`<name>@<major version>`), so a host
+  can rely on their shape; `fields` maps contract fields to this app's field names.
+  Another app offering the same contract can take this one's place.
+- `references`: fields that point at other root documents (not parts, unlike
+  `children`), e.g. a person's company. Embedded, the component cannot see the host's
+  database, so it asks Haven:
+
+```ts
+const companies = await session.embedding.lookup("companyIds", { query: "Mül" });
+// [{ docId, fields: { subject } }]: only documents matching the reference's `match`,
+// only its `show` fields. `docIds: [...]` fetches given ones (to show the current value).
+```
+
 **Embedding a component** (host app):
 
 ```ts

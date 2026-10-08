@@ -153,6 +153,27 @@ describe("mock components and embeds", () => {
     }
   });
 
+  it("lets a component look up the documents a reference may point at", async () => {
+    const asked: Array<{ field: string; options: unknown }> = [];
+    const host = createFakeBridgeHost({
+      databases: [crmDatabase()],
+      embeddingLookup: (field, options) => {
+        asked.push({ field, options });
+        return [{ docId: "company_1", fields: { subject: "Müller GmbH" } }];
+      },
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      await expect(session.embedding.lookup("companyIds", { query: "Mül", limit: 5 })).resolves.toEqual([
+        { docId: "company_1", fields: { subject: "Müller GmbH" } },
+      ]);
+      expect(asked).toEqual([{ field: "companyIds", options: { query: "Mül", limit: 5 } }]);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it("lets a component report unsaved changes and answer save requests", async () => {
     const host = createFakeBridgeHost({ databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read"] } }] });
     host.install();

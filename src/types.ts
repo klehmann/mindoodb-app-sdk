@@ -55,8 +55,11 @@ export type {
 } from "mindoodb-view-language";
 
 import type {
+  MindooDBAppComponentCategory,
   MindooDBAppComponentChildren,
+  MindooDBAppComponentContract,
   MindooDBAppComponentFieldValue,
+  MindooDBAppComponentReference,
   MindooDBAppComponentIntent,
   MindooDBAppDefinitionRegistrationPermission,
 } from "./appDefinition";
@@ -1607,6 +1610,12 @@ export interface MindooDBAppComponentInfo {
   /** All fields of a new, empty root document: `create` plus `match`. */
   createFields: Record<string, unknown>;
   children?: MindooDBAppComponentChildren;
+  /** As declared; hosts may treat a component without one as an `editor`. */
+  category?: MindooDBAppComponentCategory;
+  /** Contracts its root documents fulfil, e.g. `mindoo.contacts.person@1`. */
+  provides?: MindooDBAppComponentContract[];
+  /** Fields of its root documents that point at other root documents. */
+  references?: MindooDBAppComponentReference[];
 }
 
 /** Filter for `session.components.list`. */
@@ -1749,6 +1758,28 @@ export interface MindooDBAppEmbeddingApi {
    * report why it failed. One handler at a time; returns the unregister function.
    */
   onSaveRequest(handler: () => void | Promise<void>): () => void;
+  /**
+   * Documents the root may point at through one of the component's `references`
+   * (say the companies a person can belong to), found by Haven in the host's
+   * database: only ones matching the reference's `match`, with only its `show`
+   * fields. `query` searches those fields (case-insensitive substring), `docIds`
+   * fetches given documents (to show the current value). At most `limit` (default
+   * 20, max 100) results.
+   */
+  lookup(field: string, options?: MindooDBAppEmbeddingLookupOptions): Promise<MindooDBAppEmbeddingLookupResult[]>;
+}
+
+export interface MindooDBAppEmbeddingLookupOptions {
+  query?: string;
+  docIds?: string[];
+  limit?: number;
+}
+
+/** A document a reference may point at, as `embedding.lookup` returns it. */
+export interface MindooDBAppEmbeddingLookupResult {
+  docId: string;
+  /** The reference's `show` fields the document has. */
+  fields: Record<string, unknown>;
 }
 
 /** Haven → component: the host asked for something (`embed.save()`). */
