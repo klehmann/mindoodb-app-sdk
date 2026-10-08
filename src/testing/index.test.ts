@@ -8,7 +8,12 @@ import {
   createFakeBridgeHost,
   createMockMindooDBAppBridge,
 } from "./index";
-import type { MindooDBAppQueryResult, MindooDBAppQueryRow } from "../types";
+import type {
+  MindooDBAppQueryResult,
+  MindooDBAppQueryRow,
+  MindooDBAppResolvedViewDefinition,
+  MindooDBAppViewNavigator,
+} from "../types";
 import { MindooDBAppValue } from "../values";
 
 describe("mindoodb-app-sdk/testing", () => {
@@ -1742,5 +1747,79 @@ describe("evaluating VirtualView navigators", () => {
     });
     expect(entries.map((entry) => entry.docId)).toEqual(["evt_in"]);
     await navigator.dispose();
+  });
+});
+
+describe("configured views (launchContext.views)", () => {
+  const contacts = [
+    ["acme_1", "ACME", "Alice"],
+    ["acme_2", "ACME", "Bob"],
+    ["globex_1", "Globex", "Carla"],
+  ].map(([id, company, name]) => ({ id: id!, data: { form: "contact", company, name } }));
+
+  const view: MindooDBAppResolvedViewDefinition = {
+    id: "contacts_by_company",
+    description: "Contacts by company",
+    categorizationStyle: "category_then_document",
+    previewMode: "table",
+    sources: [{ origin: "main", databaseId: "main", title: "Main", targetMode: "local", tenantId: "t", databaseName: "main" }],
+    filter: { mode: "rules", match: "all", rules: [{ id: "f", field: "form", operator: "eq", value: "contact" }] },
+    columns: [
+      { id: "company", name: "company", title: "Company", role: "category", expression: { mode: "field", field: "company" }, sorting: "ascending", totalMode: "none", hidden: false },
+      { id: "name", name: "name", title: "Name", role: "display", expression: { mode: "field", field: "name" }, sorting: "ascending", totalMode: "none", hidden: false },
+    ],
+  };
+
+  async function connect() {
+    const mock = createMockMindooDBAppBridge({
+      launchContext: { views: [view] },
+      databases: [{ info: { id: "main", title: "Main", capabilities: ["read", "views"] }, documents: contacts }],
+    });
+    return await mock.bridge.connect();
+  }
+
+  async function entries(navigator: MindooDBAppViewNavigator) {
+    await navigator.expandAll();
+    const page = await navigator.entriesForward({ limit: 100 });
+    return page.entries.map((entry) => (entry.kind === "category" ? `[${String(entry.categoryValue)}]` : entry.columnValues.name));
+  }
+
+  it("evaluates the view over the source database's documents", async () => {
+    const session = await connect();
+    const navigator = await session.openViewNavigator(view.id);
+    expect(await entries(navigator)).toEqual(["[ACME]", "Alice", "Bob", "[Globex]", "Carla"]);
+  });
+
+  it("applies the open options to every open, each with a navigator of its own", async () => {
+    const session = await connect();
+    const all = await session.openViewNavigator(view.id);
+    const acme = await session.openViewNavigator(view.id, { rootCategoryPath: ["ACME"] });
+    const documents = await session.openViewNavigator(view.id, { includeCategories: false });
+    expect(acme).not.toBe(all);
+    expect(await entries(acme)).toEqual(["Alice", "Bob"]);
+    expect(await entries(documents)).toEqual(["Alice", "Bob", "Carla"]);
+
+    // Disposing one leaves the others and later opens working.
+    await all.dispose();
+    expect(await entries(documents)).toEqual(["Alice", "Bob", "Carla"]);
+    expect(await entries(await session.openViewNavigator(view.id))).toEqual(["[ACME]", "Alice", "Bob", "[Globex]", "Carla"]);
+  });
+
+  it("opens a view created with createViewNavigator again by its id, with new options", async () => {
+    const session = await connect();
+    await session.createViewNavigator({
+      databaseIds: ["main"],
+      categorizationStyle: "category_then_document",
+      definition: {
+        id: "dynamic",
+        title: "Dynamic",
+        columns: [
+          { name: "company", role: "category", expression: { kind: "field", path: "company" }, sorting: "ascending" },
+          { name: "name", role: "display", expression: { kind: "field", path: "name" }, sorting: "ascending" },
+        ],
+      },
+    });
+    const globex = await session.openViewNavigator("dynamic", { rootCategoryPath: ["Globex"] });
+    expect(await entries(globex)).toEqual(["Carla"]);
   });
 });
