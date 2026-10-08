@@ -47,6 +47,8 @@ import type {
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
   MindooDBAppDirectoryApi,
+  MindooDBAppRichTextMaterializeValue,
+  MindooDBAppRichTextSpan,
   MindooDBAppListUsersOptions,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
@@ -1193,12 +1195,175 @@ function changeMockAutomergeDocument(
   return Automerge.change(doc, apply);
 }
 
+/*
+ * Rich text, as `BaseMindooDB` (`applyRichTextPatch`, `applyRichTextStepsPatch`,
+ * `getRichTextSnapshot`, `reviveRichTextValue`, `dehydrateRichTextValue`) does it, so
+ * the mock merges concurrent edits — and rejects the values Automerge rejects — like
+ * Haven.
+ */
+
+function reviveMockRichTextSpans(spans: MindooDBAppRichTextSpan[]): Automerge.Span[] {
+  return spans.map((span) =>
+    span.type === "text"
+      ? {
+          type: "text",
+          value: span.value,
+          marks: span.marks ? (reviveMockRichTextValue(span.marks) as Automerge.MarkSet) : undefined,
+        }
+      : { type: "block", value: reviveMockRichTextValue(span.value) as { [key: string]: Automerge.MaterializeValue } },
+  ) as Automerge.Span[];
+}
+
+function dehydrateMockRichTextValue(value: unknown): unknown {
+  if (Automerge.isImmutableString(value)) {
+    return { type: "immutableString", value: String(value) };
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => dehydrateMockRichTextValue(entry));
+  }
+  if (!value || typeof value !== "object" || value instanceof Date || value instanceof Uint8Array) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, dehydrateMockRichTextValue(entry)]),
+  );
+}
+
+function validateMockRichTextSpans(spans: unknown) {
+  if (!Array.isArray(spans)) {
+    throw new Error("Rich-text patch spans must be an array");
+  }
+  for (const span of spans as Array<Record<string, unknown>>) {
+    if (!span || typeof span !== "object") {
+      throw new Error("Rich-text span must be an object");
+    }
+    if (span.type === "text") {
+      if (typeof span.value !== "string") {
+        throw new Error("Rich-text text span value must be a string");
+      }
+      continue;
+    }
+    if (span.type === "block") {
+      if (!span.value || typeof span.value !== "object" || Array.isArray(span.value)) {
+        throw new Error("Rich-text block span value must be an object");
+      }
+      continue;
+    }
+    throw new Error("Rich-text span type must be 'text' or 'block'");
+  }
+}
+
+function validateMockRichTextPatch(patch: NonNullable<MindooDBAppUpdateDocumentInput["richText"]>[number]) {
+  validateMockJsonPath(patch.path, "Rich-text patch");
+  const hasSpans = patch.spans !== undefined;
+  const hasSequence = patch.spansSequence !== undefined;
+  if (hasSpans === hasSequence) {
+    throw new Error("Rich-text patch must include exactly one of spans or spansSequence");
+  }
+  if (hasSpans) {
+    validateMockRichTextSpans(patch.spans);
+    return;
+  }
+  if (!Array.isArray(patch.spansSequence) || patch.spansSequence.length === 0) {
+    throw new Error("Rich-text patch spansSequence must be a non-empty array");
+  }
+  for (const spans of patch.spansSequence) {
+    validateMockRichTextSpans(spans);
+  }
+}
+
+function validateMockRichTextStepPatch(
+  patch: NonNullable<MindooDBAppUpdateDocumentInput["richTextSteps"]>[number],
+) {
+  validateMockJsonPath(patch.path, "Rich-text steps patch");
+  if (!Array.isArray(patch.steps) || patch.steps.length === 0) {
+    throw new Error("Rich-text steps patch steps must be a non-empty array");
+  }
+  for (const step of patch.steps) {
+    if (!step || typeof step !== "object") {
+      throw new Error("Rich-text step must be an object");
+    }
+    if (step.type !== "splice") {
+      throw new Error("Rich-text step type must be 'splice'");
+    }
+    if (!Number.isInteger(step.index) || step.index < 0) {
+      throw new Error("Rich-text splice step index must be a non-negative integer");
+    }
+    if (!Number.isInteger(step.deleteCount) || step.deleteCount < 0) {
+      throw new Error("Rich-text splice step deleteCount must be a non-negative integer");
+    }
+    if (step.insert !== undefined && typeof step.insert !== "string") {
+      throw new Error("Rich-text splice step insert must be a string");
+    }
+    for (const range of step.marks ?? []) {
+      if (!Number.isInteger(range.index) || range.index < 0) {
+        throw new Error("Rich-text mark range index must be a non-negative integer");
+      }
+      if (!Number.isInteger(range.length) || range.length <= 0) {
+        throw new Error("Rich-text mark range length must be a positive integer");
+      }
+      if (!range.marks || typeof range.marks !== "object" || Array.isArray(range.marks)) {
+        throw new Error("Rich-text mark range marks must be an object");
+      }
+    }
+  }
+}
+
+/** Like MindooDB's `ensureRichTextPath`: missing parents and text are created. */
+function ensureMockRichTextPath(target: MockAutomergeTarget, path: Array<string | number>) {
+  let node: any = target;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index]!;
+    if (node[segment] === undefined || node[segment] === null) {
+      node[segment] = typeof path[index + 1] === "number" ? [] : {};
+    }
+    node = node[segment];
+    if (node === null || typeof node !== "object") {
+      throw new Error(`Cannot apply rich-text patch through non-object path segment '${String(segment)}'`);
+    }
+  }
+  const leaf = path[path.length - 1]!;
+  const current = node[leaf];
+  if (current === undefined || current === null) {
+    node[leaf] = "";
+    return;
+  }
+  if (typeof current !== "string") {
+    throw new Error(`Cannot apply rich-text patch to non-string value at '${path.map(String).join(".")}'`);
+  }
+}
+
+/** MindooDB retries a failed `updateSpans` once on an emptied field. */
+function isMockUpdateSpansBoundsError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Cannot updateSpans|out of bounds/i.test(message);
+}
+
+/** `getRichText` of an Automerge-backed document: `Automerge.spans`, dehydrated. */
+function readMockAutomergeRichText(document: MockStoredDocument, path: Array<string | number>) {
+  validateMockJsonPath(path, "Rich-text snapshot");
+  const doc = loadMockAutomergeDocument(document);
+  return (Automerge.spans(doc, path as Automerge.Prop[]) as unknown[]).map((span) => {
+    const record = span as { type: string; value: unknown; marks?: unknown };
+    return record.type === "text"
+      ? {
+          type: "text" as const,
+          value: typeof record.value === "string" ? record.value : "",
+          marks: record.marks ? (dehydrateMockRichTextValue(record.marks) as Record<string, MindooDBAppRichTextMaterializeValue>) : undefined,
+        }
+      : {
+          type: "block" as const,
+          value: dehydrateMockRichTextValue(record.value) as Record<string, MindooDBAppRichTextMaterializeValue>,
+        };
+  }) as MindooDBAppRichTextSpan[];
+}
+
 /**
  * Applies a bridge `documents.update` input to an Automerge document the way
  * Haven does: top-level `set`/`unset` as one change, then `json` (at
- * `json.baseHeads`), then each `text` patch (at its `baseHeads`), each as its
- * own change. `richText` snapshots replace the value at their path;
- * `richTextSteps` are spliced into the text (marks are not modelled).
+ * `json.baseHeads`), then each `text` patch, each `richText` patch
+ * (`updateSpans`) and each `richTextSteps` patch (splices and marks), each at
+ * its `baseHeads` and as its own change.
  */
 function applyMockAutomergeUpdate(
   doc: Automerge.Doc<Record<string, unknown>>,
@@ -1234,27 +1399,44 @@ function applyMockAutomergeUpdate(
     });
   }
   for (const richTextPatch of patch.richText ?? []) {
-    validateMockJsonPath(richTextPatch.path, "Rich-text patch");
-    const spans = richTextPatch.spansSequence?.at(-1) ?? richTextPatch.spans ?? [];
-    next = Automerge.change(next, (target) => {
-      setMockAutomergeValue(target, richTextPatch.path, hydrateMockAutomergeValues(structuredClone(spans)));
+    validateMockRichTextPatch(richTextPatch);
+    const sequence = richTextPatch.spansSequence ?? (richTextPatch.spans ? [richTextPatch.spans] : []);
+    const config = (richTextPatch as { updateSpansConfig?: Automerge.UpdateSpansConfig }).updateSpansConfig;
+    next = changeMockAutomergeDocument(next, richTextPatch.baseHeads, (target) => {
+      ensureMockRichTextPath(target, richTextPatch.path);
+      const path = richTextPatch.path as Automerge.Prop[];
+      for (const spans of sequence) {
+        const revived = reviveMockRichTextSpans(spans);
+        try {
+          Automerge.updateSpans(target as Automerge.Doc<unknown>, path, revived, config);
+        } catch (error) {
+          if (!isMockUpdateSpansBoundsError(error)) {
+            throw error;
+          }
+          setMockAutomergeValue(target, richTextPatch.path, "");
+          Automerge.updateSpans(target as Automerge.Doc<unknown>, path, revived, config);
+        }
+      }
     });
   }
   for (const stepPatch of patch.richTextSteps ?? []) {
-    validateMockJsonPath(stepPatch.path, "Rich-text steps patch");
+    validateMockRichTextStepPatch(stepPatch);
     next = changeMockAutomergeDocument(next, stepPatch.baseHeads, (target) => {
-      const current = readMockAutomergeValue(target, stepPatch.path);
-      if (current !== undefined && current !== null && typeof current !== "string") {
-        // A span snapshot written by `richText`: continue on its plain text.
-        setMockAutomergeValue(
-          target,
-          stepPatch.path,
-          materializeMockRichTextValue(projectMockAutomergeValue(current)),
-        );
-      }
-      ensureMockAutomergeText(target, stepPatch.path, "rich-text steps");
+      ensureMockRichTextPath(target, stepPatch.path);
+      const path = stepPatch.path as Automerge.Prop[];
       for (const step of stepPatch.steps) {
-        spliceMockAutomergeText(target, stepPatch.path, step.index, step.deleteCount, step.insert ?? "");
+        Automerge.splice(target as Automerge.Doc<unknown>, path, step.index, step.deleteCount, step.insert ?? "");
+        for (const range of step.marks ?? []) {
+          for (const [name, value] of Object.entries(range.marks)) {
+            Automerge.mark(
+              target as Automerge.Doc<unknown>,
+              path,
+              { start: range.index, end: range.index + range.length, expand: "none" },
+              name,
+              reviveMockRichTextValue(value) as Automerge.MarkValue,
+            );
+          }
+        }
       }
     });
   }
@@ -2819,7 +3001,9 @@ function createDatabaseHandle(
       return {
         path: [...path],
         heads: document.heads ? [...document.heads] : undefined,
-        spans: structuredClone(readRichTextSpansAtPath(document.data, path)),
+        spans: automergeMode
+          ? readMockAutomergeRichText(document, path)
+          : structuredClone(readRichTextSpansAtPath(document.data, path)),
       };
     },
     // Mock cursors store the index they were created at and do not follow
