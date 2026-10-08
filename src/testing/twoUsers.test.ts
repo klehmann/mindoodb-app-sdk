@@ -55,6 +55,17 @@ describe("syncMockReplicas", () => {
     expect(right?.data).toEqual(left?.data);
   });
 
+  it("hands out distinct ids on synced replicas", async () => {
+    const a = await device("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1");
+    const b = await device("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2");
+    const left = await a.db.documents.create({ set: { title: "left" } });
+    const right = await b.db.documents.create({ set: { title: "right" } });
+    expect(left.id).not.toBe(right.id);
+    await syncMockReplicas(a.mock, b.mock);
+    expect((await a.db.documents.get(right.id))?.data.title).toBe("right");
+    expect((await b.db.documents.get(left.id))?.data.title).toBe("left");
+  });
+
   it("spreads deletions", async () => {
     const a = await device("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1");
     const b = await device("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2");

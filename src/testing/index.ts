@@ -2700,6 +2700,9 @@ function createDatabaseHandle(
 } {
   let createCounter = 0;
   let changeCounter = 0;
+  // Synced replicas (own Automerge actor) must not hand out the same ids, as MindooDB's
+  // random ids never do: tag them with the replica.
+  const replicaTag = localActor === MOCK_AUTOMERGE_LOCAL_ACTOR ? "" : `-${localActor.slice(0, 6)}`;
   const defaultViewFactory = async () => createDefaultViewNavigator();
   const automergeMode = definition.automerge === true;
   // Changefeed position of every document: bumped on each write, so that in
@@ -3183,10 +3186,10 @@ function createDatabaseHandle(
         id = callerId;
       } else if (typeof input.idPrefix === "string" && input.idPrefix.length > 0) {
         createCounter += 1;
-        id = `${input.idPrefix}_${String(createCounter).padStart(22, "0")}`;
+        id = `${input.idPrefix}_${String(createCounter).padStart(22, "0")}${replicaTag}`;
       } else {
         createCounter += 1;
-        id = `doc-${createCounter}`;
+        id = `doc-${createCounter}${replicaTag}`;
       }
       const createdAt = new Date().toISOString();
       if (
