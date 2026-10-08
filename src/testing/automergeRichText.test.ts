@@ -4,6 +4,7 @@
  * `getRichText` returns `Automerge.spans`. So concurrent edits merge as in Haven, and a
  * value Automerge rejects fails here too instead of only in production.
  */
+import * as Automerge from "@automerge/automerge";
 import { describe, expect, it } from "vitest";
 
 import { createMockMindooDBAppSession } from "./index";
@@ -141,5 +142,41 @@ describe("rich text in automerge-backed mock databases", () => {
       { type: "text", value: "bold", marks: { b: true } },
       { type: "text", value: " text" },
     ]);
+  });
+
+  it("applies all parts of one update as one change, like MindooDB's applyDocumentUpdate", async () => {
+    const { database } = await openMock();
+    const base = await database.documents.update("note", {
+      json: { set: [{ path: ["shape"], value: { x: 1, y: 1 } }] },
+      richText: [
+        { path: ["a"], spans: paragraph({ type: "text", value: "Alpha" }) },
+        { path: ["b"], spans: paragraph({ type: "text", value: "Beta" }) },
+      ],
+    });
+    const changes = async () =>
+      Automerge.getAllChanges(Automerge.load((await database.documents.getAutomergeSnapshot("note")).binary)).length;
+    const before = await changes();
+    const saved = await database.documents.update("note", {
+      json: { baseHeads: base.heads, set: [{ path: ["shape", "x"], value: 42 }] },
+      richTextSteps: [
+        { path: ["a"], baseHeads: base.heads, steps: [{ type: "splice", index: 6, deleteCount: 0, insert: "!" }] },
+        { path: ["b"], baseHeads: base.heads, steps: [{ type: "splice", index: 1, deleteCount: 0, insert: "The " }] },
+      ],
+    });
+    expect((await changes()) - before).toBe(1);
+    expect(saved.data.shape).toEqual({ x: 42, y: 1 });
+    expect(saved.data.a).toBe("\uFFFCAlpha!");
+  });
+
+  it("applies nothing of an update when one part fails", async () => {
+    const { database } = await openMock();
+    await database.documents.update("note", { set: { count: 3 } });
+    await expect(
+      database.documents.update("note", {
+        json: { set: [{ path: ["moved"], value: true }] },
+        richText: [{ path: ["count"], spans: [{ type: "text", value: "x" }] }],
+      }),
+    ).rejects.toThrow("non-string value");
+    expect((await database.documents.get("note"))?.data.moved).toBeUndefined();
   });
 });

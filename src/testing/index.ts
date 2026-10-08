@@ -1393,10 +1393,96 @@ function readMockAutomergeRichText(document: MockStoredDocument, path: Array<str
  * (`updateSpans`) and each `richTextSteps` patch (splices and marks), each at
  * its `baseHeads` and as its own change.
  */
+/** The common `baseHeads` of an update's parts (`undefined`: none, `null`: they differ). */
+function commonMockBaseHeads(patch: MindooDBAppUpdateDocumentInput): string[] | undefined | null {
+  const all = [
+    patch.json?.baseHeads,
+    ...(patch.text ?? []).map((p) => p.baseHeads),
+    ...(patch.richText ?? []).map((p) => p.baseHeads),
+    ...(patch.richTextSteps ?? []).map((p) => p.baseHeads),
+  ].filter((heads): heads is string[] => Array.isArray(heads) && heads.length > 0);
+  if (all.length === 0) return undefined;
+  const first = [...all[0]!].sort().join(",");
+  return all.every((heads) => [...heads].sort().join(",") === first) ? all[0]! : null;
+}
+
+function applyMockRichTextSpansInChange(
+  target: MockAutomergeTarget,
+  richTextPatch: NonNullable<MindooDBAppUpdateDocumentInput["richText"]>[number],
+) {
+  const sequence = richTextPatch.spansSequence ?? (richTextPatch.spans ? [richTextPatch.spans] : []);
+  const config = (richTextPatch as { updateSpansConfig?: Automerge.UpdateSpansConfig }).updateSpansConfig;
+  ensureMockRichTextPath(target, richTextPatch.path);
+  const path = richTextPatch.path as Automerge.Prop[];
+  for (const spans of sequence) {
+    const revived = reviveMockRichTextSpans(spans);
+    try {
+      Automerge.updateSpans(target as Automerge.Doc<unknown>, path, revived, config);
+    } catch (error) {
+      if (!isMockUpdateSpansBoundsError(error)) {
+        throw error;
+      }
+      setMockAutomergeValue(target, richTextPatch.path, "");
+      Automerge.updateSpans(target as Automerge.Doc<unknown>, path, revived, config);
+    }
+  }
+}
+
+function applyMockRichTextStepsInChange(
+  target: MockAutomergeTarget,
+  stepPatch: NonNullable<MindooDBAppUpdateDocumentInput["richTextSteps"]>[number],
+) {
+  ensureMockRichTextPath(target, stepPatch.path);
+  const path = stepPatch.path as Automerge.Prop[];
+  for (const step of stepPatch.steps) {
+    Automerge.splice(target as Automerge.Doc<unknown>, path, step.index, step.deleteCount, step.insert ?? "");
+    for (const range of step.marks ?? []) {
+      for (const [name, value] of Object.entries(range.marks)) {
+        Automerge.mark(
+          target as Automerge.Doc<unknown>,
+          path,
+          { start: range.index, end: range.index + range.length, expand: "none" },
+          name,
+          reviveMockRichTextValue(value) as Automerge.MarkValue,
+        );
+      }
+    }
+  }
+}
+
 function applyMockAutomergeUpdate(
   doc: Automerge.Doc<Record<string, unknown>>,
   patch: MindooDBAppUpdateDocumentInput,
 ): Automerge.Doc<Record<string, unknown>> {
+  // Like MindooDB's applyDocumentUpdate: all parts of one update in ONE change (one
+  // history entry) when they share their base heads, all or nothing.
+  const common = commonMockBaseHeads(patch);
+  if (common !== null) {
+    if (patch.json) validateMockJsonPatch(patch.json);
+    for (const textPatch of patch.text ?? []) validateMockJsonPath(textPatch.path, "Text patch");
+    for (const richTextPatch of patch.richText ?? []) validateMockRichTextPatch(richTextPatch);
+    for (const stepPatch of patch.richTextSteps ?? []) validateMockRichTextStepPatch(stepPatch);
+    return changeMockAutomergeDocumentOnFork(doc, common, (target) => {
+      for (const [key, value] of Object.entries(patch.set ?? {})) {
+        if (value !== undefined) {
+          target[key] = hydrateMockAutomergeValues(value);
+        }
+      }
+      for (const key of patch.unset ?? []) {
+        delete target[key];
+      }
+      if (patch.json) applyMockAutomergeJsonOperations(target, patch.json);
+      for (const textPatch of patch.text ?? []) {
+        ensureMockAutomergeText(target, textPatch.path, "text patch");
+        for (const edit of textPatch.edits) {
+          spliceMockAutomergeText(target, textPatch.path, edit.index, edit.deleteCount, edit.insert ?? "");
+        }
+      }
+      for (const richTextPatch of patch.richText ?? []) applyMockRichTextSpansInChange(target, richTextPatch);
+      for (const stepPatch of patch.richTextSteps ?? []) applyMockRichTextStepsInChange(target, stepPatch);
+    });
+  }
+  // parts at different base heads: one change each, as before
   let next = doc;
   if (patch.set || (patch.unset?.length ?? 0) > 0) {
     next = Automerge.change(next, (target) => {
