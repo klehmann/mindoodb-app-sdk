@@ -44,24 +44,23 @@ describe("rich text in automerge-backed mock databases", () => {
 
   /*
    * Automerge 3.5's updateSpans inside changeAt reads the text at the base heads but
-   * applies its indexes to the current text: with concurrent changes it throws "out of
-   * bounds", and MindooDB's recovery (empty the field, apply the snapshot again) drops
-   * the concurrent edit. The mock does exactly what MindooDB does, so apps see it in
-   * tests. Splices (`text`, `richTextSteps`) at old base heads merge.
+   * applies its indexes to the current text. MindooDB (and so the mock) applies a
+   * snapshot at older heads on a fork at those heads and merges it back, so a
+   * concurrent edit survives.
    */
-  it("drops a concurrent edit when a snapshot is written at older base heads, like MindooDB", async () => {
+  it("keeps a concurrent edit when a snapshot is written at older base heads", async () => {
     const { mock, database } = await openMock();
     const base = await database.documents.update("note", {
       richText: [{ path: ["body"], spans: paragraph({ type: "text", value: "Hello world" }) }],
     });
     await mock.applyRemoteUpdate("main", "note", {
-      richTextSteps: [{ path: ["body"], baseHeads: base.heads, steps: [{ type: "splice", index: 7, deleteCount: 0, insert: "brave " }] }],
+      richText: [{ path: ["body"], baseHeads: base.heads, spans: paragraph({ type: "text", value: "Hello brave world" }) }],
     });
     await database.documents.update("note", {
-      richText: [{ path: ["body"], baseHeads: base.heads, spans: paragraph({ type: "text", value: "Hello world!" }) }],
+      richText: [{ path: ["body"], baseHeads: base.heads, spans: paragraph({ type: "text", value: "Hello world!", marks: { b: true } }) }],
     });
     const { spans } = await database.documents.getRichText("note", ["body"]);
-    expect(spans.filter((s) => s.type === "text").map((s) => s.value).join("")).toBe("Hello world!");
+    expect(spans.filter((s) => s.type === "text").map((s) => s.value).join("")).toBe("Hello brave world!");
   });
 
   it("merges splices and marks written at older base heads", async () => {

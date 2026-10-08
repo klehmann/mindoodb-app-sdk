@@ -1333,6 +1333,34 @@ function ensureMockRichTextPath(target: MockAutomergeTarget, path: Array<string 
   }
 }
 
+/**
+ * Like MindooDB's `changeOnForkAt`: Automerge 3.5's `updateSpans` inside `changeAt`
+ * indexes the current text, so a change with `updateSpans` at older heads is made on a
+ * fork that stands exactly at those heads and merged back. The fork writes as the
+ * document's actor unless that actor changed the document since (then a fresh one).
+ */
+function changeMockAutomergeDocumentOnFork(
+  doc: Automerge.Doc<Record<string, unknown>>,
+  baseHeads: string[] | undefined,
+  apply: (target: MockAutomergeTarget) => void,
+): Automerge.Doc<Record<string, unknown>> {
+  const current = Automerge.getHeads(doc);
+  if (
+    !baseHeads ||
+    baseHeads.length === 0 ||
+    (current.length === baseHeads.length && current.every((head) => baseHeads.includes(head)))
+  ) {
+    return Automerge.change(doc, apply);
+  }
+  const base = Automerge.view(doc, baseHeads);
+  const actor = Automerge.getActorId(doc);
+  const ownChangeSince = Automerge.getChanges(base, doc).some(
+    (change) => Automerge.decodeChange(change).actor === actor,
+  );
+  const fork = Automerge.clone(base, ownChangeSince ? undefined : { actor });
+  return Automerge.merge(doc, Automerge.change(fork, apply));
+}
+
 /** MindooDB retries a failed `updateSpans` once on an emptied field. */
 function isMockUpdateSpansBoundsError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -1402,7 +1430,7 @@ function applyMockAutomergeUpdate(
     validateMockRichTextPatch(richTextPatch);
     const sequence = richTextPatch.spansSequence ?? (richTextPatch.spans ? [richTextPatch.spans] : []);
     const config = (richTextPatch as { updateSpansConfig?: Automerge.UpdateSpansConfig }).updateSpansConfig;
-    next = changeMockAutomergeDocument(next, richTextPatch.baseHeads, (target) => {
+    next = changeMockAutomergeDocumentOnFork(next, richTextPatch.baseHeads, (target) => {
       ensureMockRichTextPath(target, richTextPatch.path);
       const path = richTextPatch.path as Automerge.Prop[];
       for (const spans of sequence) {
