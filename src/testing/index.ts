@@ -117,6 +117,7 @@ import type {
 import { MINDOODB_APP_VALUE_TAG } from "../values";
 import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase } from "./capabilityGuard";
+import { configuredViewDefinition } from "./configuredViews";
 import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
 import { pageUsers } from "../directoryPaging";
 
@@ -3862,7 +3863,8 @@ function createMockSessionState(
   };
   const viewChangeListeners = new Set<{ databaseIds: string[]; onChange: () => void }>();
   const databaseViewApis = new Map<string, MockViewApi>();
-  const sessionViews = new Map<string, MindooDBAppViewNavigator>();
+  /** Views created with createViewNavigator, by id: openViewNavigator opens them again. */
+  const sessionViews = new Map<string, MindooDBAppCreateViewNavigatorInput>();
   let activeMenuResolve: ((result: MindooDBAppShowMenuResult) => void) | null =
     null;
   let activeDragResolve: ((result: MindooDBAppDragStartResult) => void) | null =
@@ -3968,8 +3970,7 @@ function createMockSessionState(
       databaseDocumentStores.set(definition.info.id, created.documents);
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
       databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
-      databaseViewApis.set(definition.info.id, {
-        async create(input: MindooDBAppCreateViewNavigatorInput) {
+      const createView = async (input: MindooDBAppCreateViewNavigatorInput) => {
           const build = () =>
             createEvaluatingViewNavigator(
               input,
@@ -3997,9 +3998,23 @@ function createMockSessionState(
             async () => null,
             subscribe,
           );
-        },
-        async open(_viewId: string) {
-          return await createDefaultViewNavigator();
+      };
+      databaseViewApis.set(definition.info.id, {
+        create: createView,
+        // A view configured in the launch context, evaluated over the mock
+        // documents of its sources: a fresh navigator per open, with the
+        // open options applied, as Haven builds one.
+        async open(viewId: string, openOptions?: MindooDBAppViewNavigatorOpenOptions) {
+          const configured = launchContext.views.find((view) => view.id === viewId);
+          if (!configured) {
+            return await createDefaultViewNavigator();
+          }
+          return await createView({
+            databaseIds: configured.sources.map((source) => source.databaseId),
+            definition: configuredViewDefinition(configured),
+            categorizationStyle: configured.categorizationStyle,
+            ...(openOptions ? { options: openOptions } : {}),
+          });
         },
         ...(definition.methods?.views ?? {}),
       });
@@ -4100,13 +4115,18 @@ function createMockSessionState(
       }
       const view = await api.create(input);
       const viewId = input.definition.id || crypto.randomUUID();
-      sessionViews.set(viewId, view);
+      sessionViews.set(viewId, input);
       return view;
     },
+    // Every open is a navigator of its own with its own options, as in
+    // Haven: disposing one leaves the others and later opens working.
     async openViewNavigator(viewId, options) {
-      const existing = sessionViews.get(viewId);
-      if (existing) {
-        return existing;
+      const created = sessionViews.get(viewId);
+      if (created) {
+        const api = databaseViewApis.get(created.databaseIds[0]!);
+        if (api) {
+          return await api.create({ ...created, ...(options ? { options } : {}) });
+        }
       }
       const sourceDatabaseId = launchContext.views.find(
         (view) => view.id === viewId,
@@ -4120,9 +4140,7 @@ function createMockSessionState(
           `Unknown test database for view ${viewId}: ${sourceDatabaseId}`,
         );
       }
-      const view = await api.open(viewId, options);
-      sessionViews.set(viewId, view);
-      return view;
+      return await api.open(viewId, options);
     },
     menus,
     drag,

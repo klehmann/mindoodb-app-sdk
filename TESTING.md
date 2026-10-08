@@ -179,6 +179,24 @@ const page = await navigator.entriesForward({ limit: 100 });
 Without `mindoodb`, the testing entrypoint falls back to an empty navigator and
 logs a warning — install the peer for realistic view tests.
 
+Views configured for the app in Haven arrive in `launchContext.views`. Pass
+them there and `session.openViewNavigator(viewId, options)` evaluates them
+over their source databases' seeded documents, compiled the way Haven does
+(rule or formula filter, field or formula columns). Each call opens a
+navigator of its own with its options applied (`rootCategoryPath`,
+`includeCategories`, `includeDocuments`, …), as in Haven; disposing one does
+not affect the others. A view created with `createViewNavigator` can be
+opened again by its definition id the same way.
+
+```ts
+const mock = createMockMindooDBAppBridge({
+  launchContext: { views: [contactsByCompany] }, // a MindooDBAppResolvedViewDefinition
+  databases: [{ info: { id: "main", title: "Main", capabilities: ["read", "views"] }, documents: contacts }],
+});
+const session = await mock.bridge.connect();
+const acme = await session.openViewNavigator("contacts_by_company", { rootCategoryPath: ["ACME"] });
+```
+
 The default in-memory document store also implements `documents.query()` and `documents.liveQuery()`: expression and formula-string filters are evaluated against the seeded documents, `sortBy`/`limit`/`offset` work as documented, and live query callbacks fire automatically after `create`/`update`/`delete`/`undelete` mutations. Full-text `text` clauses are supported with a deterministic mock implementation (token matching with prefix/AND semantics and an occurrence-count `textScore`) — assert on membership and relative ordering, not absolute scores, since real hosts use a BM25-style engine. That means app code built on queries and live queries is testable at Level 1 without any extra setup:
 
 ```ts
