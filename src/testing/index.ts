@@ -2690,6 +2690,7 @@ function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
   peers: MockDatabasePeers,
   directoryUsers: () => readonly string[] = () => [],
+  localActor: string = MOCK_AUTOMERGE_LOCAL_ACTOR,
 ): {
   handle: MindooDBAppDatabase;
   listViewDocuments: () => EvaluatingViewDocument[];
@@ -2802,7 +2803,7 @@ function createDatabaseHandle(
       return writeAutomergeDocument(
         docId,
         existing,
-        Automerge.change(loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR), (target) => {
+        Automerge.change(loadMockAutomergeDocument(existing, localActor), (target) => {
           target._encryptFor = hydrateMockAutomergeValues(nextEncryptFor);
         }),
       );
@@ -3213,7 +3214,7 @@ function createDatabaseHandle(
           stored,
           createMockAutomergeDocument(
             { ...(input.set ?? {}), ...encryptFor },
-            MOCK_AUTOMERGE_LOCAL_ACTOR,
+            localActor,
           ),
         );
         storedDocuments.set(id, stored);
@@ -3266,8 +3267,8 @@ function createDatabaseHandle(
       const existing = storedDocuments.get(docId);
       if (automergeMode) {
         const current = existing?.automergeBinary
-          ? loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR)
-          : createMockAutomergeDocument(existing?.data ?? {}, MOCK_AUTOMERGE_LOCAL_ACTOR);
+          ? loadMockAutomergeDocument(existing, localActor)
+          : createMockAutomergeDocument(existing?.data ?? {}, localActor);
         return writeAutomergeDocument(docId, existing, applyMockAutomergeUpdate(current, patch));
       }
       const updated = {
@@ -3666,7 +3667,7 @@ function createDatabaseHandle(
         // Plain JSON mock: no history to merge with, so this is a normal update.
         return await defaultDocuments.update(docId, input);
       }
-      const current = loadMockAutomergeDocument(existing, MOCK_AUTOMERGE_LOCAL_ACTOR);
+      const current = loadMockAutomergeDocument(existing, localActor);
       // The device's copy already stands at `json.baseHeads` (plus its own earlier
       // changes), so the JSON patch applies to that state as a plain change.
       const remote = applyMockAutomergeUpdate(
@@ -3694,6 +3695,10 @@ type MockSessionState = {
   getEnforceCapabilities: () => boolean;
   setDirectoryUsers: (users: readonly string[]) => void;
   getDirectoryUsers: () => string[];
+  /** Document stores by database id, for `syncMockReplicas`. */
+  replicaStores: () => Map<string, Map<string, MockStoredDocument>>;
+  /** After a sync wrote into a store: live queries refresh as after any write. */
+  notifyReplicaChange: (databaseId: string) => void;
   getDatabase: (databaseId: string) => MindooDBAppDatabase;
   applyRemoteUpdate: (
     databaseId: string,
@@ -3855,7 +3860,12 @@ function createMockSessionState(
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
-      const created = createDatabaseHandle(definition, databasePeers, () => directoryUsers);
+      const created = createDatabaseHandle(
+        definition,
+        databasePeers,
+        () => directoryUsers,
+        options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
+      );
       const databaseId = definition.info.id;
       databaseHandles.set(
         databaseId,
@@ -4156,6 +4166,8 @@ function createMockSessionState(
       directoryUsers = [...users];
     },
     getDirectoryUsers: () => [...directoryUsers],
+    replicaStores: () => databaseDocumentStores,
+    notifyReplicaChange: (databaseId) => databaseLiveQueryRefreshers.get(databaseId)?.(),
     embedHost,
     getDatabase(databaseId) {
       const database = databaseHandles.get(databaseId);
@@ -4355,6 +4367,12 @@ export interface CreateMockMindooDBAppSessionOptions {
    * `methods.directory` still wins.
    */
   directoryUsers?: readonly string[];
+  /**
+   * Automerge actor (hex) of the app's writes in `automerge: true` databases. Mocks
+   * that are synced with each other (`syncMockReplicas`, the test host's two-user
+   * mode) need distinct actors, like two devices.
+   */
+  automergeActor?: string;
   /** What `session.components.list` offers; see `closeEmbed` on the controller. */
   components?: MindooDBAppComponentInfo[];
   /** Called whenever the app opens, moves or closes an embed. */
@@ -4514,11 +4532,113 @@ export {
   type EvaluatingViewDocument,
 } from "./evaluatingViewNavigator.js";
 
+/** The mock state behind each controller, for `syncMockReplicas`. */
+const replicaStates = new WeakMap<object, MockSessionState>();
+
+type MockReplica = MockMindooDBAppSessionController | FakeBridgeHostController;
+
+function sameMockHeads(a: MockStoredDocument | undefined, b: MockStoredDocument | undefined) {
+  const x = a?.heads ?? [];
+  const y = b?.heads ?? [];
+  return x.length === y.length && x.every((head) => y.includes(head));
+}
+
+/**
+ * How many documents differ between two mocks (missing on one side, other heads, or
+ * deleted on one side only): what `syncMockReplicas` would bring over.
+ */
+export function mockReplicaDifferences(a: MockReplica, b: MockReplica): number {
+  const left = replicaStates.get(a)?.replicaStores();
+  const right = replicaStates.get(b)?.replicaStores();
+  if (!left || !right) throw new Error("syncMockReplicas: not a mock controller");
+  let count = 0;
+  for (const [databaseId, docsA] of left) {
+    const docsB = right.get(databaseId);
+    if (!docsB) continue;
+    for (const id of new Set([...docsA.keys(), ...docsB.keys()])) {
+      const x = docsA.get(id);
+      const y = docsB.get(id);
+      if (!x || !y || x.isDeleted !== y.isDeleted || !sameMockHeads(x, y)) count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Syncs two mocks like two Haven devices: every document of every database both have
+ * is merged both ways (Automerge histories with `automerge: true`, so concurrent edits
+ * merge as in Haven; otherwise the newer copy wins), deletions spread, and attachments
+ * missing on one side are copied. Give the mocks distinct `automergeActor`s. Returns
+ * the number of documents that changed on either side.
+ */
+export async function syncMockReplicas(a: MockReplica, b: MockReplica): Promise<number> {
+  const stateA = replicaStates.get(a);
+  const stateB = replicaStates.get(b);
+  if (!stateA || !stateB) throw new Error("syncMockReplicas: not a mock controller");
+  let changed = 0;
+  for (const [databaseId, docsA] of stateA.replicaStores()) {
+    const docsB = stateB.replicaStores().get(databaseId);
+    if (!docsB) continue;
+    const touchedA = new Set<string>();
+    const touchedB = new Set<string>();
+    for (const id of new Set([...docsA.keys(), ...docsB.keys()])) {
+      const x = docsA.get(id);
+      const y = docsB.get(id);
+      if (x && y && x.isDeleted === y.isDeleted && sameMockHeads(x, y)) continue;
+      changed += 1;
+      let merged: MockStoredDocument;
+      if (x?.automergeBinary && y?.automergeBinary) {
+        const doc = Automerge.merge(Automerge.load<Record<string, unknown>>(x.automergeBinary), Automerge.load(y.automergeBinary));
+        merged = { ...x, ...y, attachments: structuredClone(x.attachments ?? y.attachments ?? []) } as MockStoredDocument;
+        persistMockAutomergeDocument(merged, doc);
+      } else if (x && y) {
+        merged = structuredClone((x.updatedAt ?? "") >= (y.updatedAt ?? "") ? x : y);
+      } else {
+        merged = structuredClone((x ?? y)!);
+      }
+      merged.isDeleted = Boolean(x?.isDeleted || y?.isDeleted);
+      merged.updatedAt = new Date().toISOString();
+      if (!x || !sameMockHeads(x, merged) || x.isDeleted !== merged.isDeleted) {
+        docsA.set(id, structuredClone(merged));
+        touchedA.add(id);
+      }
+      if (!y || !sameMockHeads(y, merged) || y.isDeleted !== merged.isDeleted) {
+        docsB.set(id, structuredClone(merged));
+        touchedB.add(id);
+      }
+    }
+    // attachments, through the attachment API of each side (e.g. createMemoryAttachments)
+    const dbA = stateA.getDatabase(databaseId);
+    const dbB = stateB.getDatabase(databaseId);
+    for (const id of new Set([...docsA.keys()])) {
+      if (docsA.get(id)?.isDeleted) continue;
+      for (const [from, to, touched] of [
+        [dbA, dbB, touchedB],
+        [dbB, dbA, touchedA],
+      ] as const) {
+        const have = new Set((await to.attachments.list(id).catch(() => [])).map((f) => f.fileName));
+        for (const file of await from.attachments.list(id).catch(() => [])) {
+          if (have.has(file.fileName)) continue;
+          const reader = await from.attachments.openReadStream(id, file.fileName);
+          const writer = await to.attachments.openWriteStream(id, file.fileName, file.mimeType);
+          for (let chunk = await reader.read(); chunk !== null; chunk = await reader.read()) await writer.write(chunk);
+          await reader.close();
+          await writer.close();
+          touched.add(id);
+        }
+      }
+    }
+    if (touchedA.size) stateA.notifyReplicaChange(databaseId);
+    if (touchedB.size) stateB.notifyReplicaChange(databaseId);
+  }
+  return changed;
+}
+
 export function createMockMindooDBAppSession(
   options: CreateMockMindooDBAppSessionOptions = {},
 ): MockMindooDBAppSessionController {
   const state = createMockSessionState(options);
-  return {
+  const controller: MockMindooDBAppSessionController = {
     bridge: state.bridge,
     session: state.session,
     getLaunchContext: state.getLaunchContext,
@@ -4551,6 +4671,8 @@ export function createMockMindooDBAppSession(
     getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
     requestEmbeddingSave: () => state.embedHost.requestEmbeddingSave(),
   };
+  replicaStates.set(controller, state);
+  return controller;
 }
 
 export function createMockMindooDBAppBridge(
@@ -6064,6 +6186,7 @@ export function createFakeBridgeHost(
     },
   };
 
+  replicaStates.set(controller, state);
   return controller;
 }
 export * from "./browserTestHost";
@@ -6080,4 +6203,10 @@ export {
   type MockAgentHostOptions,
 } from "./mockAgentTools";
 export { createMemoryAttachments } from "./memoryAttachments";
+export {
+  DEFAULT_TEST_HOST_USERS,
+  mountTwoUserTestHost,
+  type TestHostUser,
+  type TwoUserTestHost,
+} from "./twoUserTestHost";
 export { MockForbiddenError } from "./capabilityGuard";

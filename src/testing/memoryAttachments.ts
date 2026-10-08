@@ -20,6 +20,13 @@ function concat(chunks: readonly Uint8Array[]): Uint8Array {
   return bytes;
 }
 
+/** Marks a store made by `createMemoryAttachments` (the two-user mode gives each user one). */
+export const MEMORY_ATTACHMENTS = Symbol.for("mindoodb-app-sdk.memoryAttachments");
+
+export function isMemoryAttachments(value: unknown): boolean {
+  return !!value && typeof value === "object" && MEMORY_ATTACHMENTS in value;
+}
+
 export function createMemoryAttachments(): Partial<MindooDBAppAttachmentApi> {
   const files = new Map<string, Map<string, StoredAttachment>>();
   const forDoc = (docId: string) => {
@@ -27,7 +34,7 @@ export function createMemoryAttachments(): Partial<MindooDBAppAttachmentApi> {
     if (!map) files.set(docId, (map = new Map()));
     return map;
   };
-  return {
+  const api: Partial<MindooDBAppAttachmentApi> = {
     async list(docId) {
       return [...forDoc(docId)].map(
         ([fileName, file]): MindooDBAppAttachmentInfo => ({
@@ -73,4 +80,5 @@ export function createMemoryAttachments(): Partial<MindooDBAppAttachmentApi> {
       };
     },
   };
+  return Object.assign(api, { [MEMORY_ATTACHMENTS]: true });
 }

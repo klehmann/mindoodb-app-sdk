@@ -422,6 +422,25 @@ Lower-level pieces, if you build your own page: `createBrowserTestHost({ frame, 
 
 Keep the test page out of production builds. The starter template builds it only for `vite dev` and when `HAVEN_TEST_HOST=1` is set (for preview deployments), so the app's public URL keeps showing its landing page.
 
+### Two users on two replicas
+
+`/__haven-test/?twoUsers=1` (or `mountHavenTestHost({ twoUsers: true })`) shows the app twice, side by side, as two people on two devices: each frame is launched by its own mock Haven with its own replica of every database (`automerge: true`, distinct Automerge actors), so their edits really are concurrent. The bar on top:
+
+- **Auto-sync every 2 s** (on by default) merges the replicas with `syncMockReplicas`, like Haven's sync. Turn it off to keep the two apart — two devices offline — edit on both sides, then press **Sync** and watch the merge.
+- The status says "✓ in sync" or how many documents still differ.
+
+Each app sees the other's changes the way it would in Haven (changefeed, live queries, or its own polling). Use it to try "one changes the text, the other the color", "both add a slide", "both format the same word" by hand. Playwright reaches both frames as `[data-testid="haven-two-users-frame-1"]` / `-2`, and `window.__havenTwoUsers` scripts the mode (`sync()`, `setAutoSync(on)`, `differences()`, `hosts`).
+
+In Vitest, two mocks with distinct `automergeActor`s plus `syncMockReplicas(a, b)` do the same without a browser:
+
+```ts
+const a = createMockMindooDBAppSession({ databases: [def()], automergeActor: "a1".repeat(16) });
+const b = createMockMindooDBAppSession({ databases: [def()], automergeActor: "b2".repeat(16) });
+// … edit through each session, then:
+await syncMockReplicas(a, b); // documents, deletions and attachments, both ways
+expect(mockReplicaDifferences(a, b)).toBe(0);
+```
+
 ## When to use which level
 
 Choose Level 1 when:
