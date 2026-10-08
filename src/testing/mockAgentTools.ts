@@ -149,11 +149,15 @@ export function validateMockAgentTools(raw: unknown): MindooDBAppAgentToolDescri
         throw invalid(`Agent tool "${tool.name}" has invalid annotations.`);
       }
     }
+    if (tool.scope !== undefined && tool.scope !== "app" && tool.scope !== "document") {
+      throw invalid(`Agent tool "${tool.name}" has an invalid scope; use "app" or "document".`);
+    }
     return {
       name: tool.name,
       description: tool.description,
       inputSchema: schema,
       ...(tool.annotations ? { annotations: { ...tool.annotations } } : {}),
+      ...(tool.scope ? { scope: tool.scope } : {}),
     };
   });
 }
@@ -188,6 +192,8 @@ export function createMockAgentHost(
     /** Posts to the app's port; `false` when no app is connected. */
     post(message: MindooDBAppBridgeAgentInvokeMessage): boolean;
     onChange?(): void;
+    /** Whether the app runs as an embedded component: then only its `document` tools count. */
+    embedded?(): boolean;
   },
 ): MockAgentHost {
   const prefix = mockAgentToolPrefix(options.appId(), options.agentToolPrefix);
@@ -231,7 +237,8 @@ export function createMockAgentHost(
   async function dispatch(method: string, params: unknown): Promise<{ result: unknown } | undefined> {
     const input = (params ?? {}) as Record<string, unknown>;
     if (method === "agent.registerTools") {
-      tools = validateMockAgentTools(input.tools);
+      // Like Haven: embedded, an app offers only the tools for its one document.
+      tools = validateMockAgentTools(input.tools).filter((tool) => !options.embedded?.() || tool.scope === "document");
       changed();
       return { result: registration() };
     }

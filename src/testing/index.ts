@@ -4240,6 +4240,8 @@ export interface MockMindooDBAppSessionController {
   getEmbeddingFinish(): MockEmbeddingFinish | null;
   /** As if the embedded component reported (un)saved changes; the app's embed follows. */
   setEmbedDirty(embedId: string, dirty: boolean): void;
+  /** As if the embedded component registered these agent tools (names without prefix). */
+  setEmbedAgentTools(embedId: string, names: string[] | null, options?: { enabled?: boolean }): void;
   /** Makes the app's next `embed.save()` fail with this message. */
   failNextEmbedSave(message: string): void;
   /** For an app under test that runs as a component: its last `embedding.setDirty`. */
@@ -4335,6 +4337,7 @@ export function createMockMindooDBAppSession(
     setComponents: (components) => state.embedHost.setComponents(components),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
     setEmbedDirty: (embedId, dirty) => state.embedHost.setEmbedDirty(embedId, dirty),
+    setEmbedAgentTools: (embedId, names, toolOptions) => state.embedHost.setEmbedAgentTools(embedId, names, toolOptions),
     failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
     getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
     requestEmbeddingSave: () => state.embedHost.requestEmbeddingSave(),
@@ -4444,6 +4447,11 @@ export interface FakeBridgeHostController {
   getEmbeddingFinish(): MockEmbeddingFinish | null;
   /** As if the embedded component reported (un)saved changes; pushes the `embed-event`. */
   setEmbedDirty(embedId: string, dirty: boolean): void;
+  /**
+   * As if the embedded component registered these agent tools (names without prefix);
+   * pushes the `embed-event`. `null` or `[]` withdraws them.
+   */
+  setEmbedAgentTools(embedId: string, names: string[] | null, options?: { enabled?: boolean }): void;
   /** Makes the app's next `embed.save()` fail with this message. */
   failNextEmbedSave(message: string): void;
   /** For an app under test that runs as a component: its last `embedding.setDirty`. */
@@ -4478,6 +4486,7 @@ export function createFakeBridgeHost(
     ...(options.agentConsent !== undefined ? { agentConsent: options.agentConsent } : {}),
     ...(options.agentInvokeTimeoutMs !== undefined ? { agentInvokeTimeoutMs: options.agentInvokeTimeoutMs } : {}),
     appId: () => state.getLaunchContext().appId,
+    embedded: () => Boolean(state.getLaunchContext().embed),
     post(message) {
       // the newest connection is the running app; older ports belong to reloaded frames
       const port = [...connectedPorts].pop();
@@ -4495,6 +4504,11 @@ export function createFakeBridgeHost(
   state.embedHost.onDirty((event) => {
     connectedPorts.forEach((port) =>
       port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "dirty", ...event } }),
+    );
+  });
+  state.embedHost.onAgentTools((event) => {
+    connectedPorts.forEach((port) =>
+      port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "agentTools", ...event } }),
     );
   });
   /** Save requests pushed to the app as a component, waiting for `embedding.respond`. */
@@ -4809,6 +4823,9 @@ export function createFakeBridgeHost(
         return { ok: true };
       case "embeds.save":
         await state.embedHost.saveEmbed(String(params.embedId));
+        return { ok: true };
+      case "embeds.setActive":
+        state.embedHost.setActive(String(params.embedId));
         return { ok: true };
       case "embedding.setDirty":
         state.embedHost.setEmbeddingDirty(params.dirty === true);
@@ -5724,6 +5741,7 @@ export function createFakeBridgeHost(
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
     setEmbedDirty: (embedId, dirty) => state.embedHost.setEmbedDirty(embedId, dirty),
+    setEmbedAgentTools: (embedId, names, toolOptions) => state.embedHost.setEmbedAgentTools(embedId, names, toolOptions),
     failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
     getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
     requestEmbeddingSave() {

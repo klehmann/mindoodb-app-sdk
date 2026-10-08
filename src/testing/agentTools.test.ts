@@ -38,6 +38,33 @@ describe("agent tools in the fake host", () => {
     }
   });
 
+  it("offers only document tools when the app runs embedded, like Haven", async () => {
+    const { host, agent } = await connected({
+      launchContext: {
+        appId: "mindoodb-app-teamslides",
+        embed: {
+          embedId: "e1",
+          componentId: "deck",
+          intent: "edit",
+          databaseId: "crm",
+          docId: "deck1",
+          hostAppLabel: "Mindoo CRM",
+          features: { create: false, open: false },
+        },
+      },
+    });
+    try {
+      const registration = await agent.registerTools([
+        { name: "decks_list", description: "Lists decks.", inputSchema: { type: "object" }, execute: async () => ({}) },
+        { name: "slide_add", description: "Adds a slide.", inputSchema: { type: "object" }, scope: "document", execute: async () => ({}) },
+      ]);
+      expect(registration.exposedNames).toEqual(["teamslides_slide_add"]);
+      expect(host.agent.tools()).toEqual([expect.objectContaining({ name: "slide_add", scope: "document" })]);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it("derives the prefix from the app id like Haven", () => {
     expect(mockAgentToolPrefix("mindoodb-app-teamslides")).toBe("teamslides");
     expect(mockAgentToolPrefix("anything", "vega")).toBe("vega");
