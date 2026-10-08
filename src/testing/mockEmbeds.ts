@@ -8,6 +8,8 @@ import type {
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbedCloseReason,
   MindooDBAppEmbeddingApi,
+  MindooDBAppEmbeddingLookupOptions,
+  MindooDBAppEmbeddingLookupResult,
   MindooDBAppEmbedOpenInput,
   MindooDBAppEmbedRect,
   MindooDBAppEmbedsApi,
@@ -38,6 +40,15 @@ export interface MockEmbedHostOptions {
   components?: MindooDBAppComponentInfo[];
   /** Called when the app opens an embed, e.g. to draw a stand-in in the test host page. */
   onEmbedChange?: (embeds: readonly MockEmbedState[]) => void;
+  /**
+   * For an app under test that runs as a component: answers its
+   * `session.embedding.lookup`, as Haven would from the host's database. No results
+   * without it.
+   */
+  embeddingLookup?: (
+    field: string,
+    options: MindooDBAppEmbeddingLookupOptions,
+  ) => MindooDBAppEmbeddingLookupResult[] | Promise<MindooDBAppEmbeddingLookupResult[]>;
 }
 
 export interface MockEmbedHost {
@@ -302,6 +313,9 @@ export function createMockEmbedHost(
       },
       async setDirty(dirty: boolean) {
         embeddingDirty = dirty === true;
+      },
+      async lookup(field: string, lookupOptions?: MindooDBAppEmbeddingLookupOptions) {
+        return structuredClone(await (options.embeddingLookup?.(field, { ...lookupOptions }) ?? []));
       },
       onSaveRequest(handler) {
         saveRequestHandler = handler;

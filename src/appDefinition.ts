@@ -182,6 +182,46 @@ export interface MindooDBAppComponentChildren {
 }
 
 /**
+ * What kind of component this is, so a host can pick what fits its purpose: an
+ * `editor` edits content (a Word document, a spreadsheet, a mind map), a `form` a
+ * record (a company, a person). Other values are allowed for kinds to come.
+ */
+export type MindooDBAppComponentCategory = "editor" | "form" | (string & {});
+
+/**
+ * A contract the component's documents fulfil, so a host can rely on their shape
+ * without knowing the app: e.g. `mindoo.contacts.person@1`. Another app offering the
+ * same contract can take this one's place.
+ */
+export interface MindooDBAppComponentContract {
+  /** `<namespace>.<name>@<major version>`, e.g. `mindoo.contacts.company@1`. */
+  contract: string;
+  /**
+   * Where the contract's fields are on this component's root documents: contract
+   * field → top-level document field, e.g. `{ "parents": "companyIds" }`. Fields not
+   * named here have the contract's own names.
+   */
+  fields?: Record<string, string>;
+}
+
+/**
+ * A field of the root document that points at other root documents (not parts of
+ * this one, unlike `children`): e.g. a person's company. Embedded, the component can
+ * look up the documents it may point at (`session.embedding.lookup`), and Haven only
+ * lets it write ids of such documents into the field.
+ */
+export interface MindooDBAppComponentReference {
+  /** Top-level field holding the ids of the referenced documents (a string array). */
+  field: string;
+  /** Contract of the referenced documents, e.g. `mindoo.contacts.company@1` (for hosts). */
+  to?: string;
+  /** Fields every referenced document carries, e.g. `{ "form": "contactcompany" }`. At least one. */
+  match: Record<string, MindooDBAppComponentFieldValue>;
+  /** Fields of a referenced document a lookup returns besides its id, e.g. `["subject"]`. 1-8. */
+  show: string[];
+}
+
+/**
  * An editor this app offers to other apps, declared in `components` of haven-app.json.
  *
  * A component works on one **root document** (the spreadsheet, the Word file) plus,
@@ -210,6 +250,12 @@ export interface MindooDBAppComponentSpec {
   create?: Record<string, unknown>;
   /** Child documents that belong to a root, e.g. the chunks of a Word document. */
   children?: MindooDBAppComponentChildren;
+  /** What kind of component this is (hosts may treat one without as an `editor`). */
+  category?: MindooDBAppComponentCategory;
+  /** Contracts its root documents fulfil. */
+  provides?: MindooDBAppComponentContract[];
+  /** Fields of the root document that point at other root documents. */
+  references?: MindooDBAppComponentReference[];
 }
 
 /**
@@ -583,6 +629,104 @@ function readComponentFieldMatch(
   return result;
 }
 
+const COMPONENT_CATEGORY_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+/** `mindoo.contacts.company@1`: dotted lowercase name, `@` and the major version. */
+export const MINDOODB_APP_COMPONENT_CONTRACT_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+@[1-9][0-9]{0,3}$/;
+const COMPONENT_CONTRACTS_MAX = 8;
+const COMPONENT_REFERENCES_MAX = 8;
+const COMPONENT_REFERENCE_SHOW_MAX = 8;
+
+function readComponentContracts(
+  value: unknown,
+  label: string,
+  errors: string[],
+): MindooDBAppComponentContract[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > COMPONENT_CONTRACTS_MAX) {
+    errors.push(`${label} must be an array of at most ${COMPONENT_CONTRACTS_MAX} contracts.`);
+    return undefined;
+  }
+  const result: MindooDBAppComponentContract[] = [];
+  for (const [index, entry] of value.entries()) {
+    const contract = isPlainObject(entry) && typeof entry.contract === "string" ? entry.contract.trim() : "";
+    if (!MINDOODB_APP_COMPONENT_CONTRACT_PATTERN.test(contract)) {
+      errors.push(`${label}[${index}].contract must look like "mindoo.contacts.company@1".`);
+      return undefined;
+    }
+    let fields: Record<string, string> | undefined;
+    if (isPlainObject(entry) && entry.fields !== undefined) {
+      if (!isPlainObject(entry.fields)) {
+        errors.push(`${label}[${index}].fields must map contract fields to document fields.`);
+        return undefined;
+      }
+      fields = {};
+      for (const [from, to] of Object.entries(entry.fields)) {
+        if (!COMPONENT_FIELD_PATTERN.test(from) || typeof to !== "string" || !COMPONENT_FIELD_PATTERN.test(to)) {
+          errors.push(`${label}[${index}].fields must map field names to top-level field names.`);
+          return undefined;
+        }
+        fields[from] = to;
+      }
+    }
+    result.push({ contract, ...(fields && Object.keys(fields).length ? { fields } : {}) });
+  }
+  return result.length ? result : undefined;
+}
+
+function readComponentReferences(
+  value: unknown,
+  label: string,
+  rootMatch: Record<string, MindooDBAppComponentFieldValue>,
+  errors: string[],
+): MindooDBAppComponentReference[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > COMPONENT_REFERENCES_MAX) {
+    errors.push(`${label} must be an array of at most ${COMPONENT_REFERENCES_MAX} references.`);
+    return undefined;
+  }
+  const result: MindooDBAppComponentReference[] = [];
+  const fieldsSeen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    const at = `${label}[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${at} must be an object.`);
+      return undefined;
+    }
+    const field = typeof entry.field === "string" ? entry.field.trim() : "";
+    if (!COMPONENT_FIELD_PATTERN.test(field) || field in rootMatch || fieldsSeen.has(field)) {
+      errors.push(`${at}.field must be a top-level field name, not a match field and not used twice.`);
+      return undefined;
+    }
+    fieldsSeen.add(field);
+    const to = typeof entry.to === "string" ? entry.to.trim() : undefined;
+    if (entry.to !== undefined && !MINDOODB_APP_COMPONENT_CONTRACT_PATTERN.test(to ?? "")) {
+      errors.push(`${at}.to must look like "mindoo.contacts.company@1".`);
+      return undefined;
+    }
+    const match = readComponentFieldMatch(entry.match, `${at}.match`, errors);
+    if (!match) {
+      return undefined;
+    }
+    if (!Object.keys(match).length) {
+      errors.push(`${at}.match must name at least one field, or every document could be referenced.`);
+      return undefined;
+    }
+    const show = Array.isArray(entry.show)
+      ? entry.show.filter((name): name is string => typeof name === "string" && COMPONENT_FIELD_PATTERN.test(name))
+      : [];
+    if (!show.length || show.length !== (entry.show as unknown[]).length || show.length > COMPONENT_REFERENCE_SHOW_MAX) {
+      errors.push(`${at}.show must list 1-${COMPONENT_REFERENCE_SHOW_MAX} top-level field names.`);
+      return undefined;
+    }
+    result.push({ field, ...(to ? { to } : {}), match, show: [...new Set(show)] });
+  }
+  return result.length ? result : undefined;
+}
+
 function readComponents(value: unknown, errors: string[]): MindooDBAppComponentSpec[] | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -698,6 +842,16 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
       }
       children = { linkField, ...(childMatch && Object.keys(childMatch).length ? { match: childMatch } : {}) };
     }
+    let category: string | undefined;
+    if (entry.category !== undefined) {
+      category = typeof entry.category === "string" ? entry.category.trim() : "";
+      if (!COMPONENT_CATEGORY_PATTERN.test(category)) {
+        errors.push(`${label}.category must be 1-32 lowercase letters, digits or "-", e.g. "editor" or "form".`);
+        return;
+      }
+    }
+    const provides = readComponentContracts(entry.provides, `${label}.provides`, errors);
+    const references = readComponentReferences(entry.references, `${label}.references`, match, errors);
     if (errors.length !== errorCount) {
       return;
     }
@@ -710,6 +864,9 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
       match,
       ...(create ? { create } : {}),
       ...(children ? { children } : {}),
+      ...(category ? { category } : {}),
+      ...(provides ? { provides } : {}),
+      ...(references ? { references } : {}),
     });
   });
   return result.length ? result : undefined;

@@ -12,6 +12,7 @@ import {
 import {
   createMockEmbedHost,
   type MockEmbeddingFinish,
+  type MockEmbedHostOptions,
   type MockEmbedState,
 } from "./mockEmbeds.js";
 import type {
@@ -4147,6 +4148,12 @@ export interface CreateMockMindooDBAppSessionOptions {
   /** Called whenever the app opens, moves or closes an embed. */
   onEmbedChange?: (embeds: readonly MockEmbedState[]) => void;
   /**
+   * For an app under test that runs as a component: answers its
+   * `session.embedding.lookup` (documents a reference may point at), as Haven would
+   * from the host's database. No results without it.
+   */
+  embeddingLookup?: MockEmbedHostOptions["embeddingLookup"];
+  /**
    * Answer `embeds.open` with a `container` like a current Haven: with this page
    * for the SDK to frame (e.g. `about:blank`). Without it the host behaves like an
    * older Haven and the component is laid over the container.
@@ -4806,6 +4813,12 @@ export function createFakeBridgeHost(
       case "embedding.setDirty":
         state.embedHost.setEmbeddingDirty(params.dirty === true);
         return { ok: true };
+      case "embedding.lookup":
+        return await state.embedHost.embedding.lookup(String(params.field), {
+          ...(typeof params.query === "string" ? { query: params.query } : {}),
+          ...(Array.isArray(params.docIds) ? { docIds: params.docIds.map(String) } : {}),
+          ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
+        });
       case "embedding.respond": {
         const pending = embeddingRequests.get(String(params.requestId));
         embeddingRequests.delete(String(params.requestId));
