@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createMindooDBAppBridge } from "../client/createMindooDBAppBridge";
-import type { MindooDBAppComponentInfo } from "../types";
+import type { MindooDBAppComponentInfo, MindooDBAppEmbedAccessPair } from "../types";
 import { createFakeBridgeHost, createMemoryAttachments, createMockMindooDBAppSession } from "./index";
 
 const sheet: MindooDBAppComponentInfo = {
@@ -116,6 +116,48 @@ describe("mock components and embeds", () => {
       expect(container.childElementCount).toBe(0);
       expect(host.listEmbeds()).toHaveLength(1);
       await embed.close();
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("asks once for the components an app will show and remembers the answer", async () => {
+    const chart: MindooDBAppComponentInfo = { ...sheet, key: "vega:chart", componentId: "chart", label: "Chart" };
+    const asked: string[][] = [];
+    const mock = createMockMindooDBAppSession({
+      components: [sheet, chart],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+      embedAccess: (pairs: MindooDBAppEmbedAccessPair[]) => {
+        asked.push(pairs.map((pair) => pair.componentKey));
+        return pairs.filter((pair) => pair.componentKey === sheet.key);
+      },
+    });
+    const session = await mock.bridge.connect();
+    const input = { components: [{ componentKey: sheet.key }, { componentKey: chart.key }, { componentKey: "gone" }] };
+    await expect(session.embeds.requestAccess(input)).resolves.toEqual({
+      granted: [{ componentKey: sheet.key, databaseId: "crm" }],
+      pending: [{ componentKey: chart.key, databaseId: "crm" }],
+    });
+    // The user answered: neither pair is asked for again.
+    await session.embeds.requestAccess(input);
+    expect(asked).toEqual([[sheet.key, chart.key]]);
+    expect(mock.getEmbedAccessRequests()).toHaveLength(2);
+  });
+
+  it("requests access over the bridge port", async () => {
+    const host = createFakeBridgeHost({
+      components: [sheet],
+      databases: [{ ...crmDatabase(), info: { ...crmDatabase().info, capabilities: ["read", "update"] } }],
+    });
+    host.install();
+    try {
+      const session = await createMindooDBAppBridge().connect();
+      await expect(
+        session.embeds.requestAccess({ components: [{ componentKey: sheet.key, databaseIds: ["crm"] }] }),
+      ).resolves.toEqual({ granted: [{ componentKey: sheet.key, databaseId: "crm" }], pending: [] });
+      expect(host.getEmbedAccessRequests()).toEqual([
+        { components: [{ componentKey: sheet.key, databaseIds: ["crm"] }] },
+      ]);
     } finally {
       host.dispose();
     }
