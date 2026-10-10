@@ -5,6 +5,9 @@ import type {
   MindooDBAppComponentsApi,
   MindooDBAppDatabase,
   MindooDBAppEmbed,
+  MindooDBAppEmbedAccessInput,
+  MindooDBAppEmbedAccessPair,
+  MindooDBAppEmbedAccessResult,
   MindooDBAppEmbedAgentTools,
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbedCloseReason,
@@ -54,6 +57,13 @@ export interface MockEmbedHostOptions {
     field: string,
     options: MindooDBAppEmbeddingLookupOptions,
   ) => MindooDBAppEmbeddingLookupResult[] | Promise<MindooDBAppEmbeddingLookupResult[]>;
+  /**
+   * Plays the user for `session.embeds.requestAccess`: gets the pairs Haven would
+   * ask for and returns the ones the user allows. Without it every pair is allowed.
+   */
+  embedAccess?: (
+    pairs: MindooDBAppEmbedAccessPair[],
+  ) => MindooDBAppEmbedAccessPair[] | Promise<MindooDBAppEmbedAccessPair[]>;
 }
 
 export interface MockEmbedHost {
@@ -68,6 +78,10 @@ export interface MockEmbedHost {
   closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
   listEmbeds(): MockEmbedState[];
   setComponents(components: MindooDBAppComponentInfo[]): void;
+  /** Every `session.embeds.requestAccess` input so far, oldest first. */
+  getAccessRequests(): MindooDBAppEmbedAccessInput[];
+  /** The pairs allowed so far (`requestAccess`), as `componentKey/databaseId`. */
+  getGrantedAccess(): string[];
   /** The last `session.embedding.complete`/`cancel` call of this app. */
   getEmbeddingFinish(): MockEmbeddingFinish | null;
   finishEmbedding(finish: MockEmbeddingFinish): void;
@@ -115,6 +129,7 @@ export interface MockEmbedHost {
 export function createMockEmbedHost(
   options: MockEmbedHostOptions,
   getDatabase: (databaseId: string) => MindooDBAppDatabase,
+  listDatabaseIds: () => string[] = () => [],
 ): MockEmbedHost {
   let components = [...(options.components ?? [])];
   const embeds = new Map<string, MockEmbedState>();
@@ -128,6 +143,33 @@ export function createMockEmbedHost(
   let saveRequestHandler: (() => void | Promise<void>) | null = null;
   let embedCounter = 0;
   let embeddingFinish: MockEmbeddingFinish | null = null;
+  const accessRequests: MindooDBAppEmbedAccessInput[] = [];
+  const grantedAccess = new Set<string>();
+  const pendingAccess = new Set<string>();
+
+  /** Like Haven: one prompt for what is neither allowed nor put off yet. */
+  async function requestAccess(input: MindooDBAppEmbedAccessInput): Promise<MindooDBAppEmbedAccessResult> {
+    accessRequests.push(structuredClone(input));
+    const pairs = (input.components ?? []).flatMap((entry) =>
+      components.some((component) => component.key === entry.componentKey)
+        ? (entry.databaseIds ?? listDatabaseIds())
+            .filter((databaseId) => listDatabaseIds().includes(databaseId))
+            .map((databaseId) => ({ componentKey: entry.componentKey, databaseId }))
+        : [],
+    );
+    const pairKey = (pair: MindooDBAppEmbedAccessPair) => `${pair.componentKey}/${pair.databaseId}`;
+    const ask = pairs.filter((pair) => !grantedAccess.has(pairKey(pair)) && !pendingAccess.has(pairKey(pair)));
+    if (ask.length) {
+      const allowed = new Set((await (options.embedAccess?.(structuredClone(ask)) ?? ask)).map(pairKey));
+      for (const pair of ask) {
+        (allowed.has(pairKey(pair)) ? grantedAccess : pendingAccess).add(pairKey(pair));
+      }
+    }
+    return {
+      granted: pairs.filter((pair) => grantedAccess.has(pairKey(pair))),
+      pending: pairs.filter((pair) => !grantedAccess.has(pairKey(pair))),
+    };
+  }
 
   function notifyChange() {
     options.onEmbedChange?.([...embeds.values()].map((entry) => ({ ...entry, rect: { ...entry.rect } })));
@@ -400,6 +442,7 @@ export function createMockEmbedHost(
         handles.set(embedId, handle);
         return handle;
       },
+      requestAccess,
     },
     embedding: {
       async complete(result?: unknown) {
@@ -435,6 +478,12 @@ export function createMockEmbedHost(
     },
     setComponents(next) {
       components = [...next];
+    },
+    getAccessRequests() {
+      return structuredClone(accessRequests);
+    },
+    getGrantedAccess() {
+      return [...grantedAccess];
     },
     getEmbeddingFinish() {
       return embeddingFinish;

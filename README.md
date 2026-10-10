@@ -549,6 +549,25 @@ hands its connection to Haven, so the host cannot reach into the component or it
 channel. Haven tells the SDK where the container is (for the component's own menus);
 the SDK follows the container's size and position by itself.
 
+**Asking once.** The first time a host shows a component in one of its databases,
+Haven asks the user whether that app may see the document. A host that shows several
+components asks for all of them at once instead, e.g. right after `components.list`:
+
+```ts
+const { granted, pending } = await session.embeds.requestAccess({
+  components: [
+    { componentKey: sheet.key, databaseIds: ["crm"] },
+    { componentKey: person.key, databaseIds: ["contacts"] }, // default: all its databases
+  ],
+});
+```
+
+Haven lists what is not allowed yet in one dialog; the user may untick entries. What the
+user allowed or put off before is not asked again, so call it on every start. `open`
+still asks for a pending pair when it is used, and asks again when a newer version of
+the component wants more access (e.g. new `references`). In tests, `embedAccess` on the
+mock plays the user (default: allow all).
+
 **Unsaved changes.** A component reports whether it has changes it has not saved yet,
 and saves when its host asks:
 

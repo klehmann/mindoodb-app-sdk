@@ -18,6 +18,7 @@ import {
 import type {
   MindooDBAppComponentInfo,
   MindooDBAppComponentQuery,
+  MindooDBAppEmbedAccessInput,
   MindooDBAppEmbedOpenInput,
   MindooDBAppEmbedRect,
   MindooDBAppEmbedCloseReason,
@@ -3824,13 +3825,17 @@ function createMockSessionState(
 ): MockSessionState {
   let launchContext = createDefaultLaunchContext(options.launchContext);
   // Resolved lazily: the database handles are built further down.
-  const embedHost = createMockEmbedHost(options, (databaseId) => {
-    const database = databaseHandles.get(databaseId);
-    if (!database) {
-      throw new Error(`Unknown test database: ${databaseId}`);
-    }
-    return database;
-  });
+  const embedHost = createMockEmbedHost(
+    options,
+    (databaseId) => {
+      const database = databaseHandles.get(databaseId);
+      if (!database) {
+        throw new Error(`Unknown test database: ${databaseId}`);
+      }
+      return database;
+    },
+    () => [...databaseHandles.keys()],
+  );
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const pendingIncoming: Array<() => void> = [];
@@ -4491,6 +4496,11 @@ export interface CreateMockMindooDBAppSessionOptions {
    */
   embeddingLookup?: MockEmbedHostOptions["embeddingLookup"];
   /**
+   * Plays the user for `session.embeds.requestAccess`: returns the pairs allowed of
+   * those Haven would ask for. Without it every pair is allowed.
+   */
+  embedAccess?: MockEmbedHostOptions["embedAccess"];
+  /**
    * Answer `embeds.open` with a `container` like a current Haven: with this page
    * for the SDK to frame (e.g. `about:blank`). Without it the host behaves like an
    * older Haven and the component is laid over the container.
@@ -4569,6 +4579,8 @@ export interface MockMindooDBAppSessionController {
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
+  /** Every `session.embeds.requestAccess` input so far, oldest first. */
+  getEmbedAccessRequests(): MindooDBAppEmbedAccessInput[];
   /** Closes an embed as Haven does when the component finishes or the user closes it. */
   closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
   /** Replaces what `session.components.list` offers. */
@@ -4772,6 +4784,7 @@ export function createMockMindooDBAppSession(
     getDragProfile: state.getDragProfile,
     emitIncomingContent: state.emitIncomingContent,
     listEmbeds: () => state.embedHost.listEmbeds(),
+    getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     setComponents: (components) => state.embedHost.setComponents(components),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
@@ -4882,6 +4895,8 @@ export interface FakeBridgeHostController {
   ): Promise<MindooDBAppDocument>;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
+  /** Every `session.embeds.requestAccess` input so far, oldest first. */
+  getEmbedAccessRequests(): MindooDBAppEmbedAccessInput[];
   /** Closes an embed and pushes the `embed-event` to the app. */
   closeEmbed(embedId: string, reason?: MindooDBAppEmbedCloseReason, result?: unknown): void;
   /** For an app under test that runs as a component: its `session.embedding` call. */
@@ -5253,6 +5268,10 @@ export function createFakeBridgeHost(
           ? { embedId, frame: { url: options.embedFrameUrl } }
           : { embedId };
       }
+      case "embeds.requestAccess":
+        return await state.embedHost.embeds.requestAccess(
+          (params.input ?? { components: [] }) as MindooDBAppEmbedAccessInput,
+        );
       case "embeds.setRect":
         state.embedHost.setRect(String(params.embedId), params.rect as MindooDBAppEmbedRect);
         return { ok: true };
@@ -6179,6 +6198,7 @@ export function createFakeBridgeHost(
     getDirectoryUsers: state.getDirectoryUsers,
     applyRemoteUpdate: state.applyRemoteUpdate,
     listEmbeds: () => state.embedHost.listEmbeds(),
+    getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
     getEmbeddingFinish: () => state.embedHost.getEmbeddingFinish(),
     setEmbedDirty: (embedId, dirty) => state.embedHost.setEmbedDirty(embedId, dirty),

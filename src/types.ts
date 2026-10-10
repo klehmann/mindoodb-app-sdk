@@ -1669,6 +1669,40 @@ export interface MindooDBAppEmbedOpenInput {
   visible?: boolean;
 }
 
+/** One component a host app wants to show, for `session.embeds.requestAccess`. */
+export interface MindooDBAppEmbedAccessComponent {
+  componentKey: string;
+  /**
+   * Host databases it will show documents of. Default: every database of this app
+   * that it may update (`edit`) or read (`view`).
+   */
+  databaseIds?: string[];
+  /** Default `edit`. */
+  intent?: "edit" | "view";
+}
+
+/** Input of `session.embeds.requestAccess`. */
+export interface MindooDBAppEmbedAccessInput {
+  components: MindooDBAppEmbedAccessComponent[];
+}
+
+/** A component in one host database. */
+export interface MindooDBAppEmbedAccessPair {
+  componentKey: string;
+  databaseId: string;
+}
+
+/** What `session.embeds.requestAccess` settled on. */
+export interface MindooDBAppEmbedAccessResult {
+  /** Allowed, now or before: `embeds.open` shows these without asking. */
+  granted: MindooDBAppEmbedAccessPair[];
+  /**
+   * Not allowed (the user unticked them or chose "Not now"): Haven asks again when
+   * `embeds.open` shows one of them, and `requestAccess` does not ask for them again.
+   */
+  pending: MindooDBAppEmbedAccessPair[];
+}
+
 /** Why an embedded component went away. */
 export type MindooDBAppEmbedCloseReason = "completed" | "cancelled" | "closed" | "error";
 
@@ -1785,6 +1819,19 @@ export interface MindooDBAppEmbedsApi {
    * update. The first time, Haven asks the user to allow the pairing.
    */
   open(input: MindooDBAppEmbedOpenInput): Promise<MindooDBAppEmbed>;
+  /**
+   * Asks the user once for all components this app is going to show, e.g. right
+   * after `components.list`, instead of one prompt per component and database on
+   * `open`. Haven shows a single list of what is not allowed yet (the user may
+   * untick entries) and skips what the user allowed or put off before, so calling
+   * this on every start is fine. Unknown components and databases this app may not
+   * use are left out of the result.
+   *
+   * Havens that predate this answer with `method-not-found`; the SDK then resolves
+   * with nothing granted and the pairs named in `databaseIds` pending, and `open`
+   * asks as before.
+   */
+  requestAccess(input: MindooDBAppEmbedAccessInput): Promise<MindooDBAppEmbedAccessResult>;
 }
 
 /** For an app running as an embedded component (check `launchContext.embed`). */

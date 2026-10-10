@@ -6,6 +6,8 @@ import type {
   MindooDBAppComponentQuery,
   MindooDBAppComponentsApi,
   MindooDBAppEmbed,
+  MindooDBAppEmbedAccessInput,
+  MindooDBAppEmbedAccessResult,
   MindooDBAppEmbedAgentTools,
   MindooDBAppEmbedClosedEvent,
   MindooDBAppEmbeddingApi,
@@ -414,6 +416,30 @@ export class MindooDBAppEmbedsClient {
           this.open.set(embed.embedId, embed);
         }
         return embed;
+      },
+      requestAccess: async (input: MindooDBAppEmbedAccessInput) => {
+        const components = (input?.components ?? []).map((entry) => ({
+          componentKey: String(entry.componentKey),
+          ...(entry.databaseIds ? { databaseIds: entry.databaseIds.map(String) } : {}),
+          ...(entry.intent === "view" ? { intent: "view" as const } : {}),
+        }));
+        try {
+          const response = await this.rpc.call<MindooDBAppEmbedAccessResult>("embeds.requestAccess", {
+            input: { components },
+          });
+          return { granted: response?.granted ?? [], pending: response?.pending ?? [] };
+        } catch (error) {
+          if (!(error instanceof Error && error.name === "method-not-found")) {
+            throw error;
+          }
+          // An older Haven: `open` still asks for each pairing itself.
+          return {
+            granted: [],
+            pending: components.flatMap((entry) =>
+              (entry.databaseIds ?? []).map((databaseId) => ({ componentKey: entry.componentKey, databaseId })),
+            ),
+          };
+        }
       },
     };
     this.embedding = {
