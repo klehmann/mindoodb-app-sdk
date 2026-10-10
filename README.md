@@ -332,6 +332,41 @@ if (session.agent) {
 - **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
 - A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
 
+#### An op guide for edit tools
+
+Apps with an edit language (`apply_ops` batches, formatting changes) do better with short tool descriptions plus a reference the agent loads when it needs it. `createAgentGuideTool` builds that reference as a read-only tool (`ops_guide` by default): without arguments it returns the group list and one signature line per op; with `groups` it returns field tables, units, JSON examples and common mistakes of those groups.
+
+```ts
+import { agentGuideExamples, createAgentGuideTool, type MindooDBAppAgentGuideGroup } from "mindoodb-app-sdk";
+
+const GUIDE: MindooDBAppAgentGuideGroup[] = [
+  {
+    name: "blocks",
+    summary: "insert, replace, move and delete blocks",
+    intro: "Block indexes come from todo_document_read and refer to the document before the call.",
+    ops: [
+      {
+        name: "insertContent",
+        signature: "{after, markdown}",
+        fields: [
+          { name: "after", type: "integer | {heading}", required: true, description: "-1 = document start" },
+          { name: "markdown", type: "string", required: true, description: "One or more blocks." },
+        ],
+        examples: [{ op: "insertContent", after: -1, markdown: "# Agenda" }],
+      },
+    ],
+    mistakes: ["Sending indexes from an old read: pass the revision, read again when refused."],
+  },
+];
+
+const tools = [
+  createAgentGuideTool({ documents: "todo_apply_ops", groups: GUIDE }),
+  // apply_ops' description: "... Signatures and examples: todo_ops_guide."
+];
+```
+
+A group can also bring its reference as ready Markdown in `content` (TeamSlides passes GenOffice's op docs). Test the examples: `agentGuideExamples(GUIDE)` lists them, so a unit test can dry-run each one through the edit tool.
+
 #### Agent tools of embedded components
 
 Agents work on three levels: Haven's own tools (`haven_*`), the tools of the app the
