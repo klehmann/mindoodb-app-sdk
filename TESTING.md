@@ -104,6 +104,7 @@ Each database entry can provide:
 - `info`
 - `documents` — seed documents into the mock store (used by `list`/`query` and by evaluating VirtualViews). A seed's `decryptionKeyId` is reported back by `documents.get`, like a real host; documents created through the mock report `"default"` unless `create` named a key, and person-encrypted documents (`recipients`) report none.
 - `methods.documents`
+- Document history: every write (create, update, delete, a remote update) is kept as a revision, so `listHistory` (newest first, `isCurrent` on the latest), `getAtRevision` (with `phase: "before"`) and `getAtTimestamp` return the states the document went through. Revision ids are `<docId>@<n>`; timestamps are the write's `updatedAt`, strictly increasing per document.
 - `methods.views` for session-level `createView()` and `openView()` calls (overrides the default evaluating navigator)
 - `methods.attachments`
 - `fulltextSetup` — the initial config returned by `db.getFulltextSetup()`; `db.setFulltextSetup()` overwrites it for the lifetime of the handle. Use this to test your app's full-text bootstrap logic. Note the mock evaluates `text` query clauses regardless of this config.

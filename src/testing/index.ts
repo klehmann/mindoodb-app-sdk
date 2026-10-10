@@ -28,6 +28,7 @@ import type {
   MindooDBAppIncomingResult,
   MindooDBAppIncomingSource,
   MindooDBAppAttachmentApi,
+  MindooDBAppAttachmentInfo,
   MindooDBAppBridge,
   MindooDBAppBridgeBeforeCloseMessage,
   MindooDBAppBridgeConnectMessage,
@@ -2774,6 +2775,25 @@ async function mockSha256Hex(value: string): Promise<string | null> {
     .join("");
 }
 
+/** One stored state of a mock document. */
+interface MockRevision {
+  timestamp: number;
+  data: Record<string, unknown>;
+  heads?: string[];
+  isDeleted: boolean;
+  authorLabel?: string;
+  attachments: MindooDBAppAttachmentInfo[];
+}
+
+function mockRevisionId(docId: string, index: number): string {
+  return `${docId}@${index}`;
+}
+
+function mockRevisionIndex(docId: string, revisionId: string): number {
+  const prefix = `${docId}@`;
+  return revisionId.startsWith(prefix) ? Number(revisionId.slice(prefix.length)) : -1;
+}
+
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
   peers: MockDatabasePeers,
@@ -2798,12 +2818,50 @@ function createDatabaseHandle(
   // MindooDB's changefeed does (each document once, at its latest change).
   let changeSequence = 0;
   const changedAt = new Map<string, number>();
+  // Every write's resulting state per document, oldest first: what
+  // listHistory / getAtTimestamp / getAtRevision read, as MindooDB keeps a
+  // document's revisions.
+  const revisions = new Map<string, MockRevision[]>();
   const storedDocuments = new (class extends Map<string, MockStoredDocument> {
     override set(id: string, document: MockStoredDocument) {
       changedAt.set(id, ++changeSequence);
+      const timeline = revisions.get(id) ?? [];
+      const updatedAt = document.updatedAt ? Date.parse(document.updatedAt) : NaN;
+      const previous = timeline[timeline.length - 1]?.timestamp ?? 0;
+      timeline.push({
+        // Strictly increasing, so a timestamp names one revision.
+        timestamp: Math.max(Number.isFinite(updatedAt) ? updatedAt : Date.now(), previous + 1),
+        data: structuredClone(document.data),
+        heads: document.heads ? [...document.heads] : undefined,
+        isDeleted: document.isDeleted,
+        authorLabel: document.authorLabel,
+        attachments: structuredClone(document.attachments ?? []),
+      });
+      revisions.set(id, timeline);
       return super.set(id, document);
     }
   })();
+
+  function historicalDocument(
+    docId: string,
+    index: number,
+    timestamp: number,
+    revisionId?: string,
+  ): MindooDBAppHistoricalDocument {
+    const revision = index >= 0 ? revisions.get(docId)?.[index] : undefined;
+    if (!revision) {
+      return { id: docId, timestamp, state: "missing", data: null, attachments: [], ...(revisionId ? { revisionId } : {}) };
+    }
+    return {
+      id: docId,
+      revisionId: revisionId ?? mockRevisionId(docId, index),
+      timestamp: revision.timestamp,
+      heads: revision.heads ? [...revision.heads] : [],
+      state: revision.isDeleted ? "deleted" : "exists",
+      data: revision.isDeleted ? null : structuredClone(revision.data),
+      attachments: structuredClone(revision.attachments),
+    };
+  }
 
   for (const seed of definition.documents ?? []) {
     const stored: MockStoredDocument = {
@@ -3490,35 +3548,40 @@ function createDatabaseHandle(
       return [{ keyId: "default", isDefault: true }];
     },
     async listHistory(
-      _docId: string,
+      docId: string,
     ): Promise<MindooDBAppDocumentHistoryEntry[]> {
-      return [];
+      const timeline = revisions.get(docId) ?? [];
+      return timeline
+        .map((revision, index) => ({
+          revisionId: mockRevisionId(docId, index),
+          timestamp: revision.timestamp,
+          ...(revision.heads ? { heads: [...revision.heads] } : {}),
+          publicKey: revision.authorLabel ?? "mock-user",
+          ...(revision.authorLabel ? { identityLabel: revision.authorLabel } : {}),
+          isDeleted: revision.isDeleted,
+          isCurrent: index === timeline.length - 1,
+          ...(index > 0 ? { dependencyIds: [mockRevisionId(docId, index - 1)] } : {}),
+        }))
+        .reverse();
     },
     async getAtTimestamp(
       docId: string,
       timestamp: number,
     ): Promise<MindooDBAppHistoricalDocument> {
-      return {
-        id: docId,
-        timestamp,
-        state: "missing",
-        data: null,
-        attachments: [],
-      };
+      const timeline = revisions.get(docId) ?? [];
+      let index = -1;
+      timeline.forEach((revision, position) => {
+        if (revision.timestamp <= timestamp) index = position;
+      });
+      return historicalDocument(docId, index, timestamp);
     },
     async getAtRevision(
       docId: string,
       revisionId: string,
+      revisionOptions?: { phase?: "before" | "after" },
     ): Promise<MindooDBAppHistoricalDocument> {
-      return {
-        id: docId,
-        revisionId,
-        timestamp: Date.now(),
-        heads: [],
-        state: "missing",
-        data: null,
-        attachments: [],
-      };
+      const index = mockRevisionIndex(docId, revisionId);
+      return historicalDocument(docId, revisionOptions?.phase === "before" ? index - 1 : index, Date.now(), revisionId);
     },
     async getAtHeads(
       docId: string,

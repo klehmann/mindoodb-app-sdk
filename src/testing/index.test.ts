@@ -1823,3 +1823,27 @@ describe("configured views (launchContext.views)", () => {
     expect(await entries(globex)).toEqual(["Carla"]);
   });
 });
+
+describe("document history in the mock", () => {
+  it("keeps every write as a revision, readable by revision and by time", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{ info: { id: "main", title: "Main", capabilities: ["read", "create", "update", "history"] } }],
+    });
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const created = await database.documents.create({ set: { title: "one" } });
+    await database.documents.update(created.id, { json: { set: [{ path: ["title"], value: "two" }] } });
+    await database.documents.update(created.id, { json: { set: [{ path: ["title"], value: "three" }] } });
+
+    const history = await database.documents.listHistory(created.id);
+    expect(history).toHaveLength(3);
+    expect(history.map((entry) => entry.isCurrent)).toEqual([true, false, false]);
+    expect(history[0]!.timestamp).toBeGreaterThan(history[1]!.timestamp);
+
+    const middle = history[1]!;
+    expect((await database.documents.getAtRevision(created.id, middle.revisionId)).data?.title).toBe("two");
+    expect((await database.documents.getAtRevision(created.id, middle.revisionId, { phase: "before" })).data?.title).toBe("one");
+    expect((await database.documents.getAtTimestamp(created.id, middle.timestamp)).data?.title).toBe("two");
+    expect((await database.documents.getAtTimestamp(created.id, history[2]!.timestamp - 1)).state).toBe("missing");
+  });
+});
