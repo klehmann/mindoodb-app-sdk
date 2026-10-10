@@ -83,6 +83,16 @@ export {
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
 export { MindooDBAppAgentToolError } from "./client/agentTools";
+export {
+  agentGuideExamples,
+  agentGuideSignatureIndex,
+  createAgentGuideTool,
+  renderAgentGuideGroup,
+  type MindooDBAppAgentGuideField,
+  type MindooDBAppAgentGuideGroup,
+  type MindooDBAppAgentGuideOp,
+  type MindooDBAppAgentGuideOptions,
+} from "./client/agentGuide";
 export { releaseMindooDBAppBridgeSessions } from "./client/createMindooDBAppBridge";
 export {
   DEFAULT_HAVEN_HOST_SHORTCUTS,
