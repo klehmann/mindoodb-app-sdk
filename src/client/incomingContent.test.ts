@@ -66,7 +66,9 @@ describe("MindooDBAppIncomingApiImpl", () => {
 
     expect(calls[0]!.method).toBe("incoming.subscribe");
     expect(calls.filter((call) => call.method === "incoming.read")).toHaveLength(3);
-    expect(received).toEqual(bytes);
+    // Byte-wise compare: toEqual on a multi-megabyte Uint8Array takes seconds and times out under load.
+    expect(received!.byteLength).toBe(size);
+    expect(received!.every((value, index) => value === bytes[index])).toBe(true);
     expect(text).toBe("hello");
     expect(calls.at(-1)).toEqual({
       method: "incoming.complete",
