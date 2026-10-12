@@ -3884,7 +3884,7 @@ type MockSessionState = {
   getDragProfile: () => MindooDBAppDragProfile | null;
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
   listReminders: () => MindooDBAppReminder[];
-  emitReminderOpened: (id: string) => Promise<void>;
+  emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
   embedHost: ReturnType<typeof createMockEmbedHost>;
 };
 
@@ -4426,11 +4426,11 @@ function createMockSessionState(
     listReminders() {
       return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
     },
-    async emitReminderOpened(id) {
+    async emitReminderOpened(id, action = "open") {
       const reminder = mockReminders.get(id);
       const opened: MindooDBAppReminderOpened = {
         id,
-        action: "open",
+        action,
         ...(reminder?.target ? { target: reminder.target } : {}),
       };
       mockReminders.delete(id);
@@ -4699,8 +4699,11 @@ export interface MockMindooDBAppSessionController {
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
   /** Reminders the app scheduled (`session.reminders.schedule`) that were not tapped or cancelled. */
   listReminders(): MindooDBAppReminder[];
-  /** As if the user tapped this reminder: delivered to `session.reminders.onOpened` (held until registered). */
-  emitReminderOpened(id: string): Promise<void>;
+  /**
+   * As if the user tapped this reminder (`"open"`) or pressed "Done": delivered
+   * to `session.reminders.onOpened` (held until registered).
+   */
+  emitReminderOpened(id: string, action?: "open" | "done"): Promise<void>;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */

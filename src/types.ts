@@ -1643,12 +1643,18 @@ export type MindooDBAppReminderScheduleResult =
   | { status: "scheduled"; reminder: MindooDBAppReminder }
   | { status: "denied" | "unsupported" | "invalid"; reason?: string };
 
-/** The user tapped one of this app's reminders. */
+/** The user tapped one of this app's reminders, or one of its actions. */
 export interface MindooDBAppReminderOpened {
   id: string;
   target?: string;
-  /** `"open"`: the notification itself was tapped. */
-  action: "open";
+  /**
+   * `"open"`: the notification itself was tapped (Haven started or focused the
+   * app for it). `"done"`: the user pressed "Done" in the notification; the
+   * app hears about it the next time it runs and should mark the item done
+   * itself, Haven writes nothing on its behalf. ("In 1 hour" is handled by
+   * Haven alone: the reminder simply comes back an hour later.)
+   */
+  action: "open" | "done";
 }
 
 export type MindooDBAppReminderOpenedHandler = (opened: MindooDBAppReminderOpened) => void | Promise<void>;
