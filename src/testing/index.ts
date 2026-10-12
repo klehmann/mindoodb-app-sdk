@@ -24,6 +24,9 @@ import type {
   MindooDBAppEmbedCloseReason,
   MindooDBAppIncomingContent,
   MindooDBAppIncomingContentHandler,
+  MindooDBAppReminder,
+  MindooDBAppReminderOpened,
+  MindooDBAppReminderOpenedHandler,
   MindooDBAppIncomingItem,
   MindooDBAppIncomingResult,
   MindooDBAppIncomingSource,
@@ -3880,6 +3883,8 @@ type MockSessionState = {
   resolveDrag: (result: MindooDBAppDragStartResult) => void;
   getDragProfile: () => MindooDBAppDragProfile | null;
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
+  listReminders: () => MindooDBAppReminder[];
+  emitReminderOpened: (id: string) => Promise<void>;
   embedHost: ReturnType<typeof createMockEmbedHost>;
 };
 
@@ -3901,6 +3906,9 @@ function createMockSessionState(
   );
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
+  const mockReminders = new Map<string, MindooDBAppReminder>();
+  let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
+  const pendingReminderTaps: MindooDBAppReminderOpened[] = [];
   const pendingIncoming: Array<() => void> = [];
   let incomingCounter = 0;
   const hostFocusListeners = new Set<(focused: boolean) => void>();
@@ -4283,6 +4291,38 @@ function createMockSessionState(
         }
       };
     },
+    reminders: {
+      async schedule(request) {
+        const at = request.at instanceof Date ? request.at.getTime() : request.at;
+        if (!request.id || !request.title || !Number.isFinite(at) || at <= Date.now()) {
+          return { status: "invalid", reason: "id, title and a future time are required" };
+        }
+        const reminder: MindooDBAppReminder = {
+          id: request.id,
+          title: request.title,
+          at,
+          ...(request.body ? { body: request.body } : {}),
+          ...(request.target ? { target: request.target } : {}),
+        };
+        mockReminders.set(request.id, reminder);
+        return { status: "scheduled", reminder: { ...reminder } };
+      },
+      async cancel(id) {
+        mockReminders.delete(id);
+      },
+      async list() {
+        return [...mockReminders.values()].sort((a, b) => a.at - b.at).map((reminder) => ({ ...reminder }));
+      },
+      onOpened(handler) {
+        reminderHandler = handler;
+        pendingReminderTaps.splice(0).forEach((opened) => void handler(opened));
+        return () => {
+          if (reminderHandler === handler) {
+            reminderHandler = null;
+          }
+        };
+      },
+    },
     onBeforeClose(listener) {
       beforeCloseListeners.add(listener);
       return () => {
@@ -4382,6 +4422,23 @@ function createMockSessionState(
         };
         deliver();
       });
+    },
+    listReminders() {
+      return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
+    },
+    async emitReminderOpened(id) {
+      const reminder = mockReminders.get(id);
+      const opened: MindooDBAppReminderOpened = {
+        id,
+        action: "open",
+        ...(reminder?.target ? { target: reminder.target } : {}),
+      };
+      mockReminders.delete(id);
+      if (reminderHandler) {
+        await reminderHandler(opened);
+      } else {
+        pendingReminderTaps.push(opened);
+      }
     },
     emitThemeChange(theme) {
       launchContext = mergeLaunchContext(launchContext, { theme });
@@ -4640,6 +4697,10 @@ export interface MockMindooDBAppSessionController {
    * and resolves with the handler's result.
    */
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
+  /** Reminders the app scheduled (`session.reminders.schedule`) that were not tapped or cancelled. */
+  listReminders(): MindooDBAppReminder[];
+  /** As if the user tapped this reminder: delivered to `session.reminders.onOpened` (held until registered). */
+  emitReminderOpened(id: string): Promise<void>;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -4846,6 +4907,8 @@ export function createMockMindooDBAppSession(
     resolveDrag: state.resolveDrag,
     getDragProfile: state.getDragProfile,
     emitIncomingContent: state.emitIncomingContent,
+    listReminders: state.listReminders,
+    emitReminderOpened: state.emitReminderOpened,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),

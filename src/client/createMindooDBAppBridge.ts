@@ -41,6 +41,7 @@ import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
 import { MindooDBAppAgentApiImpl } from "./agentTools";
 import { MindooDBAppEmbedsClient } from "./embeds";
 import { MindooDBAppIncomingApiImpl } from "./incomingContent";
+import { MindooDBAppRemindersApiImpl } from "./reminders";
 import { PortRpcClient } from "./portRpcClient";
 import type {
   MindooDBAppComponentsApi,
@@ -1623,6 +1624,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly storage: MindooDBAppStorageApi;
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
+  public readonly reminders: MindooDBAppRemindersApiImpl;
   private readonly embedsClient: MindooDBAppEmbedsClient;
   public readonly components: MindooDBAppComponentsApi;
   public readonly embeds: MindooDBAppEmbedsApi;
@@ -1647,6 +1649,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.drag = new MindooDBAppDragApiImpl(this.rpc);
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
+    this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
     this.embedsClient = new MindooDBAppEmbedsClient(this.rpc);
     this.components = this.embedsClient.components;
     this.embeds = this.embedsClient.embeds;
@@ -1935,6 +1938,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.drag.dispose();
     this.agent.dispose();
     this.incoming.dispose();
+    this.reminders.dispose();
     this.embedsClient.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
