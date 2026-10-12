@@ -1601,6 +1601,84 @@ export interface MindooDBAppBridgeIncomingContentMessage {
   content: MindooDBAppIncomingContentInfo;
 }
 
+/**
+ * A reminder an app asks Haven to show as a notification at `at` (native
+ * app only). Haven decides: the user allows reminders per app once, sees
+ * them in Haven's settings and can remove them there.
+ */
+export interface MindooDBAppReminderRequest {
+  /** The app's own id for the reminder; scheduling the same id again replaces it. Max. 100 characters. */
+  id: string;
+  /** Short title, max. 120 characters. Shown with the app's name; lock screens hide it. */
+  title: string;
+  /** Optional detail, max. 300 characters. */
+  body?: string;
+  /** When to show it: epoch milliseconds or a Date, in the future, at most one year ahead. */
+  at: number | Date;
+  /**
+   * Handed back in {@link MindooDBAppReminderOpened.target} when the user taps
+   * the reminder, e.g. a document id. Max. 500 characters. Do not put secrets
+   * here: Haven keeps it outside the encrypted databases.
+   */
+  target?: string;
+}
+
+/** A reminder as Haven holds it for this app. */
+export interface MindooDBAppReminder {
+  id: string;
+  title: string;
+  body?: string;
+  /** Epoch milliseconds. */
+  at: number;
+  target?: string;
+}
+
+/**
+ * What became of a request. `denied`: the user (or the system permission)
+ * does not allow reminders for this app; `unsupported`: the host has no
+ * notifications (browser, older app version); `invalid`: the request broke a
+ * limit (`reason` says which).
+ */
+export type MindooDBAppReminderScheduleResult =
+  | { status: "scheduled"; reminder: MindooDBAppReminder }
+  | { status: "denied" | "unsupported" | "invalid"; reason?: string };
+
+/** The user tapped one of this app's reminders. */
+export interface MindooDBAppReminderOpened {
+  id: string;
+  target?: string;
+  /** `"open"`: the notification itself was tapped. */
+  action: "open";
+}
+
+export type MindooDBAppReminderOpenedHandler = (opened: MindooDBAppReminderOpened) => void | Promise<void>;
+
+/** `session.reminders`: notifications at a time the app chooses (Haven's native app). */
+export interface MindooDBAppRemindersApi {
+  /**
+   * Asks Haven to show a reminder. The first request of an app asks the user
+   * whether the app may send reminders at all.
+   */
+  schedule(request: MindooDBAppReminderRequest): Promise<MindooDBAppReminderScheduleResult>;
+  /** Removes a reminder of this app; unknown ids are ignored. */
+  cancel(id: string): Promise<void>;
+  /** This app's reminders that have not fired yet, earliest first. */
+  list(): Promise<MindooDBAppReminder[]>;
+  /**
+   * Called when the user taps one of this app's reminders. Haven starts or
+   * focuses the app and delivers taps once a handler is registered, also
+   * those from before the app was running. Returns an unsubscribe function.
+   */
+  onOpened(handler: MindooDBAppReminderOpenedHandler): () => void;
+}
+
+/** Push message: a reminder of this app was tapped. */
+export interface MindooDBAppBridgeReminderOpenedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "reminder-opened";
+  reminder: MindooDBAppReminderOpened;
+}
+
 /** A component another app offers, as `session.components.list` returns it. */
 export interface MindooDBAppComponentInfo {
   /** Opaque key for `session.embeds.open`. */
@@ -1923,6 +2001,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage
   | MindooDBAppBridgeIncomingContentMessage
+  | MindooDBAppBridgeReminderOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbeddingRequestMessage;
 
@@ -3815,6 +3894,11 @@ export interface MindooDBAppSession {
    * Returns an unsubscribe function.
    */
   onIncomingContent(handler: MindooDBAppIncomingContentHandler): () => void;
+  /**
+   * Reminders as local notifications (Haven's native app; `unsupported`
+   * elsewhere). See {@link MindooDBAppRemindersApi}.
+   */
+  reminders: MindooDBAppRemindersApi;
   /**
    * Run work before the host tears this launch down, e.g. flushing buffered writes.
    *
