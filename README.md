@@ -687,6 +687,30 @@ Requirements and limits worth knowing before you design around this:
 
 There is deliberately no API for decrypting arbitrary data with the user's key. That would be a decryption oracle: doc keys wrapped to the same key are publicly readable in the tenant directory, so an app able to unwrap chosen ciphertext could obtain keys for databases it was never granted.
 
+### Signing PDFs with a certificate
+
+`session.pdf.sign` signs finished PDF bytes with an X.509 certificate the user picks in Haven, as a PAdES signature that Adobe Acrobat and other readers list as a digital signature. Haven asks for a PKCS#12 file (`.p12`/`.pfx`) and its password, shows holder, issuer and validity, signs, and hands back the signed bytes. The certificate file, the password and the private key never reach your app, and Haven keeps none of them after the dialog: the user chooses the certificate again for every signature.
+
+```ts
+const bytes = await pdfDocument.save();
+const result = await session.pdf.sign({
+  pdf: bytes,
+  fileName: "Site survey.pdf",
+  reason: "Approved",
+  visibleSignature: { pageIndex: 0, position: "bottom-right" }, // a proposal; the user can turn it off
+  timestamp: true, // RFC 3161 timestamp (PAdES-B-T), also a proposal
+});
+if (!result.ok) {
+  // "declined": the user cancelled. "unsupported": older Haven. Not errors.
+  return;
+}
+download(result.pdf, "Site survey (signed).pdf");
+```
+
+- Signing is an incremental update: the original bytes stay unchanged and earlier signatures stay valid. Edit the PDF before signing, never after, or the signature breaks.
+- Acrobat shows a green check only for certificates that chain to the Adobe Approved Trust List or that the reader trusts; a self-signed or company certificate shows "validity unknown", which is expected.
+- No capability is needed: nothing is signed without the user choosing a certificate and entering its password in Haven's own dialog.
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
@@ -2142,6 +2166,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `hasHostFocus()`                      | `Promise<boolean>`                   |
 | `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
 | `notify(input)`                       | `Promise<{ id: string }>`            |
+| `pdf.sign(input)`                     | `Promise<MindooDBAppPdfSignResult>`  |
 | `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
 | `agent?.setContext(context)`          | `Promise<void>`                      |
 | `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |

@@ -1685,6 +1685,96 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
   reminder: MindooDBAppReminderOpened;
 }
 
+/** Corner of the page for a visible signature stamp, as the viewer displays the page. */
+export type MindooDBAppPdfSignaturePosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+/**
+ * Request to sign a PDF with an X.509 certificate the user picks in Haven.
+ *
+ * The app hands over finished PDF bytes; Haven asks the user for a PKCS#12
+ * file (`.p12`/`.pfx`) and its password, shows who the certificate belongs to,
+ * signs and returns the signed bytes. The certificate, password and private
+ * key never reach the app, and Haven keeps none of them after the dialog.
+ */
+export interface MindooDBAppPdfSignInput {
+  /** The complete PDF, e.g. the result of pdf-lib's `save()`. Max. 100 MB. */
+  pdf: Uint8Array;
+  /** Shown in the dialog so the user knows what they sign, e.g. `"Site survey.pdf"`. */
+  fileName?: string;
+  /** Stored in the signature (`/Reason`), e.g. "Approved". Max. 200 characters. */
+  reason?: string;
+  /** Stored in the signature (`/Location`). Max. 200 characters. */
+  location?: string;
+  /** Stored in the signature (`/ContactInfo`). Max. 200 characters. */
+  contactInfo?: string;
+  /**
+   * Proposes a visible stamp (signer name, date, reason) on one page. The user
+   * can turn it off. Omit or pass `false` for a signature that only appears in
+   * the viewer's signature panel.
+   */
+  visibleSignature?:
+    | false
+    | {
+        /** Zero-based. @defaultValue 0 */
+        pageIndex?: number;
+        /** @defaultValue "bottom-right" */
+        position?: MindooDBAppPdfSignaturePosition;
+      };
+  /**
+   * Proposes an RFC 3161 timestamp from a trusted authority (PAdES-B-T), so the
+   * signing time is evidence rather than the device's clock. The user can turn
+   * it off. @defaultValue true
+   */
+  timestamp?: boolean;
+}
+
+/** The certificate a PDF was signed with, for display. */
+export interface MindooDBAppPdfSigner {
+  commonName: string;
+  /** Subject as `CN=…, O=…, C=…`. */
+  subject: string;
+  issuerCommonName: string;
+  /** ISO 8601. */
+  validFrom: string;
+  validTo: string;
+  /** Lower-case hex SHA-256 of the certificate. */
+  fingerprintSha256: string;
+  selfSigned: boolean;
+}
+
+/**
+ * Outcome of {@link MindooDBAppPdfApi.sign}. Declining is an ordinary outcome:
+ * `declined` when the user cancelled, `unsupported` when the host cannot sign
+ * PDFs (older Haven), `invalid` when the request broke a limit or the bytes are
+ * not a signable PDF (`message` says which).
+ */
+export type MindooDBAppPdfSignResult =
+  | {
+      ok: true;
+      /** The original bytes followed by one signature revision (incremental update). */
+      pdf: Uint8Array;
+      signer: MindooDBAppPdfSigner;
+      /** Time from the timestamp authority, epoch ms, when the user kept the timestamp. */
+      timestampTime?: number;
+      /** Client wall-clock at signing. Not evidence — the timestamp is. */
+      signedAt: number;
+    }
+  | {
+      ok: false;
+      reason: "declined" | "unsupported" | "invalid";
+      message?: string;
+    };
+
+/** `session.pdf`: PDF services that need the user, performed by Haven. */
+export interface MindooDBAppPdfApi {
+  /**
+   * Sign a PDF with a certificate the user chooses (PAdES, recognised by Adobe
+   * Acrobat and other readers). Opens a Haven dialog; resolves once the user
+   * signed or cancelled.
+   */
+  sign(input: MindooDBAppPdfSignInput): Promise<MindooDBAppPdfSignResult>;
+}
+
 /** A component another app offers, as `session.components.list` returns it. */
 export interface MindooDBAppComponentInfo {
   /** Opaque key for `session.embeds.open`. */
@@ -3905,6 +3995,8 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /** PDF services that need the user, such as signing with a certificate. */
+  pdf: MindooDBAppPdfApi;
   /**
    * Run work before the host tears this launch down, e.g. flushing buffered writes.
    *
