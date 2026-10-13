@@ -24,6 +24,8 @@ import type {
   MindooDBAppEmbedCloseReason,
   MindooDBAppIncomingContent,
   MindooDBAppIncomingContentHandler,
+  MindooDBAppPdfSignInput,
+  MindooDBAppPdfSignResult,
   MindooDBAppReminder,
   MindooDBAppReminderOpened,
   MindooDBAppReminderOpenedHandler,
@@ -3885,8 +3887,28 @@ type MockSessionState = {
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
   listReminders: () => MindooDBAppReminder[];
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
+  getPdfSignRequests: () => MindooDBAppPdfSignInput[];
+  setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
   embedHost: ReturnType<typeof createMockEmbedHost>;
 };
+
+/**
+ * What the mock answers to `session.pdf.sign`: `"signed"` (default) returns the
+ * bytes unchanged with a mock signer, as if the user signed — a test host has
+ * no certificate, and a fake signature would let a test "verify" something that
+ * never held. The other values answer `ok: false` with that reason.
+ */
+export type MockPdfSignOutcome = "signed" | "declined" | "unsupported" | "invalid";
+
+const MOCK_PDF_SIGNER = Object.freeze({
+  commonName: "Test Signer",
+  subject: "CN=Test Signer, O=MindooDB test host",
+  issuerCommonName: "Test Signer",
+  validFrom: "2026-01-01T00:00:00.000Z",
+  validTo: "2036-01-01T00:00:00.000Z",
+  fingerprintSha256: "0".repeat(64),
+  selfSigned: true,
+});
 
 function createMockSessionState(
   options: CreateMockMindooDBAppSessionOptions = {},
@@ -3907,6 +3929,8 @@ function createMockSessionState(
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const mockReminders = new Map<string, MindooDBAppReminder>();
+  const pdfSignRequests: MindooDBAppPdfSignInput[] = [];
+  let pdfSignOutcome: MockPdfSignOutcome = "signed";
   let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
   const pendingReminderTaps: MindooDBAppReminderOpened[] = [];
   const pendingIncoming: Array<() => void> = [];
@@ -4323,6 +4347,27 @@ function createMockSessionState(
         };
       },
     },
+    pdf: {
+      async sign(input): Promise<MindooDBAppPdfSignResult> {
+        const pdf = input.pdf instanceof Uint8Array ? input.pdf : new Uint8Array(input.pdf as ArrayLike<number>);
+        pdfSignRequests.push({ ...input, pdf: pdf.slice() });
+        const header = new TextDecoder("latin1").decode(pdf.subarray(0, 1024));
+        if (!header.includes("%PDF-") || pdf.byteLength > 100 * 1024 * 1024) {
+          return { ok: false, reason: "invalid", message: "Not a PDF, or larger than 100 MB." };
+        }
+        if (pdfSignOutcome !== "signed") {
+          return { ok: false, reason: pdfSignOutcome };
+        }
+        const signedAt = Date.now();
+        return {
+          ok: true,
+          pdf: pdf.slice(),
+          signer: { ...MOCK_PDF_SIGNER },
+          ...(input.timestamp === false ? {} : { timestampTime: signedAt }),
+          signedAt,
+        };
+      },
+    },
     onBeforeClose(listener) {
       beforeCloseListeners.add(listener);
       return () => {
@@ -4425,6 +4470,12 @@ function createMockSessionState(
     },
     listReminders() {
       return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
+    },
+    getPdfSignRequests() {
+      return pdfSignRequests.map((request) => ({ ...request }));
+    },
+    setPdfSignOutcome(outcome: MockPdfSignOutcome) {
+      pdfSignOutcome = outcome;
     },
     async emitReminderOpened(id, action = "open") {
       const reminder = mockReminders.get(id);
@@ -4704,6 +4755,10 @@ export interface MockMindooDBAppSessionController {
    * to `session.reminders.onOpened` (held until registered).
    */
   emitReminderOpened(id: string, action?: "open" | "done"): Promise<void>;
+  /** Every `session.pdf.sign` request so far, oldest first. */
+  getPdfSignRequests(): MindooDBAppPdfSignInput[];
+  /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
+  setPdfSignOutcome(outcome: MockPdfSignOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -4912,6 +4967,8 @@ export function createMockMindooDBAppSession(
     emitIncomingContent: state.emitIncomingContent,
     listReminders: state.listReminders,
     emitReminderOpened: state.emitReminderOpened,
+    getPdfSignRequests: state.getPdfSignRequests,
+    setPdfSignOutcome: state.setPdfSignOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
@@ -5022,6 +5079,10 @@ export interface FakeBridgeHostController {
     input: MindooDBAppUpdateDocumentInput,
     options?: MockRemoteUpdateOptions,
   ): Promise<MindooDBAppDocument>;
+  /** Every `session.pdf.sign` request so far, oldest first. */
+  getPdfSignRequests(): MindooDBAppPdfSignInput[];
+  /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
+  setPdfSignOutcome(outcome: MockPdfSignOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -5467,6 +5528,8 @@ export function createFakeBridgeHost(
         return { ok: true };
       case "apps.propose":
         return await state.session.proposeApp(params as unknown as MindooDBAppProposeAppInput);
+      case "pdf.sign":
+        return await state.session.pdf.sign(params as unknown as MindooDBAppPdfSignInput);
       case "documents.list":
         return await state
           .getDatabase(String(params.databaseId))
@@ -6326,6 +6389,8 @@ export function createFakeBridgeHost(
     setDirectoryUsers: state.setDirectoryUsers,
     getDirectoryUsers: state.getDirectoryUsers,
     applyRemoteUpdate: state.applyRemoteUpdate,
+    getPdfSignRequests: state.getPdfSignRequests,
+    setPdfSignOutcome: state.setPdfSignOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
