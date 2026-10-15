@@ -689,6 +689,7 @@ function createDefaultLaunchContext(
       geolocation: false,
       clipboardWrite: false,
       motion: false,
+      localFonts: false,
       webRtc: false,
       workers: false,
     },

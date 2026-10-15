@@ -256,6 +256,11 @@ export interface MindooDBAppBrowserFeatures {
    * iOS still asks the user. Definition field `allowMotion`.
    */
   motion: boolean;
+  /**
+   * `window.queryLocalFonts` (the user's installed fonts). The browser still asks the
+   * user once. Definition field `allowLocalFonts`. Absent from hosts older than this field.
+   */
+  localFonts?: boolean;
   /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */
   webRtc: boolean;
   /** `new Worker`, shared and service workers. Blocked only for hosted apps. Definition field `allowWorkers`. */

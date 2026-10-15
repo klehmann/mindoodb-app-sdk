@@ -111,6 +111,11 @@ export interface MindooDBAppDefinition {
    * read the compass. iOS still asks the user (`DeviceOrientationEvent.requestPermission`).
    */
   allowMotion?: boolean;
+  /**
+   * The user's installed fonts (Permissions-Policy `local-fonts`, `window.queryLocalFonts`),
+   * e.g. to show documents in their real fonts. The browser still asks the user once.
+   */
+  allowLocalFonts?: boolean;
   allowWebRtc?: boolean;
   allowWorkers?: boolean;
   /**
@@ -1097,6 +1102,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowGeolocation = readOptionalBoolean(raw, "allowGeolocation", errors);
   const allowClipboardWrite = readOptionalBoolean(raw, "allowClipboardWrite", errors);
   const allowMotion = readOptionalBoolean(raw, "allowMotion", errors);
+  const allowLocalFonts = readOptionalBoolean(raw, "allowLocalFonts", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const listing = readListing(raw.listing, errors);
@@ -1143,6 +1149,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowGeolocation,
       allowClipboardWrite,
       allowMotion,
+      allowLocalFonts,
       allowWebRtc,
       allowWorkers,
       agentToolPrefix,
