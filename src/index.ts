@@ -83,6 +83,7 @@ export {
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
 export { MindooDBAppAgentToolError } from "./client/agentTools";
+export { normalizeAgentToolInput } from "./client/agentInput";
 export {
   agentGuideExamples,
   agentGuideSignatureIndex,
