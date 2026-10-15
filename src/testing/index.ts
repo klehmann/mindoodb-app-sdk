@@ -3252,6 +3252,9 @@ function createDatabaseHandle(
       );
       persistMockAutomergeDocument(document, mergedDoc);
       document.updatedAt = new Date().toISOString();
+      // Like every other write: live queries over this document see the change
+      // (Word chunk watches rely on it to pick up edits made elsewhere).
+      notifyLiveQueries();
       const mergedHeads = document.heads ? [...document.heads] : [];
       let changesSince:
         | {
