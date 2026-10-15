@@ -1459,6 +1459,13 @@ export interface MindooDBAppAgentToolDescriptor {
 /** One agent tool an app offers. `execute` runs inside the app; its result must be JSON. */
 export interface MindooDBAppAgentTool extends MindooDBAppAgentToolDescriptor {
   execute(input: Record<string, unknown>): Promise<unknown>;
+  /**
+   * Pass blank strings, empty arrays and empty objects in optional fields through
+   * to `execute`. By default the SDK drops them, because some agents send them for
+   * every optional field they do not mean to set. Set it when such a value is a
+   * real choice for this tool (say, `""` to clear a field).
+   */
+  keepEmptyInput?: boolean;
 }
 
 /** Haven's answer to {@link MindooDBAppAgentApi.registerTools}. */

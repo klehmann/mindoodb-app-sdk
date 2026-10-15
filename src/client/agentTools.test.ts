@@ -82,6 +82,27 @@ describe("MindooDBAppAgentApiImpl", () => {
     ]);
   });
 
+  it("drops placeholder values for optional fields unless the tool keeps them", async () => {
+    const { rpc, posted } = createRpc();
+    const api = new MindooDBAppAgentApiImpl(rpc);
+    const inputSchema = {
+      type: "object",
+      required: ["title"],
+      properties: { title: { type: "string" }, keyId: { type: "string" }, shareWith: { type: "array" } },
+    };
+    await api.registerTools([
+      { name: "plain", description: "", inputSchema, execute: async (input) => input },
+      { name: "kept", description: "", inputSchema, keepEmptyInput: true, execute: async (input) => input },
+    ]);
+    const input = { title: "", keyId: "", shareWith: [], onlyMe: false };
+    invoke(rpc, "plain", input);
+    await flush();
+    invoke(rpc, "kept", input);
+    await flush();
+    const results = posted.map((message) => (message.kind === "agent-result" ? message.result : null));
+    expect(results).toEqual([{ title: "", onlyMe: false }, input]);
+  });
+
   it("reports coded errors, plain errors and unknown tools", async () => {
     const { rpc, posted } = createRpc();
     const api = new MindooDBAppAgentApiImpl(rpc);

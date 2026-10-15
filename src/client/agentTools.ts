@@ -5,7 +5,9 @@
  * Only descriptors cross the bridge. `execute` stays in the app and runs when
  * Haven forwards an agent's call; the outcome goes back as one `agent-result`
  * message per call. A tool that throws {@link MindooDBAppAgentToolError}
- * reports its code; any other exception becomes `FAILED`.
+ * reports its code; any other exception becomes `FAILED`. Placeholder values
+ * agents send for optional fields are removed first ({@link normalizeAgentToolInput}),
+ * unless the tool sets `keepEmptyInput`.
  *
  * @module agentTools
  */
@@ -17,6 +19,7 @@ import type {
   MindooDBAppBridgeAgentResultMessage,
   MindooDBAppBridgePortMessage,
 } from "../types";
+import { normalizeAgentToolInput } from "./agentInput";
 
 /** Tool names an agent client accepts everywhere, before Haven adds the app prefix. */
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
@@ -121,7 +124,8 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
       if (!tool) {
         throw new MindooDBAppAgentToolError("NOT_FOUND", `The app has no tool "${name}" (any more).`);
       }
-      const result = await tool.execute(input ?? {});
+      const raw = input ?? {};
+      const result = await tool.execute(tool.keepEmptyInput ? raw : normalizeAgentToolInput(raw, tool.inputSchema));
       reply = { protocol: "mindoodb-app-bridge", kind: "agent-result", callId, ok: true, result: toJson(result) };
     } catch (error) {
       reply = {
