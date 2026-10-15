@@ -124,8 +124,11 @@ describe("validateMindooDBAppDefinition", () => {
   });
 
   it("keeps the device feature flags, motion sensors included", () => {
-    const result = validateMindooDBAppDefinition(baseDefinition({ allowCamera: true, allowMicrophone: true, allowMotion: true }));
-    expect(result.definition).toMatchObject({ allowCamera: true, allowMicrophone: true, allowMotion: true });
+    const result = validateMindooDBAppDefinition(
+      baseDefinition({ allowCamera: true, allowMicrophone: true, allowMotion: true, allowLocalFonts: true }),
+    );
+    expect(result.definition).toMatchObject({ allowCamera: true, allowMicrophone: true, allowMotion: true, allowLocalFonts: true });
+    expect(validateMindooDBAppDefinition(baseDefinition({ allowLocalFonts: 1 })).errors.join()).toMatch(/allowLocalFonts/);
     expect(validateMindooDBAppDefinition(baseDefinition({ allowMotion: "yes" })).errors.join()).toMatch(/allowMotion/);
   });
 
