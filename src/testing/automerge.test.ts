@@ -273,6 +273,26 @@ describe("automerge-backed mock databases", () => {
     await subscription.dispose();
   });
 
+  it("pushes Automerge changes applied by the app to live queries", async () => {
+    const { database } = await openMock();
+    const titles: unknown[] = [];
+    const subscription = await database.documents.liveQuery({}, (result) => {
+      titles.push(result.rows.find((row) => row.docId === "sheet-1")?.fields.title);
+    });
+    const change = async (title: string) => {
+      const snapshot = await database.documents.getAutomergeSnapshot("sheet-1");
+      const before = Automerge.load<Record<string, unknown>>(snapshot.binary);
+      const after = Automerge.change(before, (doc) => {
+        doc.title = title;
+      });
+      return { changes: Automerge.getChanges(before, after), replicaHeads: snapshot.heads };
+    };
+    await database.documents.applyAutomergeChanges("sheet-1", await change("Chunk edit"));
+    await database.documents.applyAutomergeChangesBatch([{ docId: "sheet-1", patch: await change("Batch edit") }]);
+    expect(titles).toEqual(["Sheet", "Chunk edit", "Batch edit"]);
+    await subscription.dispose();
+  });
+
   it("keeps the plain JSON mock when the flag is off", async () => {
     const { mock, database } = await openMock(seedDefinition(false));
     const updated = await database.documents.update("sheet-1", {
