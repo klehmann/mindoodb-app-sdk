@@ -258,7 +258,8 @@ export interface MindooDBAppBrowserFeatures {
   motion: boolean;
   /**
    * `window.queryLocalFonts` (the user's installed fonts). The browser still asks the
-   * user once. Definition field `allowLocalFonts`. Absent from hosts older than this field.
+   * user once. Haven allows it for every app; definition field `allowLocalFonts` only
+   * matters for hosts that gate it per app. Absent from hosts older than this field.
    */
   localFonts?: boolean;
   /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */

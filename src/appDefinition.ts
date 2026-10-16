@@ -114,6 +114,8 @@ export interface MindooDBAppDefinition {
   /**
    * The user's installed fonts (Permissions-Policy `local-fonts`, `window.queryLocalFonts`),
    * e.g. to show documents in their real fonts. The browser still asks the user once.
+   * Not needed for Haven: it delegates `local-fonts` to every app frame; only hosts that
+   * gate it per app read this field.
    */
   allowLocalFonts?: boolean;
   allowWebRtc?: boolean;
