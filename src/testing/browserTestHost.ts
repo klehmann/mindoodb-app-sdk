@@ -1157,11 +1157,25 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     }
   }
 
+  /**
+   * A link that downloads the file. The panel re-renders after every request, so the Blob
+   * and its object URL are made only when the link is clicked (and revoked right after);
+   * copying every exchanged file on every render slowed an app exporting many files down
+   * quadratically until the page ran out of memory.
+   */
   function download(name: string, mimeType: string, data: Uint8Array): HTMLAnchorElement {
     const link = document.createElement("a");
     link.textContent = name;
     link.download = name;
-    link.href = URL.createObjectURL(new Blob([data.slice().buffer as ArrayBuffer], { type: mimeType }));
+    link.href = "#";
+    link.addEventListener("click", () => {
+      const url = URL.createObjectURL(new Blob([data.slice().buffer as ArrayBuffer], { type: mimeType }));
+      link.href = url;
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        link.href = "#";
+      }, 0);
+    });
     return link;
   }
 
