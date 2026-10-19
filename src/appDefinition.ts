@@ -316,7 +316,10 @@ export interface MindooDBAppComponentSpec {
    * can pick one that fits (`components.list({ requires })`): `inspect:<contract>`
    * (describes its document, e.g. `inspect:mindoo.inspect.document@1`), `validate`
    * (asks before it saves, `session.embedding.validate`), `issues` (shows a host's
-   * findings, `embed.showIssues`), `reveal` (scrolls to an anchor, `embed.reveal`).
+   * findings, `embed.showIssues`), `reveal` (scrolls to an anchor, `embed.reveal`),
+   * `variables` (offers the host's fields to insert, `embed.setVariables`),
+   * `template` (starts a new document from a template, `embeds.open({ template })`),
+   * `export:<format>` (hands over a file, `embed.export`, e.g. `export:pdf`).
    * Changing it does not ask users again: it grants no access.
    */
   supports?: string[];
@@ -727,7 +730,7 @@ function readComponentSupports(value: unknown, label: string, errors: string[]):
   for (const entry of value) {
     const text = typeof entry === "string" ? entry.trim() : "";
     if (!isMindooDBAppSupportsEntry(text, MINDOODB_APP_COMPONENT_CONTRACT_PATTERN)) {
-      errors.push(`${label} entries must look like "validate" or "inspect:mindoo.inspect.document@1", received ${JSON.stringify(entry)}.`);
+      errors.push(`${label} entries must look like "validate", "export:pdf" or "inspect:mindoo.inspect.document@1", received ${JSON.stringify(entry)}.`);
       return undefined;
     }
     if (!result.includes(text)) {

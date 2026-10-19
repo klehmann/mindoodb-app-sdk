@@ -190,3 +190,21 @@ export type {
   MindooDBAppSlidesInspection,
   MindooDBAppSpreadsheetInspection,
 } from "./inspection";
+export {
+  MINDOODB_APP_EMBED_EXPORT_MAX_BYTES,
+  MINDOODB_APP_EMBED_VARIABLES_MAX,
+  mindooDBAppExportFile,
+  mindooDBAppExportMimeType,
+  mindooDBAppExportPayload,
+  normalizeMindooDBAppEmbedExportRequest,
+  normalizeMindooDBAppEmbedVariables,
+  resolveMindooDBAppVariables,
+} from "./embedExchange";
+export type {
+  MindooDBAppEmbeddingExport,
+  MindooDBAppEmbedExportFormat,
+  MindooDBAppEmbedExportPayload,
+  MindooDBAppEmbedExportRequest,
+  MindooDBAppEmbedTemplate,
+  MindooDBAppEmbedVariable,
+} from "./embedExchange";

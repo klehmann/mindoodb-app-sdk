@@ -71,6 +71,12 @@ import type {
   MindooDBAppIssue,
 } from "./inspection";
 import type { MindooDBAppAtomicValue } from "./values";
+import type {
+  MindooDBAppEmbeddingExport,
+  MindooDBAppEmbedExportRequest,
+  MindooDBAppEmbedTemplate,
+  MindooDBAppEmbedVariable,
+} from "./embedExchange";
 
 /** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
@@ -366,6 +372,13 @@ export interface MindooDBAppEmbedContext {
     /** Opening other documents. Always false: the sandbox only holds this one. */
     open: boolean;
   };
+  /**
+   * Set when the host wants the new document to start as a copy of a template
+   * (`embeds.open({ template })`): the template's root document id in the sandbox.
+   * It and its children are there to read only; copy them into `docId` while it is
+   * still empty. Absent otherwise.
+   */
+  template?: { docId: string };
 }
 
 /** Attachment metadata returned by the attachment APIs. */
@@ -1870,6 +1883,19 @@ export interface MindooDBAppEmbedOpenInput {
   rect?: MindooDBAppEmbedRect;
   /** Default true. */
   visible?: boolean;
+  /**
+   * Values the user can insert as fields, e.g. the linked contact's name and address
+   * (components with `supports: ["variables"]`). Change them later with
+   * `embed.setVariables`.
+   */
+  variables?: MindooDBAppEmbedVariable[];
+  /**
+   * Start the (new, empty) document as a copy of this one (components with
+   * `supports: ["template"]`). The template must match the component, and this app
+   * must be allowed to read its database. Haven hands it to the component to read;
+   * nothing is written back to it.
+   */
+  template?: MindooDBAppEmbedTemplate;
 }
 
 /** One component a host app wants to show, for `session.embeds.requestAccess`. */
@@ -2022,6 +2048,14 @@ export interface MindooDBAppEmbed {
    * cover; agent tools need not be switched on. Resolves with the tool's result.
    */
   callTool(name: string, input?: Record<string, unknown>): Promise<unknown>;
+  /** Replaces the values the user can insert as fields (`supports: ["variables"]`). */
+  setVariables(variables: MindooDBAppEmbedVariable[]): Promise<void>;
+  /**
+   * The document as a file in `format` (the component must support `export:<format>`),
+   * e.g. a PDF to keep with the record or a PNG preview. Edits the component has not
+   * saved yet are included as it shows them.
+   */
+  export(request: MindooDBAppEmbedExportRequest): Promise<File>;
 }
 
 /** What an `embed.onBeforeSave` handler gets. */
@@ -2151,6 +2185,21 @@ export interface MindooDBAppEmbeddingApi {
   onShowIssues(handler: (issues: MindooDBAppIssue[]) => void | Promise<void>): () => void;
   /** Scrolls to a place in the document (`embed.reveal`). Returns the unregister function. */
   onReveal(handler: (anchor: MindooDBAppInspectAnchor) => void | Promise<void>): () => void;
+  /**
+   * The values the host offers to insert as fields (`embeds.open({ variables })`);
+   * empty when it offers none, when not embedded, and on older Havens.
+   */
+  getVariables(): Promise<MindooDBAppEmbedVariable[]>;
+  /** Called with the new list whenever the host changes it (`embed.setVariables`). */
+  onVariablesChange(listener: (variables: MindooDBAppEmbedVariable[]) => void): () => void;
+  /**
+   * Hands the document over as a file when the host asks (`embed.export`), in one of
+   * the formats in `supports` (`export:<format>`). Throw for a format you do not
+   * offer. One provider at a time; returns the unregister function.
+   */
+  provideExport(
+    provider: (request: MindooDBAppEmbedExportRequest) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>,
+  ): () => void;
 }
 
 /** What `session.embedding.save` hands to `flush`. */
@@ -2185,8 +2234,11 @@ export interface MindooDBAppBridgeEmbeddingRequestMessage {
   protocol: "mindoodb-app-bridge";
   kind: "embedding-request";
   requestId: string;
-  request: "save" | "inspect" | "showIssues" | "reveal";
-  /** `inspect`: `{ request }`, `showIssues`: `{ issues }`, `reveal`: `{ anchor }`. */
+  request: "save" | "inspect" | "showIssues" | "reveal" | "variables" | "export";
+  /**
+   * `inspect`: `{ request }`, `showIssues`: `{ issues }`, `reveal`: `{ anchor }`,
+   * `variables`: `{ variables }`, `export`: `{ request }`.
+   */
   params?: Record<string, unknown>;
 }
 

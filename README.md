@@ -697,6 +697,35 @@ is a component, `embeddingValidation` plays the host, and `requestEmbeddingInspe
 `requestEmbeddingShowIssues`, `requestEmbeddingReveal`, `getEmbeddingValidations` and
 `getEmbeddingSaveCount` drive and observe it.
 
+**Fields, templates and export.** Three more `supports` entries:
+
+```json
+"supports": ["variables", "template", "export:pdf", "export:png"]
+```
+
+```ts
+// host
+const embed = await session.embeds.open({
+  componentKey, databaseId: "crmdata", docId: newDoc.id, container,
+  template: { docId: templateId },            // the new document starts as a copy
+  variables: [{ key: "company.name", label: "Firma", value: "Müller GmbH", group: "Firma" }],
+});
+await embed.setVariables(nextVariables);       // e.g. after the contact changed
+const pdf = await embed.export({ format: "pdf" });        // a File
+const preview = await embed.export({ format: "png", maxWidth: 480 });
+
+// component
+const variables = await session.embedding.getVariables(); // offer them under "Insert field ▸"
+session.embedding.onVariablesChange((next) => refreshFields(next));
+session.embedding.provideExport(async ({ format }) => (format === "pdf" ? await renderPdf() : await renderPng()));
+// launchContext.embed.template: { docId } of the template in the sandbox (read only); copy it while the root is empty
+```
+
+`resolveMindooDBAppVariables(text, variables)` fills `{{key}}` placeholders for editors
+without real fields. In tests, `embedExport` plays the components, `getEmbedRequests`
+records exports, and for an app that is a component `embeddingVariables`,
+`requestEmbeddingVariables` and `requestEmbeddingExport` drive it.
+
 Havens that predate this lay the component over the container instead, above the host's
 frame (`embed.placement === "overlay"`). The host then cannot draw on top of it: hide it
 with `embed.setVisible(false)` while a menu or dialog of the host should be visible.
