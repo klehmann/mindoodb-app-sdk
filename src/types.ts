@@ -1539,6 +1539,45 @@ export interface MindooDBAppAgentApi {
    * app's key). Fails for refs that expired or were imported for another app.
    */
   takeFile(fileRef: string): Promise<File>;
+  /**
+   * Hands Haven an image for the agent to look at (a rendered slide, page or
+   * chart) and returns a marker to put anywhere in a tool's result. Haven
+   * delivers it the way each agent can use it: as an image to a model that
+   * sees images, as a file in the user's exchange folder (with its absolute
+   * path) to agents on the same computer, or as a short placeholder. Use it
+   * instead of data URLs, which an agent only receives as cut-off text.
+   */
+  provideImage(
+    data: Blob | ArrayBuffer | Uint8Array,
+    options: MindooDBAppAgentImageOptions,
+  ): Promise<MindooDBAppAgentImage>;
+}
+
+export interface MindooDBAppAgentImageOptions {
+  /** File name, e.g. `slide-3.png`. */
+  name: string;
+  /** Defaults to the Blob's type, else `image/png`. */
+  mimeType?: string;
+  /** What the image shows, in a few words; agents that get no image read this. */
+  alt?: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * An image in a tool result (see {@link MindooDBAppAgentApi.provideImage}).
+ * The bytes stay in Haven under `fileRef`; Haven replaces the marker before
+ * the agent sees the result.
+ */
+export interface MindooDBAppAgentImage {
+  type: "image";
+  fileRef: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  alt?: string;
+  width?: number;
+  height?: number;
 }
 
 /** Host → app: an agent called one of the app's tools. */
