@@ -17,6 +17,12 @@ import {
   type MockEmbedState,
 } from "./mockEmbeds.js";
 import type {
+  MindooDBAppEmbedExportPayload,
+  MindooDBAppEmbedExportRequest,
+  MindooDBAppEmbedVariable,
+} from "../embedExchange.js";
+import { mindooDBAppExportFile } from "../embedExchange.js";
+import type {
   MindooDBAppEmbedValidation,
   MindooDBAppInspectAnchor,
   MindooDBAppInspectionBase,
@@ -4687,6 +4693,10 @@ export interface CreateMockMindooDBAppSessionOptions {
   embedInspection?: MockEmbedHostOptions["embedInspection"];
   /** Plays the components for `embed.callTool`. */
   embedTools?: MockEmbedHostOptions["embedTools"];
+  /** Plays the components for `embed.export`. */
+  embedExport?: MockEmbedHostOptions["embedExport"];
+  /** For an app under test that runs as a component: the host's variables at start. */
+  embeddingVariables?: MockEmbedHostOptions["embeddingVariables"];
   /** Plays the user when a save check found only warnings; default: save anyway. */
   confirmSaveWarnings?: MockEmbedHostOptions["confirmSaveWarnings"];
   /** For an app under test that runs as a component: its host's checks (`embedding.validate`). */
@@ -4818,6 +4828,10 @@ export interface MockMindooDBAppSessionController {
   getEmbeddingValidations(): Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }>;
   /** For an app under test that runs as a component: how often it reported a save (`embedding.save`). */
   getEmbeddingSaveCount(): number;
+  /** For an app under test that runs as a component: the host changes its variables. */
+  requestEmbeddingVariables(variables: MindooDBAppEmbedVariable[]): Promise<void>;
+  /** For an app under test that runs as a component: asks it for a file (`embed.export`). */
+  requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
 }
 
 export type { MockEmbeddingFinish, MockEmbedRequest, MockEmbedState } from "./mockEmbeds.js";
@@ -5026,6 +5040,8 @@ export function createMockMindooDBAppSession(
     requestEmbeddingReveal: (anchor) => state.embedHost.requestEmbeddingReveal(anchor),
     getEmbeddingValidations: () => state.embedHost.getEmbeddingValidations(),
     getEmbeddingSaveCount: () => state.embedHost.getEmbeddingSaveCount(),
+    requestEmbeddingVariables: (variables) => state.embedHost.requestEmbeddingVariables(variables),
+    requestEmbeddingExport: (request) => state.embedHost.requestEmbeddingExport(request),
   };
   replicaStates.set(controller, state);
   return controller;
@@ -5173,6 +5189,10 @@ export interface FakeBridgeHostController {
   getEmbeddingValidations(): Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }>;
   /** For an app under test that runs as a component: how often it reported a save (`embedding.save`). */
   getEmbeddingSaveCount(): number;
+  /** For an app under test that runs as a component: the host changes its variables. */
+  requestEmbeddingVariables(variables: MindooDBAppEmbedVariable[]): Promise<void>;
+  /** For an app under test that runs as a component: asks it for a file (`embed.export`). */
+  requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
   /**
    * Haven's agent-tool side: the tools and context the app declared, files in the
    * exchange, and `call()` to run a tool as an agent would.
@@ -5595,6 +5615,13 @@ export function createFakeBridgeHost(
           String(params.name),
           (params.input ?? {}) as Record<string, unknown>,
         );
+      case "embeds.setVariables":
+        state.embedHost.setEmbedVariables(String(params.embedId), params.variables);
+        return { ok: true };
+      case "embeds.export":
+        return await state.embedHost.exportEmbed(String(params.embedId), params.request);
+      case "embedding.getVariables":
+        return { variables: state.embedHost.getEmbeddingVariables() };
       case "embedding.validate":
         return await state.embedHost.validateEmbedding({ interactive: params.interactive !== false });
       case "embedding.saved":
@@ -6559,6 +6586,13 @@ export function createFakeBridgeHost(
     },
     getEmbeddingValidations: () => state.embedHost.getEmbeddingValidations(),
     getEmbeddingSaveCount: () => state.embedHost.getEmbeddingSaveCount(),
+    async requestEmbeddingVariables(variables) {
+      await state.embedHost.requestEmbeddingVariables(variables);
+      await pushEmbeddingRequest("variables", { variables: state.embedHost.getEmbeddingVariables() });
+    },
+    async requestEmbeddingExport(request) {
+      return mindooDBAppExportFile((await pushEmbeddingRequest("export", { request })) as MindooDBAppEmbedExportPayload);
+    },
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {

@@ -1,4 +1,14 @@
 import {
+  mindooDBAppExportFile,
+  mindooDBAppExportPayload,
+  normalizeMindooDBAppEmbedExportRequest,
+  normalizeMindooDBAppEmbedVariables,
+  type MindooDBAppEmbeddingExport,
+  type MindooDBAppEmbedExportPayload,
+  type MindooDBAppEmbedExportRequest,
+  type MindooDBAppEmbedVariable,
+} from "../embedExchange";
+import {
   normalizeMindooDBAppInspectAnchor,
   normalizeMindooDBAppInspection,
   normalizeMindooDBAppInspectRequest,
@@ -356,6 +366,25 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     await this.rpc.call("embeds.reveal", { embedId: this.embedId, anchor: normalized });
   }
 
+  async setVariables(variables: MindooDBAppEmbedVariable[]) {
+    await this.rpc.call("embeds.setVariables", {
+      embedId: this.embedId,
+      variables: normalizeMindooDBAppEmbedVariables(variables),
+    });
+  }
+
+  async export(request: MindooDBAppEmbedExportRequest) {
+    const payload = await this.rpc.call<MindooDBAppEmbedExportPayload>("embeds.export", {
+      embedId: this.embedId,
+      request: normalizeMindooDBAppEmbedExportRequest(request),
+    });
+    // Checked structurally: buffers sent across a MessagePort may come from another realm.
+    if (!payload || Object.prototype.toString.call(payload.data) !== "[object ArrayBuffer]") {
+      throw new Error("The component handed over no file.");
+    }
+    return mindooDBAppExportFile(payload);
+  }
+
   async callTool(name: string, input?: Record<string, unknown>) {
     return await this.rpc.call("embeds.callTool", {
       embedId: this.embedId,
@@ -463,6 +492,12 @@ export class MindooDBAppEmbedsClient {
     | null = null;
   private showIssuesHandler: ((issues: MindooDBAppIssue[]) => void | Promise<void>) | null = null;
   private revealHandler: ((anchor: MindooDBAppInspectAnchor) => void | Promise<void>) | null = null;
+  private exportProvider:
+    | ((request: MindooDBAppEmbedExportRequest) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>)
+    | null = null;
+  /** The host's variables as last pushed; null until known (then asked for on first use). */
+  private variables: MindooDBAppEmbedVariable[] | null = null;
+  private readonly variableListeners = new Set<(variables: MindooDBAppEmbedVariable[]) => void>();
 
   constructor(private readonly rpc: PortRpcClient) {
     this.stopListening = this.rpc.addMessageListener((message) => {
@@ -525,10 +560,17 @@ export class MindooDBAppEmbedsClient {
       open: async (input: MindooDBAppEmbedOpenInput) => {
         const { container, rect, ...rest } = input;
         const initialRect = container ? containerRect(container) : toRect(rect ?? { left: 0, top: 0, width: 0, height: 0 });
+        const { variables, template, ...plain } = rest;
         const response = await this.rpc.call<EmbedOpenResponse>("embeds.open", {
           // `frame`: Haven hands back a page for the container instead of laying
           // the component over this app. Havens that do not know it ignore it.
-          input: { ...rest, rect: initialRect, ...(container ? { placement: "frame" } : {}) },
+          input: {
+            ...plain,
+            rect: initialRect,
+            ...(container ? { placement: "frame" } : {}),
+            ...(variables ? { variables: normalizeMindooDBAppEmbedVariables(variables) } : {}),
+            ...(template ? { template: { docId: String(template.docId), ...(template.databaseId ? { databaseId: String(template.databaseId) } : {}) } } : {}),
+          },
         });
         const frame =
           container && response.frame?.url
@@ -636,6 +678,35 @@ export class MindooDBAppEmbedsClient {
           }
         };
       },
+      getVariables: async () => {
+        if (this.variables) {
+          return this.variables.map((variable) => ({ ...variable }));
+        }
+        try {
+          const result = await this.rpc.call("embedding.getVariables", {});
+          this.variables ??= normalizeMindooDBAppEmbedVariables((result as { variables?: unknown } | null)?.variables);
+        } catch (error) {
+          if (!isMethodNotFound(error) && !(error instanceof Error && error.name === "unsupported")) {
+            throw error;
+          }
+          this.variables ??= [];
+        }
+        return this.variables.map((variable) => ({ ...variable }));
+      },
+      onVariablesChange: (listener) => {
+        this.variableListeners.add(listener);
+        return () => {
+          this.variableListeners.delete(listener);
+        };
+      },
+      provideExport: (provider) => {
+        this.exportProvider = provider;
+        return () => {
+          if (this.exportProvider === provider) {
+            this.exportProvider = null;
+          }
+        };
+      },
       onReveal: (handler) => {
         this.revealHandler = handler;
         return () => {
@@ -700,6 +771,20 @@ export class MindooDBAppEmbedsClient {
         }
         await this.revealHandler(anchor);
         response = { ok: true };
+      } else if (message.request === "variables") {
+        this.variables = normalizeMindooDBAppEmbedVariables(params.variables);
+        const variables = this.variables;
+        this.variableListeners.forEach((listener) => {
+          try {
+            listener(variables.map((variable) => ({ ...variable })));
+          } catch (error) {
+            console.error("MindooDB embedding variables listener failed.", error);
+          }
+        });
+        response = { ok: true };
+      } else if (message.request === "export" && this.exportProvider) {
+        const request = normalizeMindooDBAppEmbedExportRequest(params.request);
+        response = { ok: true, result: await mindooDBAppExportPayload(await this.exportProvider(request), request) };
       } else {
         response = { ok: false, error: "unsupported" };
       }

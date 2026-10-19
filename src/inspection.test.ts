@@ -42,7 +42,7 @@ describe("component supports", () => {
   });
 
   it("rejects malformed entries", () => {
-    for (const bad of [["Validate"], ["inspect:document"], ["inspect:a.b@1:x"], "validate", [1]]) {
+    for (const bad of [["Validate"], ["inspect:Bad"], ["inspect:a.b@1:x"], "validate", [1]]) {
       expect(validateMindooDBAppComponents(component(bad)).errors).toHaveLength(1);
     }
   });

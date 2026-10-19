@@ -1,5 +1,15 @@
 import { mindooDBAppComponentFieldsMatch } from "../appDefinition.js";
 import {
+  mindooDBAppExportFile,
+  mindooDBAppExportPayload,
+  normalizeMindooDBAppEmbedExportRequest,
+  normalizeMindooDBAppEmbedVariables,
+  type MindooDBAppEmbeddingExport,
+  type MindooDBAppEmbedExportPayload,
+  type MindooDBAppEmbedExportRequest,
+  type MindooDBAppEmbedVariable,
+} from "../embedExchange.js";
+import {
   MindooDBAppEmbedValidationError,
   mindooDBAppComponentSupports,
   normalizeMindooDBAppInspectAnchor,
@@ -58,6 +68,10 @@ export interface MockEmbedState {
   beforeSave: { inspect: MindooDBAppInspectRequest } | null;
   /** What the app asked of the component, oldest first. */
   requests: MockEmbedRequest[];
+  /** The values offered as fields (`embeds.open({ variables })`, `embed.setVariables`). */
+  variables: MindooDBAppEmbedVariable[];
+  /** The template the document starts from (`embeds.open({ template })`). */
+  template?: { databaseId: string; docId: string };
 }
 
 /** One request of the host app to its component, as the mock recorded it. */
@@ -65,7 +79,8 @@ export type MockEmbedRequest =
   | { request: "inspect"; inspect: MindooDBAppInspectRequest }
   | { request: "showIssues"; issues: MindooDBAppIssue[] }
   | { request: "reveal"; anchor: MindooDBAppInspectAnchor }
-  | { request: "callTool"; name: string; input: Record<string, unknown> };
+  | { request: "callTool"; name: string; input: Record<string, unknown> }
+  | { request: "export"; export: MindooDBAppEmbedExportRequest };
 
 type MockBeforeSaveHandler = (
   input: MindooDBAppEmbedBeforeSaveInput,
@@ -107,6 +122,16 @@ export interface MockEmbedHostOptions {
     embed: MockEmbedState,
     request: MindooDBAppInspectRequest,
   ) => MindooDBAppInspectionBase | Promise<MindooDBAppInspectionBase>;
+  /**
+   * Plays the components for `embed.export` (they must declare `export:<format>`);
+   * without it exports fail with `unsupported`.
+   */
+  embedExport?: (
+    embed: MockEmbedState,
+    request: MindooDBAppEmbedExportRequest,
+  ) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>;
+  /** For an app under test that runs as a component: the host's variables at start. */
+  embeddingVariables?: MindooDBAppEmbedVariable[];
   /** Plays the components for `embed.callTool`; without it calls fail with `unsupported`. */
   embedTools?: (embed: MockEmbedState, name: string, input: Record<string, unknown>) => unknown;
   /**
@@ -208,6 +233,22 @@ export interface MockEmbedHost {
   validateEmbedding(options?: { interactive?: boolean }): Promise<MindooDBAppEmbedValidation>;
   /** The app reported it saved (`embedding.saved`). */
   recordEmbeddingSaved(): void;
+  /** `embed.setVariables` from the app. */
+  setEmbedVariables(embedId: string, variables: unknown): void;
+  /** `embed.export` from the app: asks `embedExport`. */
+  exportEmbed(embedId: string, request: unknown): Promise<MindooDBAppEmbedExportPayload>;
+  /**
+   * For an app under test that runs as a component: the host changes its variables
+   * (`embed.setVariables`); the app's `onVariablesChange` listeners run.
+   */
+  requestEmbeddingVariables(variables: MindooDBAppEmbedVariable[]): Promise<void>;
+  /** For an app under test that runs as a component: its variables as `getVariables` answers. */
+  getEmbeddingVariables(): MindooDBAppEmbedVariable[];
+  /**
+   * For an app under test that runs as a component: asks it for a file, as its host
+   * would (`embed.export`); rejects with `unsupported` without a provider.
+   */
+  requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
 }
 
 /**
@@ -238,6 +279,11 @@ export function createMockEmbedHost(
     | null = null;
   let showIssuesHandler: ((issues: MindooDBAppIssue[]) => void | Promise<void>) | null = null;
   let revealHandler: ((anchor: MindooDBAppInspectAnchor) => void | Promise<void>) | null = null;
+  let exportProvider:
+    | ((request: MindooDBAppEmbedExportRequest) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>)
+    | null = null;
+  let embeddingVariables = normalizeMindooDBAppEmbedVariables(options.embeddingVariables ?? []);
+  const variableListeners = new Set<(variables: MindooDBAppEmbedVariable[]) => void>();
   const embeddingValidations: Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }> = [];
   let embeddingSaveCount = 0;
   const beforeSaveHandlers = new Map<string, MockBeforeSaveHandler>();
@@ -301,6 +347,18 @@ export function createMockEmbedHost(
     if (!mindooDBAppComponentFieldsMatch(component.match, document.data)) {
       throw new Error(`Document ${input.docId} is not a "${component.label}" document.`);
     }
+    let template: { databaseId: string; docId: string } | undefined;
+    if (input.template) {
+      const databaseId = input.template.databaseId ?? input.databaseId;
+      const source = await getDatabase(databaseId).documents.get(input.template.docId);
+      if (!source || !mindooDBAppComponentFieldsMatch(component.match, source.data)) {
+        throw new Error(`Template ${input.template.docId} is not a "${component.label}" document.`);
+      }
+      if (!(component.supports ?? []).includes("template")) {
+        throw Object.assign(new Error(`Component "${component.label}" cannot start from a template.`), { name: "unsupported" });
+      }
+      template = { databaseId, docId: input.template.docId };
+    }
     embedCounter += 1;
     const embedId = `mock-embed-${embedCounter}`;
     embeds.set(embedId, {
@@ -316,6 +374,8 @@ export function createMockEmbedHost(
       supports: [...(component.supports ?? [])],
       beforeSave: null,
       requests: [],
+      variables: normalizeMindooDBAppEmbedVariables(input.variables ?? []),
+      ...(template ? { template } : {}),
     });
     // Like Haven: the newest embed of an app is its active one until the host says otherwise.
     setActive(embedId);
@@ -428,6 +488,14 @@ export function createMockEmbedHost(
 
     async callTool(name: string, input?: Record<string, unknown>) {
       return await callEmbedTool(this.embedId, name, input ?? {});
+    }
+
+    async setVariables(variables: MindooDBAppEmbedVariable[]) {
+      setEmbedVariables(this.embedId, variables);
+    }
+
+    async export(request: MindooDBAppEmbedExportRequest) {
+      return mindooDBAppExportFile(await exportEmbed(this.embedId, request));
     }
 
     onDirtyChange(listener: (dirty: boolean) => void) {
@@ -684,6 +752,21 @@ export function createMockEmbedHost(
     return result;
   }
 
+  function setEmbedVariables(embedId: string, variables: unknown) {
+    entryOf(embedId).variables = normalizeMindooDBAppEmbedVariables(variables);
+    notifyChange();
+  }
+
+  async function exportEmbed(embedId: string, request: unknown) {
+    const entry = entryOf(embedId);
+    const normalized = normalizeMindooDBAppEmbedExportRequest(request);
+    entry.requests.push({ request: "export", export: normalized });
+    if (!options.embedExport || !mindooDBAppComponentSupports(entry.supports, `export:${normalized.format}`)) {
+      throw unsupported(`The component cannot export ${normalized.format}.`);
+    }
+    return await mindooDBAppExportPayload(await options.embedExport(structuredClone(entry), normalized), normalized);
+  }
+
   function unsupportedHandler(): never {
     throw unsupported("unsupported");
   }
@@ -758,6 +841,21 @@ export function createMockEmbedHost(
         };
       },
       validate: validateEmbedding,
+      async getVariables() {
+        return embeddingVariables.map((variable) => ({ ...variable }));
+      },
+      onVariablesChange(listener) {
+        variableListeners.add(listener);
+        return () => {
+          variableListeners.delete(listener);
+        };
+      },
+      provideExport(provider) {
+        exportProvider = provider;
+        return () => {
+          if (exportProvider === provider) exportProvider = null;
+        };
+      },
       async save(flush, saveOptions) {
         return await performMindooDBAppEmbeddingSave({
           validate: () => validateEmbedding(saveOptions),
@@ -869,6 +967,20 @@ export function createMockEmbedHost(
     validateEmbedding,
     recordEmbeddingSaved() {
       embeddingSaveCount += 1;
+    },
+    setEmbedVariables,
+    exportEmbed,
+    async requestEmbeddingVariables(variables) {
+      embeddingVariables = normalizeMindooDBAppEmbedVariables(variables);
+      variableListeners.forEach((listener) => listener(embeddingVariables.map((variable) => ({ ...variable }))));
+    },
+    getEmbeddingVariables() {
+      return embeddingVariables.map((variable) => ({ ...variable }));
+    },
+    async requestEmbeddingExport(request) {
+      if (!exportProvider) unsupportedHandler();
+      const normalized = normalizeMindooDBAppEmbedExportRequest(request);
+      return mindooDBAppExportFile(await mindooDBAppExportPayload(await exportProvider(normalized), normalized));
     },
   };
 }

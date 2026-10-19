@@ -522,12 +522,19 @@ export const mindooDBAppInspectRules = {
 };
 
 /** For manifest validation: `validate`, `inspect:mindoo.inspect.document@1`, … */
+/** The part after `:` that is not a contract, e.g. `pdf` in `export:pdf`. */
+const SUPPORTS_ARGUMENT = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * For manifest validation: `validate`, `inspect:mindoo.inspect.document@1`,
+ * `export:pdf`, … (a capability, optionally a contract or a plain argument).
+ */
 export function isMindooDBAppSupportsEntry(entry: string, contractPattern: RegExp): boolean {
-  const [capability, contract, ...rest] = entry.split(":");
+  const [capability, argument, ...rest] = entry.split(":");
   if (rest.length || !capability || !SUPPORTS_CAPABILITY.test(capability)) {
     return false;
   }
-  return contract === undefined || contractPattern.test(contract);
+  return argument === undefined || contractPattern.test(argument) || SUPPORTS_ARGUMENT.test(argument);
 }
 
 /**
