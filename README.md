@@ -266,7 +266,7 @@ Haven uses the app's registration label as the headline and ignores any title fr
 
 An app can offer its own operations to AI agents. Haven registers them with the browser's agent interface ([WebMCP](https://webmachinelearning.github.io/webmcp/)) next to Haven's own tools, so an agent in the browser — or a local agent connected through a WebMCP bridge — can call "create a mind map", "list open tasks" or "attach this file" instead of clicking through the UI.
 
-The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's tool prefix (`vega_maps_list` for `"agentToolPrefix": "vega"` in `haven-app.json`; without it Haven derives one from the app id or label), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
+The app declares tools; `execute` runs inside the app. Haven validates the declarations, prefixes the names with the app's tool prefix (`todo_list` for `"agentToolPrefix": "todo"` in `haven-app.json`; without it Haven derives one from the app id or label), checks permission, asks the user before consequential calls, and forwards each call over the bridge. The tools disappear when the app closes.
 
 Agents only see an app's tools while the user has **Agent tools** switched on in Haven (Settings → General) **and** has allowed this app (**Offer tools to AI agents** in the app's settings). Neither can be set by `haven-app.json`. `registerTools()` works either way; `enabled` in its answer says whether agents can call the tools right now.
 
@@ -440,7 +440,7 @@ expect(warnings).toEqual([]); // every tool belongs to a capability
 
 #### A recommended tool set for a data app
 
-What the SDK example app, TodoManager and Vega offer, from small to large:
+What the open-source SDK example app and TodoManager offer, from small to large:
 
 - `get_context`: the open database, read-only or not, the signed-in user, today's date, what is selected. Agents call it first.
 - `list` / `search`: exact criteria through `documents.query` filters on the summary buffer, topics through a full-text `text` clause, bounded output with `truncated`. Check `db.getFulltextSetup()` first: Haven rejects `text` with `fulltext-not-enabled` when the database has no index, while the mock answers anyway.
@@ -448,7 +448,7 @@ What the SDK example app, TodoManager and Vega offer, from small to large:
 - `undo` (and `history`/`redo` in larger apps): every write call is one undo step marked as made by an agent; undo refuses with `STATE_CHANGED` when the document changed since, so agents never overwrite user work.
 - `users_search` when the app stores people: look names up in the tenant directory (`directory` permission) and store the directory id.
 
-Small reference: `src/features/agent/` and `src/app/useAgentSection.ts` in [mindoodb-app-example](https://github.com/klehmann/mindoodb-app-example) (eight tools, undo, profile test). Larger ones: `src/features/agent/` in [mindoodb-app-todomanager](https://github.com/klehmann/mindoodb-app-todomanager) and [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega).
+Small reference: `src/features/agent/` and `src/app/useAgentSection.ts` in [mindoodb-app-example](https://github.com/klehmann/mindoodb-app-example) (eight tools, undo, profile test). Full-size: `src/features/agent/` in [mindoodb-app-todomanager](https://github.com/klehmann/mindoodb-app-todomanager) (search, undo/redo/history, directory lookup, agent profile). Both are open source; copy from them.
 
 #### Testing agent tools
 
@@ -762,7 +762,7 @@ app under test that is a component, `getEmbeddingDirty` and `requestEmbeddingSav
 
 **Host checklist.** What a host needs beyond the calls above (the "Embedded editors" tab of
 [mindoodb-app-example](https://github.com/klehmann/mindoodb-app-example) is a small
-complete host, `src/app/useEmbedsSection.ts`; Mindoo CRM a large one):
+complete host, `src/app/useEmbedsSection.ts`):
 
 - `embeds.open` rejects with an `Error` whose `name` says why: `declined` (the user said
   no), `component-not-found` (the app is not installed or no longer offers it),
@@ -1109,7 +1109,7 @@ An id in `dependencyIds` may name a revision the timeline does not list, because
 
 ### Granular JSON edits
 
-When you need to edit nested objects or lists inside a document — not just top-level fields — describe the change as a **granular JSON patch** rather than rewriting the whole document. This is the model behind structured collaborative editing in apps like [`mindoodb-app-teamgrid`](https://github.com/klehmann/mindoodb-app-teamgrid), where two users can insert different rows into the same worksheet on different devices and the merge keeps both sides cleanly.
+When you need to edit nested objects or lists inside a document — not just top-level fields — describe the change as a **granular JSON patch** rather than rewriting the whole document. This is the model behind structured collaborative editing in apps like TeamGrid, where two users can insert different rows into the same worksheet on different devices and the merge keeps both sides cleanly.
 
 A JSON patch is a bag of four operation kinds applied at specific JSON paths inside `document.data`, all carried with the document version (`baseHeads`) the app was looking at when it composed them:
 
@@ -1410,11 +1410,11 @@ Buffer API at a glance:
 
 #### End-to-end sample
 
-The [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) sample wires `MindooDBTextBuffer` to a Milkdown markdown editor with Save / Refresh / preview pane, and is the recommended starting point for building your own collaborative text app.
+TeamEdit wires `MindooDBTextBuffer` to a Milkdown markdown editor with Save / Refresh / preview pane; its code is not public, so build on the snippets above.
 
 ### Collaborative rich-text editing
 
-For structured documents that need formatting — headings, bold/italic runs, lists, tables, fonts, colors — use the **rich-text patch API**. This is the surface behind the Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit), where two users can edit the same document at the same time and Haven merges both formatting and structure on its side via Automerge's rich-text CRDT.
+For structured documents that need formatting — headings, bold/italic runs, lists, tables, fonts, colors — use the **rich-text patch API**. This is the surface behind TeamEdit's Word/.docx mode, where two users can edit the same document at the same time and Haven merges both formatting and structure on its side via Automerge's rich-text CRDT.
 
 Rich-text fields are stored internally as Automerge rich-text, but apps never see Automerge directly. The bridge speaks JSON and represents a rich-text field as an ordered list of **spans** — text runs with marks for inline formatting, plus block markers for paragraphs, headings, lists, and tables:
 
@@ -1524,7 +1524,7 @@ Like the text buffer, the rich-text handle always sends the original `baseHeads`
 
 #### End-to-end sample
 
-The Word/.docx mode in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit) is the **only supported in-repo use case** for the Automerge binary sync API below — it needs a local replica and binary flush because `set`/`unset` and the JSON patch APIs are not sufficient for that editor. For span-only rich-text apps, use `createMindooDBRichTextHandle` instead.
+TeamEdit's Word/.docx mode is the **only supported in-repo use case** for the Automerge binary sync API below — it needs a local replica and binary flush because `set`/`unset` and the JSON patch APIs are not sufficient for that editor. For span-only rich-text apps, use `createMindooDBRichTextHandle` instead.
 
 ### Automerge binary sync (advanced)
 
@@ -1633,7 +1633,7 @@ Requires the `update` capability (same as other write operations). For historica
 
 #### Reference implementation (not a template)
 
-TeamEdit's Word/.docx mode is why these RPCs exist — see `wordAutomergeHandle.ts` in [`mindoodb-app-teamedit`](https://github.com/klehmann/mindoodb-app-teamedit). Treat it as a reference for an unsupported edge case, not as a pattern to copy into new apps.
+TeamEdit's Word/.docx mode is why these RPCs exist. Treat them as an unsupported edge case, not as a pattern for new apps.
 
 ### Queries & Live Queries
 
