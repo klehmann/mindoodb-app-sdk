@@ -170,6 +170,7 @@ export {
   normalizeMindooDBAppInspectRequest,
   normalizeMindooDBAppIssues,
   readMindooDBAppInspectionSummary,
+  resolveMindooDBAppEmbedValidation,
   summarizeMindooDBAppInspection,
 } from "./inspection";
 export type {
