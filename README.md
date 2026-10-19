@@ -141,6 +141,7 @@ interface MindooDBAppLaunchContext {
   runtime: "iframe" | "window";
   theme: { mode: "light" | "dark"; preset: string };
   viewport: { width: number; height: number } | null;
+  locale: string; // Haven's UI language as a BCP-47 tag, e.g. "de"
   tenantId?: string;
   preferredDatabaseId?: string;
   user: { id: string; username: string };
@@ -920,6 +921,17 @@ const stopViewport = session.onViewportChange((viewport) => {
 ```
 
 Both subscription functions return an unsubscribe callback. Call it during teardown.
+
+### Language
+
+`ctx.locale` is Haven's UI language as a BCP-47 tag; `session.onLocaleChange` reports when the user switches it. Map the tag to the app's languages (`de-AT` → `de`, `nb-NO` and the legacy `no` → `nb`, anything unknown → `en`), set `document.documentElement.lang`, and format dates and numbers with `Intl` in that locale:
+
+```ts
+applyLocale(ctx.locale);
+const stopLocale = session.onLocaleChange(applyLocale);
+```
+
+Haven's UI comes in en, de, es, fr, it, nb, nl and pl. **Ship every user-facing string in all of them** — labels, buttons, placeholders, empty states, errors, `aria-label`s, `notify` and `menus` texts, and the `listing` texts in `haven-app.json` — never only English, or English and German. An app built on a library with more languages ships all of those. Make a gap impossible to merge: type the string tables (`satisfies Record<Locale, Messages>` with `Messages` derived from the English table) or test that every locale file has the English keys and placeholders. An English fallback is for locales Haven does not offer, not for strings nobody translated. Use the terms Haven's own UI uses in each language and its form of address: German *du*, Spanish *tú*, French *vous*, Italian *tu*, Norwegian *du*, Dutch *je*, Polish informal.
 
 ### Documents
 
@@ -2360,6 +2372,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
 | `onViewportChange(listener)`          | `() => void` (unsubscribe)           |
+| `onLocaleChange(listener)`            | `() => void` (unsubscribe)           |
 | `onBeforeClose(listener)`             | `() => void` (unsubscribe)           |
 | `disconnect()`                        | `Promise<void>`                      |
 
