@@ -330,6 +330,7 @@ if (session.agent) {
 - **`scope`**: `"app"` (default) for the app's own operations ("list documents", "create a map"), `"document"` for operations on the document it shows ("write this paragraph", "set these cells"). See *Agent tools of embedded components* below.
 - **`setContext(context)`** shows the app's state to agents in `haven_get_context` under the focused app.
 - **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
+- **Images** for the agent to look at (a rendered slide, page or chart) go through `agent.provideImage(png, { name, alt, width, height })`. It returns a small marker (`{ type: "image", fileRef, … }`) to put anywhere in the tool's result. Haven replaces it with what the agent can use: an image for a model that sees images (Haven's assistant), a file in the exchange folder with its absolute path for agents on the same computer, otherwise a placeholder with `alt`. Do not return data URLs: agents get results as text, cut to a few thousand characters.
 - A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
 
 #### An op guide for edit tools
@@ -2349,6 +2350,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `agent?.setContext(context)`          | `Promise<void>`                      |
 | `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |
 | `agent?.takeFile(fileRef)`            | `Promise<File>`                      |
+| `agent?.provideImage(data, options)`  | `Promise<MindooDBAppAgentImage>`     |
 | `drag.setProfile(profile)`            | `Promise<void>`                      |
 | `drag.start(input)`                   | `Promise<MindooDBAppDragStartResult>` |
 | `drag.cancel()`                       | `Promise<void>`                      |

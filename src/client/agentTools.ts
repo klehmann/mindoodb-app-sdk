@@ -13,6 +13,8 @@
  */
 import type {
   MindooDBAppAgentApi,
+  MindooDBAppAgentImage,
+  MindooDBAppAgentImageOptions,
   MindooDBAppAgentRegistration,
   MindooDBAppAgentTool,
   MindooDBAppAgentToolErrorCode,
@@ -20,6 +22,19 @@ import type {
   MindooDBAppBridgePortMessage,
 } from "../types";
 import { normalizeAgentToolInput } from "./agentInput";
+
+/** True for the marker {@link MindooDBAppAgentApi.provideImage} returns. */
+export function isMindooDBAppAgentImage(value: unknown): value is MindooDBAppAgentImage {
+  const v = value as Partial<MindooDBAppAgentImage> | null;
+  return (
+    !!v &&
+    typeof v === "object" &&
+    v.type === "image" &&
+    typeof v.fileRef === "string" &&
+    typeof v.mimeType === "string" &&
+    v.mimeType.startsWith("image/")
+  );
+}
 
 /** Tool names an agent client accepts everywhere, before Haven adds the app prefix. */
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
@@ -99,6 +114,27 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
       mimeType: options.mimeType ?? (data instanceof Blob ? data.type : undefined),
       data: buffer,
     });
+  }
+
+  async provideImage(
+    data: Blob | ArrayBuffer | Uint8Array,
+    options: MindooDBAppAgentImageOptions,
+  ): Promise<MindooDBAppAgentImage> {
+    const mimeType = options.mimeType ?? (data instanceof Blob && data.type ? data.type : "image/png");
+    if (!mimeType.startsWith("image/")) {
+      throw new Error(`provideImage needs an image, not "${mimeType}".`);
+    }
+    const { fileRef, size } = await this.provideFile(data, { name: options.name, mimeType });
+    return {
+      type: "image",
+      fileRef,
+      name: options.name,
+      mimeType,
+      size,
+      ...(options.alt ? { alt: options.alt } : {}),
+      ...(options.width ? { width: options.width } : {}),
+      ...(options.height ? { height: options.height } : {}),
+    };
   }
 
   async takeFile(fileRef: string): Promise<File> {

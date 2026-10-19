@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { MindooDBAppBridgePortMessage } from "../types";
-import { MindooDBAppAgentApiImpl, MindooDBAppAgentToolError, type AgentToolsRpc } from "./agentTools";
+import {
+  isMindooDBAppAgentImage,
+  MindooDBAppAgentApiImpl,
+  MindooDBAppAgentToolError,
+  type AgentToolsRpc,
+} from "./agentTools";
 
 function createRpc() {
   const listeners = new Set<(message: MindooDBAppBridgePortMessage) => void>();
@@ -156,5 +161,34 @@ describe("MindooDBAppAgentApiImpl", () => {
     const file = await api.takeFile("file_2");
     expect(file.name).toBe("notes.md");
     expect(await file.text()).toBe("# Hi");
+  });
+
+  it("hands over an image as a file and returns the marker for a tool result", async () => {
+    const { rpc } = createRpc();
+    const call = rpc.call as unknown as ReturnType<typeof vi.fn>;
+    call.mockImplementation(async () => ({ fileRef: "file_9", size: 4 }));
+    const api = new MindooDBAppAgentApiImpl(rpc);
+    const image = await api.provideImage(new Uint8Array([137, 80, 78, 71]), {
+      name: "slide-1.png",
+      alt: "Title slide",
+      width: 1200,
+      height: 675,
+    });
+    expect(image).toEqual({
+      type: "image",
+      fileRef: "file_9",
+      name: "slide-1.png",
+      mimeType: "image/png",
+      size: 4,
+      alt: "Title slide",
+      width: 1200,
+      height: 675,
+    });
+    expect(isMindooDBAppAgentImage(image)).toBe(true);
+    expect(isMindooDBAppAgentImage({ type: "image", data: "…", mimeType: "image/png" })).toBe(false);
+    expect(call.mock.calls[0]).toEqual(["agent.provideFile", expect.objectContaining({ mimeType: "image/png" })]);
+    await expect(api.provideImage(new Blob(["x"], { type: "text/plain" }), { name: "a.txt" })).rejects.toThrow(
+      /needs an image/,
+    );
   });
 });
