@@ -9,6 +9,7 @@ import {
   resolveMindooDBAppListingAssetUrl,
   resolveMindooDBAppLocalizedText,
   validateMindooDBAppAccepts,
+  validateMindooDBAppAgentProfile,
   validateMindooDBAppComponents,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
@@ -385,5 +386,77 @@ describe("app definition components", () => {
     expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "teamgrid", x: 1 })).toBe(true);
     expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, { form: "other" })).toBe(false);
     expect(mindooDBAppComponentFieldsMatch({ form: "teamgrid" }, null)).toBe(false);
+  });
+});
+
+describe("agent profile", () => {
+  const agent = {
+    summary: { en: " Mind maps whose nodes are tasks. ", de: "Mindmaps, deren Knoten Aufgaben sind." },
+    capabilities: [
+      { id: "maps", title: { en: "Find maps", de: "Maps finden" }, tools: ["maps_list", "map_get", "maps_list"] },
+    ],
+    examples: { en: ["Plan the launch as a mind map"], de: ["Plane den Launch als Mindmap"] },
+    limits: { en: ["No free drawing"] },
+    guide: { en: "agent/agent.en.md" },
+  };
+
+  it("keeps a valid block, trimmed and de-duplicated", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(baseDefinition({ agent }));
+    expect(errors).toEqual([]);
+    expect(definition?.agent).toEqual({
+      ...agent,
+      summary: { en: "Mind maps whose nodes are tasks.", de: "Mindmaps, deren Knoten Aufgaben sind." },
+      capabilities: [{ id: "maps", title: { en: "Find maps", de: "Maps finden" }, tools: ["maps_list", "map_get"] }],
+    });
+    expect(validateMindooDBAppDefinition(baseDefinition()).definition?.agent).toBeUndefined();
+  });
+
+  it.each([
+    [{ ...agent, summary: "Mind maps" }, 'App definition agent.summary must be an object of per-locale strings with an "en" entry.'],
+    [{ ...agent, summary: { de: "Mindmaps" } }, 'App definition agent.summary must include an "en" entry as the fallback for other locales.'],
+    [{ ...agent, summary: { en: "x".repeat(401) } }, "App definition agent.summary.en must not be longer than 400 characters."],
+    [{ ...agent, capabilities: [] }, "App definition agent.capabilities must be an array of 1-8 capabilities."],
+    [
+      { ...agent, capabilities: Array.from({ length: 9 }, (_, index) => ({ id: `c${index}`, title: { en: "T" }, tools: ["a_b"] })) },
+      "App definition agent.capabilities must be an array of 1-8 capabilities.",
+    ],
+    [
+      { ...agent, capabilities: [{ id: "Maps", title: { en: "T" }, tools: ["map_get"] }] },
+      'App definition agent.capabilities[0].id must be 1-48 lowercase letters, digits, "-" or "_", received "Maps".',
+    ],
+    [
+      { ...agent, capabilities: [{ id: "maps", title: { en: "T" }, tools: ["haven_apps_list"] }] },
+      'App definition agent.capabilities[0].tools contains "haven_apps_list"; name the app\'s own tools as registered, without prefix and never "haven_*".',
+    ],
+    [
+      { ...agent, capabilities: [{ id: "maps", title: { en: "T" }, tools: ["Map-Get"] }] },
+      'App definition agent.capabilities[0].tools contains "Map-Get"; name the app\'s own tools as registered, without prefix and never "haven_*".',
+    ],
+    [
+      { ...agent, capabilities: [{ id: "maps", title: { en: "T" }, tools: [] }] },
+      "App definition agent.capabilities[0].tools must be an array of 1-64 tool names.",
+    ],
+    [
+      { ...agent, capabilities: [agent.capabilities[0], agent.capabilities[0]] },
+      'App definition agent.capabilities[1].id "maps" is used twice.',
+    ],
+    [{ ...agent, examples: { en: [] } }, "App definition agent.examples.en must be an array of 1-8 strings."],
+    [{ ...agent, limits: { de: ["Nein"] } }, 'App definition agent.limits must include an "en" entry as the fallback for other locales.'],
+    [{ ...agent, guide: { en: "../agent.md" } }, 'App definition agent.guide.en must be a relative path to a .md file next to the manifest, e.g. "agent/agent.en.md".'],
+    [{ ...agent, guide: { en: "https://example.com/agent.md" } }, 'App definition agent.guide.en must be a relative path to a .md file next to the manifest, e.g. "agent/agent.en.md".'],
+    [{ ...agent, guide: { en: "agent/agent.en.txt" } }, 'App definition agent.guide.en must be a relative path to a .md file next to the manifest, e.g. "agent/agent.en.md".'],
+    ["agent", "App definition agent must be an object."],
+  ])("rejects an invalid block (%#)", (value, error) => {
+    const { definition, errors } = validateMindooDBAppDefinition(baseDefinition({ agent: value }));
+    expect(definition).toBeNull();
+    expect(errors).toEqual([error]);
+  });
+
+  it("validates a block on its own", () => {
+    expect(validateMindooDBAppAgentProfile(agent).errors).toEqual([]);
+    expect(validateMindooDBAppAgentProfile({ summary: { en: "x" } })).toEqual({
+      agent: undefined,
+      errors: ["App definition agent.capabilities must be an array of 1-8 capabilities."],
+    });
   });
 });

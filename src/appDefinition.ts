@@ -153,6 +153,52 @@ export interface MindooDBAppDefinition {
    * Display-only; nothing in here affects what the app is granted.
    */
   listing?: MindooDBAppDefinitionListing;
+  /**
+   * What AI agents learn about the app before they open it: what it is for, what its
+   * agent tools can do, example requests and a longer how-to. Haven shows it through
+   * `haven_apps_describe`. See {@link MindooDBAppAgentProfile}.
+   */
+  agent?: MindooDBAppAgentProfile;
+}
+
+/**
+ * Per-locale text: `en` is required and the fallback for every locale it does not
+ * name. Unlike {@link MindooDBAppLocalizedText} a plain string is not accepted.
+ */
+export type MindooDBAppLocaleMap<T> = { en: T } & Record<string, T>;
+
+/** One thing an agent can do with the app, and the tools it takes. */
+export interface MindooDBAppAgentCapability {
+  /** Stable id, unique within the profile. Lowercase letters, digits, `-` and `_`. */
+  id: string;
+  /** Short title, e.g. "Find, open and create maps". At most 80 characters. */
+  title: MindooDBAppLocaleMap<string>;
+  /**
+   * The tools behind it, named as in `registerTools` (without the app's prefix):
+   * `nodes_add`, not `vega_nodes_add`. Haven's own `haven_*` tools do not belong here.
+   */
+  tools: string[];
+}
+
+/**
+ * The app as an agent should know it before opening it (`agent` in haven-app.json).
+ * Everything here is text the publisher writes for agents; it grants nothing.
+ */
+export interface MindooDBAppAgentProfile {
+  /** Neutral description in 1-3 sentences, at most 400 characters per locale. */
+  summary: MindooDBAppLocaleMap<string>;
+  /** 1-8 capabilities that together cover the app's agent tools. */
+  capabilities: MindooDBAppAgentCapability[];
+  /** Example requests a user might give an agent, per locale. */
+  examples?: MindooDBAppLocaleMap<string[]>;
+  /** What the app deliberately does not do, so an agent does not try. */
+  limits?: MindooDBAppLocaleMap<string[]>;
+  /**
+   * Markdown how-to per locale (`agent/agent.en.md`): typical steps, where ids come
+   * from, pitfalls. A path relative to haven-app.json, at most
+   * {@link MINDOODB_APP_AGENT_GUIDE_MAX_BYTES} bytes.
+   */
+  guide?: MindooDBAppLocaleMap<string>;
 }
 
 /** One kind of content an app takes, as a choice in Haven's picker. */
@@ -299,6 +345,20 @@ export interface MindooDBAppDefinitionListing {
 export const MINDOODB_APP_LISTING_SUMMARY_MAX = 300;
 export const MINDOODB_APP_LISTING_DESCRIPTION_MAX = 4000;
 export const MINDOODB_APP_LISTING_MAX_SCREENSHOTS = 8;
+
+export const MINDOODB_APP_AGENT_SUMMARY_MAX = 400;
+export const MINDOODB_APP_AGENT_CAPABILITIES_MAX = 8;
+export const MINDOODB_APP_AGENT_CAPABILITY_TITLE_MAX = 80;
+/** Most tools one capability lists; an app registers at most 64 tools. */
+export const MINDOODB_APP_AGENT_CAPABILITY_TOOLS_MAX = 64;
+/** Most examples or limits per locale. */
+export const MINDOODB_APP_AGENT_LIST_MAX = 8;
+export const MINDOODB_APP_AGENT_EXAMPLE_MAX = 200;
+export const MINDOODB_APP_AGENT_LIMIT_MAX = 300;
+/** Largest agent guide a host loads; longer guides are cut. */
+export const MINDOODB_APP_AGENT_GUIDE_MAX_BYTES = 8 * 1024;
+/** An agent tool name as `registerTools` accepts it, without the app's prefix. */
+export const MINDOODB_APP_AGENT_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
 
 export interface MindooDBAppDefinitionValidation {
   definition: MindooDBAppDefinition | null;
@@ -1003,6 +1063,192 @@ function readListing(value: unknown, errors: string[]): MindooDBAppDefinitionLis
   return Object.keys(listing).length ? listing : undefined;
 }
 
+const AGENT_CAPABILITY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+const AGENT_LOCALE_PATTERN = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
+const AGENT_GUIDE_PATH_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,199}\.md$/;
+
+/** A `{ en, de, … }` map of non-empty strings; `en` required. */
+function readAgentLocaleText(
+  value: unknown,
+  label: string,
+  maxLength: number,
+  errors: string[],
+): MindooDBAppLocaleMap<string> | undefined {
+  if (!isPlainObject(value)) {
+    errors.push(`${label} must be an object of per-locale strings with an "en" entry.`);
+    return undefined;
+  }
+  const result: Record<string, string> = {};
+  for (const [locale, text] of Object.entries(value)) {
+    if (!AGENT_LOCALE_PATTERN.test(locale)) {
+      errors.push(`${label} has an invalid locale ${JSON.stringify(locale)}.`);
+      return undefined;
+    }
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (!trimmed) {
+      errors.push(`${label}.${locale} must be a non-empty string.`);
+      return undefined;
+    }
+    if (trimmed.length > maxLength) {
+      errors.push(`${label}.${locale} must not be longer than ${maxLength} characters.`);
+      return undefined;
+    }
+    result[locale] = trimmed;
+  }
+  if (!result.en) {
+    errors.push(`${label} must include an "en" entry as the fallback for other locales.`);
+    return undefined;
+  }
+  return result as MindooDBAppLocaleMap<string>;
+}
+
+/** A `{ en: [...], de: [...] }` map of string lists; `en` required. */
+function readAgentLocaleList(
+  value: unknown,
+  label: string,
+  maxLength: number,
+  errors: string[],
+): MindooDBAppLocaleMap<string[]> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    errors.push(`${label} must be an object of per-locale string arrays with an "en" entry.`);
+    return undefined;
+  }
+  const result: Record<string, string[]> = {};
+  for (const [locale, entries] of Object.entries(value)) {
+    if (!AGENT_LOCALE_PATTERN.test(locale)) {
+      errors.push(`${label} has an invalid locale ${JSON.stringify(locale)}.`);
+      return undefined;
+    }
+    if (!Array.isArray(entries) || !entries.length || entries.length > MINDOODB_APP_AGENT_LIST_MAX) {
+      errors.push(`${label}.${locale} must be an array of 1-${MINDOODB_APP_AGENT_LIST_MAX} strings.`);
+      return undefined;
+    }
+    const list: string[] = [];
+    for (const entry of entries) {
+      const trimmed = typeof entry === "string" ? entry.trim() : "";
+      if (!trimmed || trimmed.length > maxLength) {
+        errors.push(`${label}.${locale} must only hold non-empty strings of at most ${maxLength} characters.`);
+        return undefined;
+      }
+      list.push(trimmed);
+    }
+    result[locale] = list;
+  }
+  if (!result.en) {
+    errors.push(`${label} must include an "en" entry as the fallback for other locales.`);
+    return undefined;
+  }
+  return result as MindooDBAppLocaleMap<string[]>;
+}
+
+function readAgentCapabilities(value: unknown, errors: string[]): MindooDBAppAgentCapability[] | undefined {
+  const label = "App definition agent.capabilities";
+  if (!Array.isArray(value) || !value.length || value.length > MINDOODB_APP_AGENT_CAPABILITIES_MAX) {
+    errors.push(`${label} must be an array of 1-${MINDOODB_APP_AGENT_CAPABILITIES_MAX} capabilities.`);
+    return undefined;
+  }
+  const result: MindooDBAppAgentCapability[] = [];
+  const ids = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    const at = `${label}[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${at} must be an object.`);
+      return undefined;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!AGENT_CAPABILITY_ID_PATTERN.test(id)) {
+      errors.push(`${at}.id must be 1-48 lowercase letters, digits, "-" or "_", received ${JSON.stringify(entry.id)}.`);
+      return undefined;
+    }
+    if (ids.has(id)) {
+      errors.push(`${at}.id "${id}" is used twice.`);
+      return undefined;
+    }
+    ids.add(id);
+    const title = readAgentLocaleText(entry.title, `${at}.title`, MINDOODB_APP_AGENT_CAPABILITY_TITLE_MAX, errors);
+    if (!title) {
+      return undefined;
+    }
+    if (
+      !Array.isArray(entry.tools)
+      || !entry.tools.length
+      || entry.tools.length > MINDOODB_APP_AGENT_CAPABILITY_TOOLS_MAX
+    ) {
+      errors.push(`${at}.tools must be an array of 1-${MINDOODB_APP_AGENT_CAPABILITY_TOOLS_MAX} tool names.`);
+      return undefined;
+    }
+    const tools: string[] = [];
+    for (const tool of entry.tools) {
+      const name = typeof tool === "string" ? tool.trim() : "";
+      if (!MINDOODB_APP_AGENT_TOOL_NAME_PATTERN.test(name) || /^haven(?:_|$)/.test(name)) {
+        errors.push(
+          `${at}.tools contains ${JSON.stringify(tool)}; name the app's own tools as registered, without prefix and never "haven_*".`,
+        );
+        return undefined;
+      }
+      if (!tools.includes(name)) {
+        tools.push(name);
+      }
+    }
+    result.push({ id, title, tools });
+  }
+  return result;
+}
+
+function readAgentProfile(value: unknown, errors: string[]): MindooDBAppAgentProfile | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    errors.push("App definition agent must be an object.");
+    return undefined;
+  }
+  const errorCount = errors.length;
+  const summary = readAgentLocaleText(value.summary, "App definition agent.summary", MINDOODB_APP_AGENT_SUMMARY_MAX, errors);
+  const capabilities = readAgentCapabilities(value.capabilities, errors);
+  const examples = readAgentLocaleList(value.examples, "App definition agent.examples", MINDOODB_APP_AGENT_EXAMPLE_MAX, errors);
+  const limits = readAgentLocaleList(value.limits, "App definition agent.limits", MINDOODB_APP_AGENT_LIMIT_MAX, errors);
+  let guide: MindooDBAppLocaleMap<string> | undefined;
+  if (value.guide !== undefined) {
+    guide = readAgentLocaleText(value.guide, "App definition agent.guide", 200, errors);
+    for (const [locale, path] of Object.entries(guide ?? {})) {
+      if (!AGENT_GUIDE_PATH_PATTERN.test(path) || path.split("/").some((part) => part === "." || part === "..")) {
+        errors.push(
+          `App definition agent.guide.${locale} must be a relative path to a .md file next to the manifest, e.g. "agent/agent.${locale}.md".`,
+        );
+        guide = undefined;
+        break;
+      }
+    }
+  }
+  if (errors.length !== errorCount || !summary || !capabilities) {
+    return undefined;
+  }
+  return {
+    summary,
+    capabilities,
+    ...(examples ? { examples } : {}),
+    ...(limits ? { limits } : {}),
+    ...(guide ? { guide } : {}),
+  };
+}
+
+/**
+ * Validates an `agent` block on its own, for hosts that read it from another manifest
+ * format (Haven's app store catalog).
+ */
+export function validateMindooDBAppAgentProfile(value: unknown): {
+  agent: MindooDBAppAgentProfile | undefined;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const agent = readAgentProfile(value, errors);
+  return { agent: errors.length ? undefined : agent, errors };
+}
+
 /**
  * Picks the text for `locale` out of a localized value: the exact locale, then its
  * language (`de` for `de-CH`), then `en`.
@@ -1110,6 +1356,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const listing = readListing(raw.listing, errors);
   const accepts = readAccepts(raw.accepts, errors);
   const components = readComponents(raw.components, errors);
+  const agent = readAgentProfile(raw.agent, errors);
   const agentToolPrefix = readOptionalString(raw, "agentToolPrefix", errors);
   if (
     agentToolPrefix !== undefined
@@ -1162,6 +1409,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       accepts,
       components,
       listing,
+      agent,
     },
     errors: [],
   };

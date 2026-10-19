@@ -400,6 +400,42 @@ In tests, `host.setEmbedAgentTools(embedId, ["text_insert"])` acts as if the com
 registered tools, and an app under test launched with `launchContext.embed` offers only
 its document tools, as in Haven.
 
+#### Agent profile: what agents learn before opening the app
+
+Agents only see an app's tools while it runs. To pick the right app first, they call Haven's `haven_apps_describe`, which answers from the `agent` block of `haven-app.json`:
+
+```json
+"agent": {
+  "summary": { "en": "Mind maps whose nodes are also tasks; the same nodes as Kanban, Gantt and spreadsheet.", "de": "…" },
+  "capabilities": [
+    { "id": "maps", "title": { "en": "Find, open and create maps", "de": "…" }, "tools": ["maps_list", "map_get", "map_create", "map_open"] },
+    { "id": "nodes", "title": { "en": "Edit nodes and task fields", "de": "…" }, "tools": ["nodes_add", "nodes_update", "ops_guide"] }
+  ],
+  "examples": { "en": ["Turn these meeting notes into a mind map"], "de": ["…"] },
+  "limits": { "en": ["Maps are trees: a node has one parent"], "de": ["…"] },
+  "guide": { "en": "agent/agent.en.md" }
+}
+```
+
+- **`summary`**: neutral, 1-3 sentences, at most 400 characters per locale; `en` is required.
+- **`capabilities`**: 1-8 entries; `tools` names the tools as in `registerTools` (no prefix, no `haven_*`). Together they should cover every tool.
+- **`examples`**, **`limits`**: up to 8 strings per locale.
+- **`guide`**: Markdown how-to per locale, a path relative to `haven-app.json` (at most 8 KB): typical steps, where ids come from, pitfalls. Parameter tables belong in the tools (or `ops_guide`), not here.
+
+Keep the profile honest with a unit test: `checkAgentManifest` from `mindoodb-app-sdk/testing` compares it with the registered tools and fails when a capability or the guide names a tool that does not exist (`assertAgentManifest` throws instead):
+
+```ts
+import { assertAgentManifest } from "mindoodb-app-sdk/testing";
+
+const tools = createMyAgentTools(deps);
+const warnings = assertAgentManifest({
+  definition: JSON.parse(readFileSync("public/haven-app.json", "utf8")),
+  tools,
+  guideTexts: { "agent.en.md": readFileSync("public/agent/agent.en.md", "utf8") },
+});
+expect(warnings).toEqual([]); // every tool belongs to a capability
+```
+
 `session.agent` is absent on hosts without agent tools, so check for it. Test tools by calling `execute` directly in unit tests; the reference implementation is `src/features/agent/` in [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega). How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
 
 ### Host-owned drag

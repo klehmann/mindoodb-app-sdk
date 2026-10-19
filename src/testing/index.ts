@@ -6545,6 +6545,12 @@ export {
   type MockAgentHostController,
   type MockAgentHostOptions,
 } from "./mockAgentTools";
+export {
+  assertAgentManifest,
+  checkAgentManifest,
+  type AgentManifestCheckOptions,
+  type AgentManifestCheckResult,
+} from "./agentManifest";
 export { createMemoryAttachments } from "./memoryAttachments";
 export {
   DEFAULT_TEST_HOST_USERS,
