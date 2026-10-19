@@ -420,7 +420,7 @@ Agents only see an app's tools while it runs. To pick the right app first, they 
 - **`summary`**: neutral, 1-3 sentences, at most 400 characters per locale; `en` is required.
 - **`capabilities`**: 1-8 entries; `tools` names the tools as in `registerTools` (no prefix, no `haven_*`). Together they should cover every tool.
 - **`examples`**, **`limits`**: up to 8 strings per locale.
-- **`guide`**: Markdown how-to per locale, a path relative to `haven-app.json` (at most 8 KB): typical steps, where ids come from, pitfalls. Parameter tables belong in the tools (or `ops_guide`), not here.
+- **`guide`**: Markdown how-to per locale, a path relative to `haven-app.json` (at most 8 KB): typical steps, where ids come from, pitfalls. Parameter tables belong in the tools (or `ops_guide`), not here. Haven fetches it cross-origin, so serve it with `Access-Control-Allow-Origin: *` like `haven-app.json` (Cloudflare: an `/agent/*` rule in `public/_headers`).
 
 Keep the profile honest with a unit test: `checkAgentManifest` from `mindoodb-app-sdk/testing` compares it with the registered tools and fails when a capability or the guide names a tool that does not exist (`assertAgentManifest` throws instead):
 
@@ -436,7 +436,27 @@ const warnings = assertAgentManifest({
 expect(warnings).toEqual([]); // every tool belongs to a capability
 ```
 
-`session.agent` is absent on hosts without agent tools, so check for it. Test tools by calling `execute` directly in unit tests; the reference implementation is `src/features/agent/` in [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega). How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
+`session.agent` is absent on hosts without agent tools, so check for it. `registerTools()` answers `{ enabled, exposedNames }`: show from `enabled` whether agents can call the tools right now (and that **Offer tools to AI agents** switches them on), and use `exposedNames` when you display the names agents see. There is no event when the user changes the setting later; register again (e.g. when the app regains focus) to refresh it.
+
+#### A recommended tool set for a data app
+
+What the SDK example app, TodoManager and Vega offer, from small to large:
+
+- `get_context`: the open database, read-only or not, the signed-in user, today's date, what is selected. Agents call it first.
+- `list` / `search`: exact criteria through `documents.query` filters on the summary buffer, topics through a full-text `text` clause, bounded output with `truncated`. Check `db.getFulltextSetup()` first: Haven rejects `text` with `fulltext-not-enabled` when the database has no index, while the mock answers anyway.
+- `get`, `create`, `update`, `delete` over a small public model, never storage field names; `delete` with `consequentialHint`. Batch with lists so one call is one step.
+- `undo` (and `history`/`redo` in larger apps): every write call is one undo step marked as made by an agent; undo refuses with `STATE_CHANGED` when the document changed since, so agents never overwrite user work.
+- `users_search` when the app stores people: look names up in the tenant directory (`directory` permission) and store the directory id.
+
+Small reference: `src/features/agent/` and `src/app/useAgentSection.ts` in [mindoodb-app-example](https://github.com/klehmann/mindoodb-app-example) (eight tools, undo, profile test). Larger ones: `src/features/agent/` in [mindoodb-app-todomanager](https://github.com/klehmann/mindoodb-app-todomanager) and [mindoodb-app-vega](https://github.com/klehmann/mindoodb-app-vega).
+
+#### Testing agent tools
+
+- **Unit**: call `execute` directly with a database from `createMockMindooDBAppSession`.
+- **End to end**: `createFakeBridgeHost({ agentToolPrefix, agentToolsEnabled, agentConsent })` connects the real bridge; `host.agent.tools()`, `host.agent.context()` and `host.agent.call(name, input)` act as the agent, and `call` answers `{ ok, result }` or `{ ok: false, error }`; `agentConsent: "deny"` plays a user who declines a `consequentialHint` call (`NOT_ALLOWED`).
+- **In the browser**: the `/__haven-test/` page (`mountHavenTestHost`) lists the tools with a call button. Pass `agentToolPrefix: definition.agentToolPrefix`; without it the page derives the prefix from the app id, so the names differ from Haven's.
+
+How to design tools that agents use well is in the [best practices guide](https://github.com/klehmann/MindooDB/blob/main/docs/best-practices.md) (section "Offer operations to AI agents").
 
 ### Host-owned drag
 
@@ -739,6 +759,30 @@ Done/Cancel buttons over the container. `createFakeBridgeHost({ embedFrameUrl })
 answers like a current Haven, so the SDK frames that URL in the container. Both
 controllers simulate unsaved changes: `setEmbedDirty`, `failNextEmbedSave`, and for an
 app under test that is a component, `getEmbeddingDirty` and `requestEmbeddingSave`.
+
+**Host checklist.** What a host needs beyond the calls above (the "Embedded editors" tab of
+[mindoodb-app-example](https://github.com/klehmann/mindoodb-app-example) is a small
+complete host, `src/app/useEmbedsSection.ts`; Mindoo CRM a large one):
+
+- `embeds.open` rejects with an `Error` whose `name` says why: `declined` (the user said
+  no), `component-not-found` (the app is not installed or no longer offers it),
+  `forbidden`, `database-not-found`, `document-not-found`, `invalid-request`,
+  `unsupported` (a Haven without components). Explain these to the user.
+- `requestAccess` never asks again for what the user put off; Haven asks for it when the
+  document is opened. So say "Haven asks when you open one" instead of offering "ask again".
+- `createFields` may contain nested values; copy it with a JSON round trip, not
+  `structuredClone`, when the component sits in Vue reactive state.
+- Keep fields of your own on the root top-level and prefixed (`exampleEditor`), so
+  queries find them without `setSummarySetup`; nested fields (`crm.folders`) need a summary
+  setup first.
+- Copy the component's `children` link onto the root (or remember it) so you can still
+  delete a document with all its children after the providing app was uninstalled.
+- Keep the container mounted while the editor should live: removing the element (a tab
+  rendered with `v-if`) closes the editor. Hide it with `v-show` and
+  `embed.setVisible(false)` instead.
+- With `placement === "overlay"` the SDK follows the container on resize and scroll, not
+  when content above it changes height; keep banners and confirm bars out of the space
+  above an open editor.
 
 A host with agent tools marks the component in the front tab with `embed.setActive()`
 and reads `embed.agentTools`; see *Agent tools of embedded components*.
