@@ -221,6 +221,14 @@ describe("app definition listing", () => {
     expect(resolveMindooDBAppLocalizedText(undefined, "fr")).toBe("");
   });
 
+  it("reads Bokmål for generic Norwegian and Nynorsk unless the text has its own", () => {
+    const text = { en: "Hello", nb: "Hei" };
+    expect(resolveMindooDBAppLocalizedText(text, "no-NO")).toBe("Hei");
+    expect(resolveMindooDBAppLocalizedText(text, "nn")).toBe("Hei");
+    expect(resolveMindooDBAppLocalizedText({ ...text, nn: "Hei (nn)" }, "nn-NO")).toBe("Hei (nn)");
+    expect(resolveMindooDBAppLocalizedText({ en: "Hello" }, "no")).toBe("Hello");
+  });
+
   it("resolves listing assets against the app origin only", () => {
     expect(resolveMindooDBAppListingAssetUrl("icon.svg", "https://app.example.com")).toBe(
       "https://app.example.com/icon.svg",

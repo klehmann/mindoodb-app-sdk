@@ -1290,7 +1290,7 @@ export function validateMindooDBAppAgentProfile(value: unknown): {
 
 /**
  * Picks the text for `locale` out of a localized value: the exact locale, then its
- * language (`de` for `de-CH`), then `en`.
+ * language (`de` for `de-CH`), then `nb` for `no`/`nn`, then `en`.
  */
 export function resolveMindooDBAppLocalizedText(
   text: MindooDBAppLocalizedText | undefined,
@@ -1304,7 +1304,15 @@ export function resolveMindooDBAppLocalizedText(
   }
   const normalized = locale.trim();
   const language = normalized.split(/[-_]/)[0]?.toLowerCase() ?? "";
-  return text[normalized] ?? text[normalized.toLowerCase()] ?? (language ? text[language] : undefined) ?? text.en;
+  // Haven treats generic Norwegian and Nynorsk as Bokmål, so `no`/`nn` read an `nb` text.
+  const norwegian = language === "no" || language === "nn" ? text.nb : undefined;
+  return (
+    text[normalized] ??
+    text[normalized.toLowerCase()] ??
+    (language ? text[language] : undefined) ??
+    norwegian ??
+    text.en
+  );
 }
 
 /**
