@@ -523,6 +523,7 @@ export const TEST_HOST_LOCALES: ReadonlyArray<{ tag: string; label: string }> = 
   { tag: "pt-BR", label: "Português" },
   { tag: "nl-NL", label: "Nederlands" },
   { tag: "pl-PL", label: "Polski" },
+  { tag: "nb-NO", label: "Norsk bokmål" },
   { tag: "cs-CZ", label: "Čeština" },
   { tag: "ru-RU", label: "Русский" },
   { tag: "zh-CN", label: "简体中文" },

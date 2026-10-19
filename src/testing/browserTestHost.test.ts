@@ -10,6 +10,7 @@ import {
   mountHavenTestHost,
   previewJson,
   readTestHostUrlSettings,
+  TEST_HOST_LOCALES,
   type BrowserTestHost,
 } from "./browserTestHost";
 
@@ -214,6 +215,35 @@ describe("browser test host", () => {
     create.dispatchEvent(new Event("change"));
     expect(testHost.host.listDatabases()[0]?.capabilities).toEqual(["read", "create"]);
     expect(new URLSearchParams(window.location.search).getAll("db")).toEqual(["main:read,create"]);
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("offers Norwegian (nb) like Haven and switches the locale from the panel", async () => {
+    expect(TEST_HOST_LOCALES).toContainEqual({ tag: "nb-NO", label: "Norsk bokmål" });
+
+    window.history.replaceState(null, "", "/__haven-test/?locale=nb-NO");
+    testHost = mountHavenTestHost({ appUrl: "https://app.example.com/", databases: [] });
+    expect((await testHost.host.session.getLaunchContext()).locale).toBe("nb-NO");
+    const language = document.querySelector<HTMLSelectElement>('[data-testid="haven-test-language"]')!;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(language.value).toBe("nb-NO");
+    expect(language.selectedOptions[0]?.textContent).toBe("Norsk bokmål (nb-NO)");
+
+    language.value = "de-DE";
+    language.dispatchEvent(new Event("change"));
+    expect((await testHost.host.session.getLaunchContext()).locale).toBe("de-DE");
+    expect(new URLSearchParams(window.location.search).get("locale")).toBe("de-DE");
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("keeps a URL locale that is not in the list as an extra option", async () => {
+    window.history.replaceState(null, "", "/__haven-test/?locale=nb");
+    testHost = mountHavenTestHost({ appUrl: "https://app.example.com/", databases: [] });
+    expect((await testHost.host.session.getLaunchContext()).locale).toBe("nb");
+    const language = document.querySelector<HTMLSelectElement>('[data-testid="haven-test-language"]')!;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(language.value).toBe("nb");
+    expect(language.options[0]?.value).toBe("nb");
     window.history.replaceState(null, "", "/");
   });
 });
