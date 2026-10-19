@@ -525,8 +525,11 @@ only database. The launch context then carries `embed` (`docId`, `databaseId`,
 `intent`, `hostAppLabel`): open that document, hide "New"/"Open", and finish with
 
 ```ts
-await session.embedding.complete({ title }); // or session.embedding.cancel()
+await session.embedding.complete({ subject, summary, stats: { words } }); // or session.embedding.cancel()
 ```
+
+`complete` takes plain JSON; `MindooDBAppEmbeddingResult` (`subject`, optional
+`summary`, `thumbnail` as a small data URL, `stats`) is the shape hosts expect.
 
 Haven writes every change back to the host's database as it happens and only lets the
 component create documents that are children of the root.
@@ -627,6 +630,72 @@ if (embed.dirty) {
 never does is closed without asking; `embed.onDirtyChange` lets the host mark it (e.g. a
 dot in its tab). `embed.save()` rejects with `unsupported` when the component has no save
 handler.
+
+**Checking before saving.** A component can tell hosts more about itself in
+`supports`, and hosts filter on it:
+
+```json
+"supports": ["inspect:mindoo.inspect.document@1", "validate", "issues", "reveal"]
+```
+
+```ts
+const [letterEditor] = await session.components.list({ requires: ["inspect:mindoo.inspect.document@1", "validate"] });
+```
+
+- `inspect:<contract>`: the component describes its document in a shared shape:
+  `mindoo.inspect.document@1` (Word/Markdown: subject, outline with anchors, open
+  placeholders and MERGEFIELDs, open comments and tracked changes, word count, text on
+  request), `mindoo.inspect.spreadsheet@1` (sheets, named ranges, requested cells,
+  formula errors with address), `mindoo.inspect.slides@1` (slide count, titles, empty
+  placeholders). Anchors: `{ kind: "heading", id }`, `{ kind: "cell", ref: "Sheet1!B3" }`,
+  `{ kind: "slide", index }`.
+- `validate`: it asks before it saves, so the host can stop a save.
+- `issues` / `reveal`: it shows a host's findings and scrolls to an anchor.
+
+Changing `supports` does not ask users again; it grants no access.
+
+```ts
+// host
+const letter = await embed.inspect<MindooDBAppDocumentInspection>(); // { outline, placeholders, … }
+const rules = defineDocumentRules<MindooDBAppDocumentInspection>({
+  contract: MINDOODB_INSPECT_DOCUMENT,
+  rules: [mindooDBAppInspectRules.noOpenPlaceholders(), mindooDBAppInspectRules.noOpenTrackedChanges("warning")],
+});
+rules.attach(embed); // = embed.onBeforeSave(rules.beforeSave, { inspect: rules.request })
+embed.onAfterSave(() => refreshTree());
+await embed.showIssues(rules.checkRoot(doc.data)); // the root summary, see below
+await embed.reveal({ kind: "heading", id: "h-3" });
+await embed.callTool("text_insert", { text: "…" }); // any of its document agent tools
+
+// component
+session.embedding.provideInspection((request) => describeDocument(request));
+session.embedding.onShowIssues((issues) => showIssuesPanel(issues));
+session.embedding.onReveal((anchor) => scrollTo(anchor));
+await session.embedding.save(async ({ inspection }) => {
+  await db.documents.update({ docId, set: { ...changes, ...(inspection ? { inspection } : {}) } });
+}); // throws MindooDBAppEmbedValidationError (with .issues) when the host's check stopped it
+```
+
+Haven never holds writes back: the component asks first (`embedding.validate`, which
+`embedding.save` calls), Haven fetches the inspection the host asked for, passes it with
+the root document to the host's `onBeforeSave` and answers the component: an `error`
+stops the save, a `warning` asks the user whether to save anyway, and when the host does
+not answer within about 5 s the component saves (`timedOut`). This covers saves the
+user, the host (`embed.save()`) and agents start; an agent tool saves with
+`save(flush, { interactive: false })`, where warnings do not stop it, and reports the
+error's issues as its tool error. Standalone, `validate` answers `ok` at once.
+
+`save` also hands `flush` a small summary of the inspection (at most 8 KiB, lists and
+text shortened, counts exact) as an atomic value for the root's `inspection` field, so
+hosts can check documents they do not have open: `rules.checkRoot(root)`, or
+`readMindooDBAppInspectionSummary(root)`. Write it in standalone saves too.
+
+In tests, the mock plays the components with `embedInspection`, `embedTools` and
+`confirmSaveWarnings`, and records `getEmbedRequests(embedId)`; `validateEmbed(embedId)`
+runs the host's check as if the component was about to save. For an app under test that
+is a component, `embeddingValidation` plays the host, and `requestEmbeddingInspection`,
+`requestEmbeddingShowIssues`, `requestEmbeddingReveal`, `getEmbeddingValidations` and
+`getEmbeddingSaveCount` drive and observe it.
 
 Havens that predate this lay the component over the container instead, above the host's
 frame (`embed.placement === "overlay"`). The host then cannot draw on top of it: hide it

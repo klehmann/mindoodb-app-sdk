@@ -17,6 +17,8 @@
  * compatible; add fields as optional and never repurpose an existing name.
  */
 
+import { isMindooDBAppSupportsEntry } from "./inspection";
+
 export const MINDOODB_APP_DEFINITION_FORMAT = "mindoodb.haven.app";
 export const MINDOODB_APP_DEFINITION_VERSION = 1;
 
@@ -309,6 +311,15 @@ export interface MindooDBAppComponentSpec {
   provides?: MindooDBAppComponentContract[];
   /** Fields of the root document that point at other root documents. */
   references?: MindooDBAppComponentReference[];
+  /**
+   * What the component can do for its hosts beyond showing the document, so a host
+   * can pick one that fits (`components.list({ requires })`): `inspect:<contract>`
+   * (describes its document, e.g. `inspect:mindoo.inspect.document@1`), `validate`
+   * (asks before it saves, `session.embedding.validate`), `issues` (shows a host's
+   * findings, `embed.showIssues`), `reveal` (scrolls to an anchor, `embed.reveal`).
+   * Changing it does not ask users again: it grants no access.
+   */
+  supports?: string[];
 }
 
 /**
@@ -702,6 +713,29 @@ export const MINDOODB_APP_COMPONENT_CONTRACT_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z]
 const COMPONENT_CONTRACTS_MAX = 8;
 const COMPONENT_REFERENCES_MAX = 8;
 const COMPONENT_REFERENCE_SHOW_MAX = 8;
+const COMPONENT_SUPPORTS_MAX = 16;
+
+function readComponentSupports(value: unknown, label: string, errors: string[]): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > COMPONENT_SUPPORTS_MAX) {
+    errors.push(`${label} must be an array of at most ${COMPONENT_SUPPORTS_MAX} entries.`);
+    return undefined;
+  }
+  const result: string[] = [];
+  for (const entry of value) {
+    const text = typeof entry === "string" ? entry.trim() : "";
+    if (!isMindooDBAppSupportsEntry(text, MINDOODB_APP_COMPONENT_CONTRACT_PATTERN)) {
+      errors.push(`${label} entries must look like "validate" or "inspect:mindoo.inspect.document@1", received ${JSON.stringify(entry)}.`);
+      return undefined;
+    }
+    if (!result.includes(text)) {
+      result.push(text);
+    }
+  }
+  return result.length ? result : undefined;
+}
 
 function readComponentContracts(
   value: unknown,
@@ -919,6 +953,7 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
     }
     const provides = readComponentContracts(entry.provides, `${label}.provides`, errors);
     const references = readComponentReferences(entry.references, `${label}.references`, match, errors);
+    const supports = readComponentSupports(entry.supports, `${label}.supports`, errors);
     if (errors.length !== errorCount) {
       return;
     }
@@ -934,6 +969,7 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
       ...(category ? { category } : {}),
       ...(provides ? { provides } : {}),
       ...(references ? { references } : {}),
+      ...(supports ? { supports } : {}),
     });
   });
   return result.length ? result : undefined;

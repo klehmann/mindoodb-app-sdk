@@ -13,8 +13,16 @@ import {
   createMockEmbedHost,
   type MockEmbeddingFinish,
   type MockEmbedHostOptions,
+  type MockEmbedRequest,
   type MockEmbedState,
 } from "./mockEmbeds.js";
+import type {
+  MindooDBAppEmbedValidation,
+  MindooDBAppInspectAnchor,
+  MindooDBAppInspectionBase,
+  MindooDBAppInspectRequest,
+  MindooDBAppIssue,
+} from "../inspection.js";
 import type {
   MindooDBAppComponentInfo,
   MindooDBAppComponentQuery,
@@ -4675,6 +4683,14 @@ export interface CreateMockMindooDBAppSessionOptions {
    * those Haven would ask for. Without it every pair is allowed.
    */
   embedAccess?: MockEmbedHostOptions["embedAccess"];
+  /** Plays the components for `embed.inspect` and save checks (see `MockEmbedHostOptions`). */
+  embedInspection?: MockEmbedHostOptions["embedInspection"];
+  /** Plays the components for `embed.callTool`. */
+  embedTools?: MockEmbedHostOptions["embedTools"];
+  /** Plays the user when a save check found only warnings; default: save anyway. */
+  confirmSaveWarnings?: MockEmbedHostOptions["confirmSaveWarnings"];
+  /** For an app under test that runs as a component: its host's checks (`embedding.validate`). */
+  embeddingValidation?: MockEmbedHostOptions["embeddingValidation"];
   /**
    * Answer `embeds.open` with a `container` like a current Haven: with this page
    * for the SDK to frame (e.g. `about:blank`). Without it the host behaves like an
@@ -4783,9 +4799,28 @@ export interface MockMindooDBAppSessionController {
   getEmbeddingDirty(): boolean | undefined;
   /** For an app under test that runs as a component: asks it to save, as its host would. */
   requestEmbeddingSave(): Promise<void>;
+  /**
+   * As if the embedded component asked before saving (`embedding.validate`): runs
+   * the app's `onBeforeSave` check and resolves as Haven would.
+   */
+  validateEmbed(embedId: string, options?: { interactive?: boolean }): Promise<MindooDBAppEmbedValidation>;
+  /** As if the embedded component saved: the app's `onAfterSave` listeners run. */
+  notifyEmbedSaved(embedId: string): void;
+  /** What the app asked of this embed's component (`inspect`, `showIssues`, `reveal`, `callTool`). */
+  getEmbedRequests(embedId: string): MockEmbedRequest[];
+  /** For an app under test that runs as a component: asks it to describe its document, as its host would. */
+  requestEmbeddingInspection(request?: MindooDBAppInspectRequest): Promise<MindooDBAppInspectionBase>;
+  /** For an app under test that runs as a component: hands it the host's issues. */
+  requestEmbeddingShowIssues(issues: MindooDBAppIssue[]): Promise<void>;
+  /** For an app under test that runs as a component: asks it to scroll to `anchor`. */
+  requestEmbeddingReveal(anchor: MindooDBAppInspectAnchor): Promise<void>;
+  /** For an app under test that runs as a component: its `embedding.validate` calls so far. */
+  getEmbeddingValidations(): Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }>;
+  /** For an app under test that runs as a component: how often it reported a save (`embedding.save`). */
+  getEmbeddingSaveCount(): number;
 }
 
-export type { MockEmbeddingFinish, MockEmbedState } from "./mockEmbeds.js";
+export type { MockEmbeddingFinish, MockEmbedRequest, MockEmbedState } from "./mockEmbeds.js";
 
 /** Content for `emitIncomingContent`. */
 export interface MockIncomingContentInput {
@@ -4983,6 +5018,14 @@ export function createMockMindooDBAppSession(
     failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
     getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
     requestEmbeddingSave: () => state.embedHost.requestEmbeddingSave(),
+    validateEmbed: (embedId, validateOptions) => state.embedHost.validateEmbed(embedId, validateOptions),
+    notifyEmbedSaved: (embedId) => state.embedHost.notifyEmbedSaved(embedId),
+    getEmbedRequests: (embedId) => state.embedHost.getEmbedRequests(embedId),
+    requestEmbeddingInspection: (request) => state.embedHost.requestEmbeddingInspection(request),
+    requestEmbeddingShowIssues: (issues) => state.embedHost.requestEmbeddingShowIssues(issues),
+    requestEmbeddingReveal: (anchor) => state.embedHost.requestEmbeddingReveal(anchor),
+    getEmbeddingValidations: () => state.embedHost.getEmbeddingValidations(),
+    getEmbeddingSaveCount: () => state.embedHost.getEmbeddingSaveCount(),
   };
   replicaStates.set(controller, state);
   return controller;
@@ -5112,6 +5155,25 @@ export interface FakeBridgeHostController {
    */
   requestEmbeddingSave(): Promise<void>;
   /**
+   * As if the embedded component asked before saving (`embedding.validate`): runs
+   * the app's `onBeforeSave` check and resolves as Haven would.
+   */
+  validateEmbed(embedId: string, options?: { interactive?: boolean }): Promise<MindooDBAppEmbedValidation>;
+  /** As if the embedded component saved: the app's `onAfterSave` listeners run. */
+  notifyEmbedSaved(embedId: string): void;
+  /** What the app asked of this embed's component (`inspect`, `showIssues`, `reveal`, `callTool`). */
+  getEmbedRequests(embedId: string): MockEmbedRequest[];
+  /** For an app under test that runs as a component: asks it to describe its document, as its host would. */
+  requestEmbeddingInspection(request?: MindooDBAppInspectRequest): Promise<MindooDBAppInspectionBase>;
+  /** For an app under test that runs as a component: hands it the host's issues. */
+  requestEmbeddingShowIssues(issues: MindooDBAppIssue[]): Promise<void>;
+  /** For an app under test that runs as a component: asks it to scroll to `anchor`. */
+  requestEmbeddingReveal(anchor: MindooDBAppInspectAnchor): Promise<void>;
+  /** For an app under test that runs as a component: its `embedding.validate` calls so far. */
+  getEmbeddingValidations(): Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }>;
+  /** For an app under test that runs as a component: how often it reported a save (`embedding.save`). */
+  getEmbeddingSaveCount(): number;
+  /**
    * Haven's agent-tool side: the tools and context the app declared, files in the
    * exchange, and `call()` to run a tool as an agent would.
    */
@@ -5161,9 +5223,27 @@ export function createFakeBridgeHost(
       port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "agentTools", ...event } }),
     );
   });
-  /** Save requests pushed to the app as a component, waiting for `embedding.respond`. */
-  const embeddingRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  state.embedHost.onSaved((event) => {
+    connectedPorts.forEach((port) =>
+      port.postMessage({ protocol: PROTOCOL, kind: "embed-event", event: { type: "saved", ...event } }),
+    );
+  });
+  /** Requests pushed to the app as a component, waiting for `embedding.respond`. */
+  const embeddingRequests = new Map<string, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
   let embeddingRequestCounter = 0;
+  function pushEmbeddingRequest(request: string, params?: Record<string, unknown>) {
+    embeddingRequestCounter += 1;
+    const requestId = `embedding-request-${embeddingRequestCounter}`;
+    return new Promise<unknown>((resolve, reject) => {
+      embeddingRequests.set(requestId, { resolve, reject });
+      connectedPorts.forEach((port) =>
+        port.postMessage({ protocol: PROTOCOL, kind: "embedding-request", requestId, request, ...(params ? { params } : {}) }),
+      );
+    });
+  }
+  /** Save checks pushed to the app as a host, waiting for `embeds.respond`. */
+  const embedRequests = new Map<string, (result: unknown) => void>();
+  let embedRequestCounter = 0;
   const beforeCloseWaiters = new Map<string, () => void>();
   let beforeCloseCounter = 0;
   const viewSessions = new Map<string, MindooDBAppViewNavigator>();
@@ -5458,10 +5538,68 @@ export function createFakeBridgeHost(
       case "embeds.open": {
         const input = params.input as MindooDBAppEmbedOpenInput & { placement?: string };
         const embedId = await state.embedHost.openEmbed(input);
-        return input.placement === "frame" && options.embedFrameUrl
-          ? { embedId, frame: { url: options.embedFrameUrl } }
-          : { embedId };
+        const supports = state.embedHost.listEmbeds().find((entry) => entry.embedId === embedId)?.supports ?? [];
+        return {
+          embedId,
+          ...(input.placement === "frame" && options.embedFrameUrl ? { frame: { url: options.embedFrameUrl } } : {}),
+          ...(supports.length ? { supports } : {}),
+        };
       }
+      case "embeds.inspect":
+        return await state.embedHost.inspectEmbed(
+          String(params.embedId),
+          params.request as MindooDBAppInspectRequest | undefined,
+        );
+      case "embeds.setBeforeSave": {
+        const embedId = String(params.embedId);
+        state.embedHost.setBeforeSave(
+          embedId,
+          params.enabled === true
+            ? (input) => {
+                embedRequestCounter += 1;
+                const requestId = `embed-request-${embedRequestCounter}`;
+                return new Promise((resolve) => {
+                  embedRequests.set(requestId, (result) => resolve(result as { issues: MindooDBAppIssue[] }));
+                  connectedPorts.forEach((port) =>
+                    port.postMessage({
+                      protocol: PROTOCOL,
+                      kind: "embed-request",
+                      requestId,
+                      embedId,
+                      request: "beforeSave",
+                      params: { inspection: input.inspection, root: input.root },
+                    }),
+                  );
+                });
+              }
+            : null,
+          params.inspect as MindooDBAppInspectRequest | undefined,
+        );
+        return { ok: true };
+      }
+      case "embeds.respond": {
+        const resolve = embedRequests.get(String(params.requestId));
+        embedRequests.delete(String(params.requestId));
+        resolve?.(params.ok === true ? params.result : { issues: [] });
+        return { ok: true };
+      }
+      case "embeds.showIssues":
+        await state.embedHost.showEmbedIssues(String(params.embedId), params.issues);
+        return { ok: true };
+      case "embeds.reveal":
+        await state.embedHost.revealInEmbed(String(params.embedId), params.anchor);
+        return { ok: true };
+      case "embeds.callTool":
+        return await state.embedHost.callEmbedTool(
+          String(params.embedId),
+          String(params.name),
+          (params.input ?? {}) as Record<string, unknown>,
+        );
+      case "embedding.validate":
+        return await state.embedHost.validateEmbedding({ interactive: params.interactive !== false });
+      case "embedding.saved":
+        state.embedHost.recordEmbeddingSaved();
+        return { ok: true };
       case "embeds.requestAccess":
         return await state.embedHost.embeds.requestAccess(
           (params.input ?? { components: [] }) as MindooDBAppEmbedAccessInput,
@@ -5494,9 +5632,10 @@ export function createFakeBridgeHost(
         const pending = embeddingRequests.get(String(params.requestId));
         embeddingRequests.delete(String(params.requestId));
         if (params.ok === true) {
-          pending?.resolve();
+          pending?.resolve(params.result);
         } else {
-          pending?.reject(new Error(typeof params.error === "string" ? params.error : "Save failed."));
+          const message = typeof params.error === "string" ? params.error : "Save failed.";
+          pending?.reject(Object.assign(new Error(message), message === "unsupported" ? { name: "unsupported" } : {}));
         }
         return { ok: true };
       }
@@ -6403,16 +6542,23 @@ export function createFakeBridgeHost(
     setEmbedAgentTools: (embedId, names, toolOptions) => state.embedHost.setEmbedAgentTools(embedId, names, toolOptions),
     failNextEmbedSave: (message) => state.embedHost.failNextSave(message),
     getEmbeddingDirty: () => state.embedHost.getEmbeddingDirty(),
-    requestEmbeddingSave() {
-      embeddingRequestCounter += 1;
-      const requestId = `embedding-request-${embeddingRequestCounter}`;
-      return new Promise<void>((resolve, reject) => {
-        embeddingRequests.set(requestId, { resolve, reject });
-        connectedPorts.forEach((port) =>
-          port.postMessage({ protocol: PROTOCOL, kind: "embedding-request", requestId, request: "save" }),
-        );
-      });
+    async requestEmbeddingSave() {
+      await pushEmbeddingRequest("save");
     },
+    validateEmbed: (embedId, validateOptions) => state.embedHost.validateEmbed(embedId, validateOptions),
+    notifyEmbedSaved: (embedId) => state.embedHost.notifyEmbedSaved(embedId),
+    getEmbedRequests: (embedId) => state.embedHost.getEmbedRequests(embedId),
+    async requestEmbeddingInspection(request) {
+      return (await pushEmbeddingRequest("inspect", { request: request ?? {} })) as MindooDBAppInspectionBase;
+    },
+    async requestEmbeddingShowIssues(issues) {
+      await pushEmbeddingRequest("showIssues", { issues });
+    },
+    async requestEmbeddingReveal(anchor) {
+      await pushEmbeddingRequest("reveal", { anchor });
+    },
+    getEmbeddingValidations: () => state.embedHost.getEmbeddingValidations(),
+    getEmbeddingSaveCount: () => state.embedHost.getEmbeddingSaveCount(),
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {

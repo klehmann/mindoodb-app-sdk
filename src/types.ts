@@ -63,6 +63,14 @@ import type {
   MindooDBAppComponentIntent,
   MindooDBAppDefinitionRegistrationPermission,
 } from "./appDefinition";
+import type {
+  MindooDBAppEmbedValidation,
+  MindooDBAppInspectAnchor,
+  MindooDBAppInspectionBase,
+  MindooDBAppInspectRequest,
+  MindooDBAppIssue,
+} from "./inspection";
+import type { MindooDBAppAtomicValue } from "./values";
 
 /** Launch target used by the Haven when opening an app. */
 export type MindooDBAppRuntime = "iframe" | "window";
@@ -1814,6 +1822,8 @@ export interface MindooDBAppComponentInfo {
   provides?: MindooDBAppComponentContract[];
   /** Fields of its root documents that point at other root documents. */
   references?: MindooDBAppComponentReference[];
+  /** What it can do beyond showing the document, e.g. `inspect:mindoo.inspect.document@1`, `validate`. */
+  supports?: string[];
 }
 
 /** Filter for `session.components.list`. */
@@ -1821,6 +1831,12 @@ export interface MindooDBAppComponentQuery {
   intent?: MindooDBAppComponentIntent;
   /** Only components whose `match` fits these root document fields. */
   document?: Record<string, unknown>;
+  /**
+   * Only components that support all of these (`supports` in their haven-app.json):
+   * `inspect` matches any `inspect:…` entry, `inspect:mindoo.inspect.document@1`
+   * only that contract.
+   */
+  requires?: string[];
 }
 
 /** Rectangle in the host app's viewport, CSS pixels. */
@@ -1972,6 +1988,59 @@ export interface MindooDBAppEmbed {
    * `timeoutMs` (default 10 s) or when the component closes.
    */
   waitForAgentTools(timeoutMs?: number): Promise<MindooDBAppEmbedAgentTools | null>;
+  /** What the component supports (`supports` in its haven-app.json); empty on older Havens. */
+  readonly supports: readonly string[];
+  /**
+   * Asks the component to describe its document (it must support `inspect:<contract>`),
+   * e.g. to show the open placeholders of a letter. Rejects with `unsupported` when it
+   * does not.
+   */
+  inspect<T extends MindooDBAppInspectionBase = MindooDBAppInspectionBase>(request?: MindooDBAppInspectRequest): Promise<T>;
+  /**
+   * Checks every save of the component before it happens (components that support
+   * `validate` ask before they save, `session.embedding.validate`). `handler` gets the
+   * component's inspection, asked for with `options.inspect` (null when the component
+   * cannot describe its document), plus the root document as saved last time, and
+   * answers with issues: an `error` stops the save, a `warning` makes Haven ask the
+   * user. Saves the user, this app (`save()`) or an agent start alike. Without an
+   * answer within about 5 s the component saves and the user is told. One handler at
+   * a time; returns the function that removes it.
+   */
+  onBeforeSave(
+    handler: (input: MindooDBAppEmbedBeforeSaveInput) => MindooDBAppEmbedBeforeSaveResult | Promise<MindooDBAppEmbedBeforeSaveResult>,
+    options?: { inspect?: MindooDBAppInspectRequest },
+  ): () => void;
+  /** Called after the component saved (it reports that through `session.embedding.save`). */
+  onAfterSave(listener: (event: MindooDBAppEmbedSavedEvent) => void): () => void;
+  /** Shows issues in the component (it must support `issues`), e.g. after this app checked it. */
+  showIssues(issues: MindooDBAppIssue[]): Promise<void>;
+  /** Scrolls the component to a place in its document (it must support `reveal`). */
+  reveal(anchor: MindooDBAppInspectAnchor): Promise<void>;
+  /**
+   * Runs one of the component's document agent tools (`scope: "document"`), e.g.
+   * `text_insert`, with or without its prefix. For what the other methods do not
+   * cover; agent tools need not be switched on. Resolves with the tool's result.
+   */
+  callTool(name: string, input?: Record<string, unknown>): Promise<unknown>;
+}
+
+/** What an `embed.onBeforeSave` handler gets. */
+export interface MindooDBAppEmbedBeforeSaveInput {
+  embedId: string;
+  /** The component's description of the document as it is about to be saved; null if it has none. */
+  inspection: MindooDBAppInspectionBase | null;
+  /** The root document's fields as last saved (large fields may be missing). */
+  root: Record<string, unknown> | null;
+}
+
+/** What an `embed.onBeforeSave` handler answers. */
+export interface MindooDBAppEmbedBeforeSaveResult {
+  issues: MindooDBAppIssue[];
+}
+
+/** Pushed after an embedded component saved. */
+export interface MindooDBAppEmbedSavedEvent {
+  embedId: string;
 }
 
 /** The agent tools of an embedded component, as its host sees them. */
@@ -2050,6 +2119,49 @@ export interface MindooDBAppEmbeddingApi {
    * 20, max 100) results.
    */
   lookup(field: string, options?: MindooDBAppEmbeddingLookupOptions): Promise<MindooDBAppEmbeddingLookupResult[]>;
+  /**
+   * Describes the document when the host asks (`embed.inspect`, its save checks),
+   * following one of the contracts in `supports` (`inspect:<contract>`). Also used
+   * by `save` for the root summary. One provider at a time; returns the unregister
+   * function.
+   */
+  provideInspection(
+    provider: (request: MindooDBAppInspectRequest) => MindooDBAppInspectionBase | Promise<MindooDBAppInspectionBase>,
+  ): () => void;
+  /**
+   * Lets the host check the document before this component saves it: Haven asks the
+   * host's `onBeforeSave` (with this app's inspection) and, for warnings, the user
+   * (unless `interactive: false`, e.g. for an agent's save; then warnings do not
+   * stop it). Resolves `ok: true` right away when not embedded or the host has no
+   * checks. Prefer {@link save}, which also writes the root summary.
+   */
+  validate(options?: { interactive?: boolean }): Promise<MindooDBAppEmbedValidation>;
+  /**
+   * Saving with the host's checks: `validate`, then `flush` (write the pending
+   * changes; put `context.inspection` into the root's `inspection` field when it is
+   * set), then tells the host it saved. Throws a `MindooDBAppEmbedValidationError`
+   * without calling `flush` when the checks stopped it, after passing the issues to
+   * the `onShowIssues` handler. Works the same standalone, without checks.
+   */
+  save(
+    flush: (context: MindooDBAppEmbeddingSaveContext) => void | Promise<void>,
+    options?: { interactive?: boolean },
+  ): Promise<MindooDBAppEmbedValidation>;
+  /** Shows the host's issues (`embed.showIssues`, and failed saves). Returns the unregister function. */
+  onShowIssues(handler: (issues: MindooDBAppIssue[]) => void | Promise<void>): () => void;
+  /** Scrolls to a place in the document (`embed.reveal`). Returns the unregister function. */
+  onReveal(handler: (anchor: MindooDBAppInspectAnchor) => void | Promise<void>): () => void;
+}
+
+/** What `session.embedding.save` hands to `flush`. */
+export interface MindooDBAppEmbeddingSaveContext {
+  /**
+   * The summary of this app's inspection (see `provideInspection`), ready to write as
+   * the root's `inspection` field; null without a provider.
+   */
+  inspection: MindooDBAppAtomicValue | null;
+  /** What the host's checks found but let pass (warnings the user confirmed, infos). */
+  issues: MindooDBAppIssue[];
 }
 
 export interface MindooDBAppEmbeddingLookupOptions {
@@ -2065,12 +2177,27 @@ export interface MindooDBAppEmbeddingLookupResult {
   fields: Record<string, unknown>;
 }
 
-/** Haven → component: the host asked for something (`embed.save()`). */
+/**
+ * Haven → component: the host asked for something (`embed.save()`, `embed.inspect()`,
+ * …). The component answers with `embedding.respond`.
+ */
 export interface MindooDBAppBridgeEmbeddingRequestMessage {
   protocol: "mindoodb-app-bridge";
   kind: "embedding-request";
   requestId: string;
-  request: "save";
+  request: "save" | "inspect" | "showIssues" | "reveal";
+  /** `inspect`: `{ request }`, `showIssues`: `{ issues }`, `reveal`: `{ anchor }`. */
+  params?: Record<string, unknown>;
+}
+
+/** Haven → host: a question about an embed the host has to answer (`embeds.respond`). */
+export interface MindooDBAppBridgeEmbedRequestMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "embed-request";
+  requestId: string;
+  embedId: string;
+  request: "beforeSave";
+  params: { inspection: MindooDBAppInspectionBase | null; root: Record<string, unknown> | null };
 }
 
 /** The component reported whether it has unsaved changes. */
@@ -2086,7 +2213,8 @@ export interface MindooDBAppBridgeEmbedEventMessage {
   event:
     | ({ type: "closed" } & MindooDBAppEmbedClosedEvent)
     | ({ type: "dirty" } & MindooDBAppEmbedDirtyEvent)
-    | ({ type: "agentTools" } & MindooDBAppEmbedAgentToolsEvent);
+    | ({ type: "agentTools" } & MindooDBAppEmbedAgentToolsEvent)
+    | ({ type: "saved" } & MindooDBAppEmbedSavedEvent);
 }
 
 export type MindooDBAppBridgePortMessage =
@@ -2112,6 +2240,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
+  | MindooDBAppBridgeEmbedRequestMessage
   | MindooDBAppBridgeEmbeddingRequestMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
