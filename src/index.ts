@@ -151,3 +151,41 @@ export { createMindooDBTextBuffer, MindooDBTextBuffer } from "./textBuffer";
 export type { CreateMindooDBTextBufferOptions, MindooDBTextBufferFlushResult } from "./textBuffer";
 export { createViewLanguage, queryDocuments } from "./viewLanguage";
 export { inheritDocumentEncryption, watchWordChunks } from "./wordChunks";
+export {
+  MINDOODB_APP_INSPECTION_FIELD,
+  MINDOODB_APP_INSPECTION_MAX_BYTES,
+  MINDOODB_APP_INSPECTION_SUMMARY_MAX_BYTES,
+  MINDOODB_APP_ISSUES_MAX,
+  MINDOODB_INSPECT_DOCUMENT,
+  MINDOODB_INSPECT_SLIDES,
+  MINDOODB_INSPECT_SPREADSHEET,
+  MindooDBAppEmbedValidationError,
+  defineDocumentRules,
+  mindooDBAppComponentSupports,
+  mindooDBAppInspectContracts,
+  mindooDBAppInspectionSummaryValue,
+  mindooDBAppInspectRules,
+  normalizeMindooDBAppInspectAnchor,
+  normalizeMindooDBAppInspection,
+  normalizeMindooDBAppInspectRequest,
+  normalizeMindooDBAppIssues,
+  readMindooDBAppInspectionSummary,
+  summarizeMindooDBAppInspection,
+} from "./inspection";
+export type {
+  MindooDBAppDocumentInspection,
+  MindooDBAppDocumentRule,
+  MindooDBAppDocumentRuleOutcome,
+  MindooDBAppDocumentRules,
+  MindooDBAppEmbeddingResult,
+  MindooDBAppEmbedValidation,
+  MindooDBAppInspectAnchor,
+  MindooDBAppInspectedCell,
+  MindooDBAppInspection,
+  MindooDBAppInspectionBase,
+  MindooDBAppInspectRequest,
+  MindooDBAppIssue,
+  MindooDBAppIssueSeverity,
+  MindooDBAppSlidesInspection,
+  MindooDBAppSpreadsheetInspection,
+} from "./inspection";

@@ -1,5 +1,18 @@
+import {
+  normalizeMindooDBAppInspectAnchor,
+  normalizeMindooDBAppInspection,
+  normalizeMindooDBAppInspectRequest,
+  normalizeMindooDBAppIssues,
+  performMindooDBAppEmbeddingSave,
+  type MindooDBAppEmbedValidation,
+  type MindooDBAppInspectAnchor,
+  type MindooDBAppInspectionBase,
+  type MindooDBAppInspectRequest,
+  type MindooDBAppIssue,
+} from "../inspection";
 import type {
   MindooDBAppBridgeEmbedEventMessage,
+  MindooDBAppBridgeEmbedRequestMessage,
   MindooDBAppBridgeEmbeddingRequestMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppComponentInfo,
@@ -9,7 +22,10 @@ import type {
   MindooDBAppEmbedAccessInput,
   MindooDBAppEmbedAccessResult,
   MindooDBAppEmbedAgentTools,
+  MindooDBAppEmbedBeforeSaveInput,
+  MindooDBAppEmbedBeforeSaveResult,
   MindooDBAppEmbedClosedEvent,
+  MindooDBAppEmbedSavedEvent,
   MindooDBAppEmbeddingApi,
   MindooDBAppEmbeddingLookupOptions,
   MindooDBAppEmbeddingLookupResult,
@@ -21,6 +37,18 @@ import type { PortRpcClient } from "./portRpcClient";
 
 function isEmbedEventMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeEmbedEventMessage {
   return message.kind === "embed-event";
+}
+
+function isEmbedRequestMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeEmbedRequestMessage {
+  return message.kind === "embed-request";
+}
+
+function isMethodNotFound(error: unknown) {
+  return error instanceof Error && error.name === "method-not-found";
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isEmbeddingRequestMessage(
@@ -48,7 +76,12 @@ function containerRect(container: HTMLElement): MindooDBAppEmbedRect {
 interface EmbedOpenResponse {
   embedId: string;
   frame?: { url: string; allow?: string };
+  supports?: string[];
 }
+
+type BeforeSaveHandler = (
+  input: MindooDBAppEmbedBeforeSaveInput,
+) => MindooDBAppEmbedBeforeSaveResult | Promise<MindooDBAppEmbedBeforeSaveResult>;
 
 /**
  * Reports the container's rectangle whenever it may have moved: Haven needs it to
@@ -123,6 +156,8 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
   private tracker: ContainerTracker | null = null;
   private toolsState: MindooDBAppEmbedAgentTools | null = null;
   private readonly toolsListeners = new Set<(tools: MindooDBAppEmbedAgentTools | null) => void>();
+  private beforeSaveHandler: BeforeSaveHandler | null = null;
+  private readonly savedListeners = new Set<(event: MindooDBAppEmbedSavedEvent) => void>();
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -132,6 +167,7 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     public readonly docId: string,
     public readonly frame: HTMLIFrameElement | null,
     container: HTMLElement | undefined,
+    public readonly supports: readonly string[] = [],
   ) {
     this.closed = new Promise((resolve) => {
       this.resolveClosed = resolve;
@@ -235,6 +271,99 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     });
   }
 
+  async inspect<T extends MindooDBAppInspectionBase = MindooDBAppInspectionBase>(request?: MindooDBAppInspectRequest) {
+    const result = await this.rpc.call("embeds.inspect", {
+      embedId: this.embedId,
+      request: normalizeMindooDBAppInspectRequest(request),
+    });
+    return normalizeMindooDBAppInspection(result) as unknown as T;
+  }
+
+  onBeforeSave(handler: BeforeSaveHandler, options?: { inspect?: MindooDBAppInspectRequest }) {
+    this.beforeSaveHandler = handler;
+    this.announceBeforeSave(true, options?.inspect);
+    return () => {
+      if (this.beforeSaveHandler === handler) {
+        this.beforeSaveHandler = null;
+        this.announceBeforeSave(false);
+      }
+    };
+  }
+
+  /** Haven only asks hosts that said they check, and fetches the inspection they want. */
+  private announceBeforeSave(enabled: boolean, inspect?: MindooDBAppInspectRequest) {
+    if (this.closedEvent) {
+      return;
+    }
+    void this.rpc
+      .call("embeds.setBeforeSave", {
+        embedId: this.embedId,
+        enabled,
+        ...(enabled ? { inspect: normalizeMindooDBAppInspectRequest(inspect) } : {}),
+      })
+      .catch((error: unknown) => {
+        if (!isMethodNotFound(error)) {
+          console.warn("[mindoodb-app-sdk] Could not register the save check.", error);
+        }
+      });
+  }
+
+  /** Haven asks before the component saves: run the handler, never longer than Haven waits. */
+  async answerBeforeSave(params: MindooDBAppBridgeEmbedRequestMessage["params"]) {
+    const handler = this.beforeSaveHandler;
+    if (!handler || this.closedEvent) {
+      return { issues: [] };
+    }
+    const result = await handler({
+      embedId: this.embedId,
+      inspection: params?.inspection ?? null,
+      root: params?.root ?? null,
+    });
+    return { issues: normalizeMindooDBAppIssues(result?.issues) };
+  }
+
+  onAfterSave(listener: (event: MindooDBAppEmbedSavedEvent) => void) {
+    this.savedListeners.add(listener);
+    return () => {
+      this.savedListeners.delete(listener);
+    };
+  }
+
+  /** The component reported that it saved. */
+  notifySaved() {
+    if (this.closedEvent) {
+      return;
+    }
+    const event = { embedId: this.embedId };
+    this.savedListeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error("MindooDB embed saved listener failed.", error);
+      }
+    });
+  }
+
+  async showIssues(issues: MindooDBAppIssue[]) {
+    await this.rpc.call("embeds.showIssues", { embedId: this.embedId, issues: normalizeMindooDBAppIssues(issues) });
+  }
+
+  async reveal(anchor: MindooDBAppInspectAnchor) {
+    const normalized = normalizeMindooDBAppInspectAnchor(anchor);
+    if (!normalized) {
+      throw new Error("Invalid anchor.");
+    }
+    await this.rpc.call("embeds.reveal", { embedId: this.embedId, anchor: normalized });
+  }
+
+  async callTool(name: string, input?: Record<string, unknown>) {
+    return await this.rpc.call("embeds.callTool", {
+      embedId: this.embedId,
+      name: String(name),
+      input: input === undefined ? {} : (JSON.parse(JSON.stringify(input)) as Record<string, unknown>),
+    });
+  }
+
   async setRect(rect: MindooDBAppEmbedRect) {
     if (this.closedEvent) {
       return;
@@ -294,6 +423,8 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     });
     this.listeners.clear();
     this.dirtyListeners.clear();
+    this.savedListeners.clear();
+    this.beforeSaveHandler = null;
     this.toolsState = null;
     this.toolsListeners.forEach((listener) => {
       try {
@@ -327,11 +458,20 @@ export class MindooDBAppEmbedsClient {
   private readonly stopListening: () => void;
   /** This app as a component: what to do when its host asks it to save. */
   private saveHandler: (() => void | Promise<void>) | null = null;
+  private inspectionProvider:
+    | ((request: MindooDBAppInspectRequest) => MindooDBAppInspectionBase | Promise<MindooDBAppInspectionBase>)
+    | null = null;
+  private showIssuesHandler: ((issues: MindooDBAppIssue[]) => void | Promise<void>) | null = null;
+  private revealHandler: ((anchor: MindooDBAppInspectAnchor) => void | Promise<void>) | null = null;
 
   constructor(private readonly rpc: PortRpcClient) {
     this.stopListening = this.rpc.addMessageListener((message) => {
       if (isEmbeddingRequestMessage(message)) {
         void this.answerRequest(message);
+        return;
+      }
+      if (isEmbedRequestMessage(message)) {
+        void this.answerEmbedRequest(message);
         return;
       }
       if (!isEmbedEventMessage(message)) {
@@ -355,6 +495,10 @@ export class MindooDBAppEmbedsClient {
         } else {
           this.earlyTools.set(embedId, agentTools ?? null);
         }
+        return;
+      }
+      if (message.event?.type === "saved") {
+        this.open.get(message.event.embedId)?.notifySaved();
         return;
       }
       if (message.event?.type !== "closed") {
@@ -398,6 +542,7 @@ export class MindooDBAppEmbedsClient {
           input.docId,
           frame,
           container,
+          Array.isArray(response.supports) ? response.supports.filter((entry) => typeof entry === "string") : [],
         );
         const earlyDirty = this.earlyDirty.get(embed.embedId);
         if (earlyDirty !== undefined) {
@@ -475,26 +620,119 @@ export class MindooDBAppEmbedsClient {
           }
         };
       },
+      provideInspection: (provider) => {
+        this.inspectionProvider = provider;
+        return () => {
+          if (this.inspectionProvider === provider) {
+            this.inspectionProvider = null;
+          }
+        };
+      },
+      onShowIssues: (handler) => {
+        this.showIssuesHandler = handler;
+        return () => {
+          if (this.showIssuesHandler === handler) {
+            this.showIssuesHandler = null;
+          }
+        };
+      },
+      onReveal: (handler) => {
+        this.revealHandler = handler;
+        return () => {
+          if (this.revealHandler === handler) {
+            this.revealHandler = null;
+          }
+        };
+      },
+      validate: async (options) => await this.validate(options),
+      save: async (flush, options) =>
+        await performMindooDBAppEmbeddingSave({
+          validate: () => this.validate(options),
+          provider: this.inspectionProvider,
+          showIssues: this.showIssuesHandler,
+          flush,
+          // Only news for the host: a lost message must not fail a save that happened.
+          saved: () => this.rpc.call("embedding.saved", {}).then(
+            () => {},
+            () => {},
+          ),
+        }),
     };
   }
 
-  /** Runs the save handler and tells Haven how it went; Haven answers the host. */
+  /** `embedding.validate`; ok when Haven cannot check (not embedded, older Haven). */
+  private async validate(options?: { interactive?: boolean }): Promise<MindooDBAppEmbedValidation> {
+    try {
+      const result = (await this.rpc.call("embedding.validate", {
+        interactive: options?.interactive !== false,
+      })) as Partial<MindooDBAppEmbedValidation> | null;
+      return {
+        ok: result?.ok !== false,
+        issues: normalizeMindooDBAppIssues(result?.issues),
+        ...(result?.timedOut ? { timedOut: true } : {}),
+      };
+    } catch (error) {
+      if (isMethodNotFound(error) || (error instanceof Error && error.name === "unsupported")) {
+        return { ok: true, issues: [] };
+      }
+      throw error;
+    }
+  }
+
+  /** Runs the matching handler and tells Haven how it went; Haven answers the host. */
   private async answerRequest(message: MindooDBAppBridgeEmbeddingRequestMessage) {
-    let response: { ok: boolean; error?: string };
-    if (message.request !== "save" || !this.saveHandler) {
-      response = { ok: false, error: "unsupported" };
-    } else {
-      try {
+    let response: { ok: boolean; error?: string; result?: unknown };
+    try {
+      const params = message.params ?? {};
+      if (message.request === "save" && this.saveHandler) {
         await this.saveHandler();
         response = { ok: true };
-      } catch (error) {
-        response = { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } else if (message.request === "inspect" && this.inspectionProvider) {
+        const inspection = await this.inspectionProvider(normalizeMindooDBAppInspectRequest(params.request));
+        response = { ok: true, result: normalizeMindooDBAppInspection(inspection) };
+      } else if (message.request === "showIssues" && this.showIssuesHandler) {
+        await this.showIssuesHandler(normalizeMindooDBAppIssues(params.issues));
+        response = { ok: true };
+      } else if (message.request === "reveal" && this.revealHandler) {
+        const anchor = normalizeMindooDBAppInspectAnchor(params.anchor);
+        if (!anchor) {
+          throw new Error("Invalid anchor.");
+        }
+        await this.revealHandler(anchor);
+        response = { ok: true };
+      } else {
+        response = { ok: false, error: "unsupported" };
       }
+    } catch (error) {
+      response = { ok: false, error: errorMessage(error) };
     }
     try {
       await this.rpc.call("embedding.respond", { requestId: message.requestId, ...response });
     } catch (error) {
       console.warn("[mindoodb-app-sdk] Could not answer the host's request.", error);
+    }
+  }
+
+  /** This app as a host: Haven asks before one of its components saves. */
+  private async answerEmbedRequest(message: MindooDBAppBridgeEmbedRequestMessage) {
+    let response: { ok: boolean; error?: string; result?: unknown };
+    const embed = this.open.get(message.embedId);
+    try {
+      response =
+        message.request === "beforeSave"
+          ? { ok: true, result: embed ? await embed.answerBeforeSave(message.params) : { issues: [] } }
+          : { ok: false, error: "unsupported" };
+    } catch (error) {
+      // A failing check must not lose the user's work silently: say so, as a warning.
+      response = {
+        ok: true,
+        result: { issues: [{ severity: "warning", message: `The check failed: ${errorMessage(error)}`, code: "check-failed" }] },
+      };
+    }
+    try {
+      await this.rpc.call("embeds.respond", { requestId: message.requestId, ...response });
+    } catch (error) {
+      console.warn("[mindoodb-app-sdk] Could not answer Haven's request.", error);
     }
   }
 
