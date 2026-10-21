@@ -141,6 +141,7 @@ interface MindooDBAppLaunchContext {
   runtime: "iframe" | "window";
   theme: { mode: "light" | "dark"; preset: string };
   viewport: { width: number; height: number } | null;
+  locale: string; // Haven's UI language as a BCP-47 tag, e.g. "de"
   tenantId?: string;
   preferredDatabaseId?: string;
   user: { id: string; username: string };
@@ -866,6 +867,33 @@ Requirements and limits worth knowing before you design around this:
 
 There is deliberately no API for decrypting arbitrary data with the user's key. That would be a decryption oracle: doc keys wrapped to the same key are publicly readable in the tenant directory, so an app able to unwrap chosen ciphertext could obtain keys for databases it was never granted.
 
+### Mail accounts
+
+Users connect their mail, calendar and contacts accounts once, in Haven's settings: Microsoft 365 / Outlook.com, any JMAP server (Fastmail, Stalwart, a MindooMail bridge), or a CalDAV/CardDAV server (Nextcloud, GMX, iCloud). Haven keeps the credentials and signs in itself. Your app never sees a password or token; it asks for access, gets account ids, and speaks [JMAP](https://jmap.io) to Haven. Haven translates to Microsoft Graph where needed.
+
+```ts
+const result = await session.accounts.request({
+  scopes: ["mail.read", "mail.send", "calendar.read"],
+  reason: "To show your inbox and send replies",
+});
+if (!result.ok) {
+  return; // declined, or a Haven without accounts ("unsupported")
+}
+const [account] = result.accounts;
+
+const jmapSession = await session.accounts.jmapSession(account.id);
+const mailAccountId = jmapSession.primaryAccounts["urn:ietf:params:jmap:mail"];
+const reply = await session.accounts.jmap(account.id, {
+  using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+  methodCalls: [["Mailbox/get", { accountId: mailAccountId, ids: null }, "m"]],
+});
+```
+
+- The user grants scopes per app and account: `mail.read`, `mail.write` (move, flag, delete), `mail.send` (create the message to send and submit it), `calendar.read`, `calendar.write`, `contacts.read`, `contacts.write`. An app that may read but not send gets `["error", { type: "forbidden" }, id]` for `EmailSubmission/set`, like any other JMAP method error.
+- `accounts.request()` always shows the dialog, so a user can add a second account. `accounts.list()` returns the accounts this app already holds, so a later launch needs no dialog. `accounts.release(id)` gives one up.
+- Attachments: `accounts.uploadBlob(id, { name, type, data })` returns a `blobId` to reference in `Email/set`; `accounts.downloadBlob(id, { blobId })` returns the bytes. 25 MB per file.
+- Outside Haven, or in a Haven without accounts, `request` resolves to `{ ok: false, reason: "unsupported" }`. In tests, pass `accounts` (and optionally `accountRequest`) to `createMockMindooDBAppSession`.
+
 ### Signing PDFs with a certificate
 
 `session.pdf.sign` signs finished PDF bytes with an X.509 certificate the user picks in Haven, as a PAdES signature that Adobe Acrobat and other readers list as a digital signature. Haven asks for a PKCS#12 file (`.p12`/`.pfx`) and its password, shows holder, issuer and validity, signs, and hands back the signed bytes. The certificate file, the password and the private key never reach your app, and Haven keeps none of them after the dialog: the user chooses the certificate again for every signature.
@@ -920,6 +948,17 @@ const stopViewport = session.onViewportChange((viewport) => {
 ```
 
 Both subscription functions return an unsubscribe callback. Call it during teardown.
+
+### Language
+
+`ctx.locale` is Haven's UI language as a BCP-47 tag; `session.onLocaleChange` reports when the user switches it. Map the tag to the app's languages (`de-AT` → `de`, `nb-NO` and the legacy `no` → `nb`, anything unknown → `en`), set `document.documentElement.lang`, and format dates and numbers with `Intl` in that locale:
+
+```ts
+applyLocale(ctx.locale);
+const stopLocale = session.onLocaleChange(applyLocale);
+```
+
+Haven's UI comes in en, de, es, fr, it, nb, nl and pl. **Ship every user-facing string in all of them** — labels, buttons, placeholders, empty states, errors, `aria-label`s, `notify` and `menus` texts, and the `listing` texts in `haven-app.json` — never only English, or English and German. An app built on a library with more languages ships all of those. Make a gap impossible to merge: type the string tables (`satisfies Record<Locale, Messages>` with `Messages` derived from the English table) or test that every locale file has the English keys and placeholders. An English fallback is for locales Haven does not offer, not for strings nobody translated. Use the terms Haven's own UI uses in each language and its form of address: German *du*, Spanish *tú*, French *vous*, Italian *tu*, Norwegian *du*, Dutch *je*, Polish informal.
 
 ### Documents
 
@@ -2339,6 +2378,13 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openSealedChannel(input)`            | `Promise<MindooDBAppSealedChannelOpenResult>` |
 | `sealedChannelRequest(input)`         | `Promise<T>`                         |
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
+| `accounts.list()`                     | `Promise<MindooDBAppAccountSummary[]>` |
+| `accounts.request(input)`             | `Promise<MindooDBAppAccountRequestResult>` |
+| `accounts.release(accountId)`         | `Promise<void>`                      |
+| `accounts.jmapSession(accountId)`     | `Promise<MindooDBAppJmapSession>`    |
+| `accounts.jmap(accountId, request)`   | `Promise<MindooDBAppJmapResponse>`   |
+| `accounts.uploadBlob(accountId, input)` | `Promise<{ blobId; type; size }>`  |
+| `accounts.downloadBlob(accountId, input)` | `Promise<{ name; type; data }>`  |
 | `menus.show(input)`                   | `Promise<MindooDBAppShowMenuResult>` |
 | `menus.hide()`                        | `Promise<void>`                      |
 | `requestHostFocus()`                  | `Promise<void>`                      |
@@ -2360,6 +2406,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
 | `onViewportChange(listener)`          | `() => void` (unsubscribe)           |
+| `onLocaleChange(listener)`            | `() => void` (unsubscribe)           |
 | `onBeforeClose(listener)`             | `() => void` (unsubscribe)           |
 | `disconnect()`                        | `Promise<void>`                      |
 

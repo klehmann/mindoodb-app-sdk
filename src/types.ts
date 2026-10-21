@@ -1758,6 +1758,158 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
   reminder: MindooDBAppReminderOpened;
 }
 
+/**
+ * Kind of a mail account the user connected in Haven. `jmap`: a JMAP server
+ * (Fastmail, Stalwart, a MindooMail bridge). `microsoft`: Microsoft 365 or
+ * Outlook.com through Microsoft Graph. `server`: a classic account on
+ * standard protocols, today CalDAV and CardDAV (IMAP/SMTP to follow). Haven
+ * translates every kind to JMAP, so an app speaks JMAP to all of them.
+ */
+export type MindooDBAppAccountKind = "jmap" | "microsoft" | "server";
+
+/** Part of an account an app can use. */
+export type MindooDBAppAccountService = "mail" | "calendar" | "contacts";
+
+/**
+ * What an app may do with an account; the user grants these per app and
+ * account. `mail.send` covers creating the message to send and the
+ * submission, not editing or deleting other mail (`mail.write`).
+ */
+export type MindooDBAppAccountScope =
+  | "mail.read"
+  | "mail.write"
+  | "mail.send"
+  | "calendar.read"
+  | "calendar.write"
+  | "contacts.read"
+  | "contacts.write";
+
+export const MINDOODB_APP_ACCOUNT_SCOPES: readonly MindooDBAppAccountScope[] = [
+  "mail.read",
+  "mail.write",
+  "mail.send",
+  "calendar.read",
+  "calendar.write",
+  "contacts.read",
+  "contacts.write",
+];
+
+/** An account this app may use, as {@link MindooDBAppAccountsApi.list} returns it. */
+export interface MindooDBAppAccountSummary {
+  /** Opaque, stable id; pass it to the other `session.accounts` calls. */
+  id: string;
+  kind: MindooDBAppAccountKind;
+  /** The user's name for the account, e.g. "Work". */
+  label: string;
+  /** The account's mail address, when Haven knows it. */
+  address: string;
+  /** What the user granted this app. */
+  scopes: MindooDBAppAccountScope[];
+  /** What the account offers on this device. */
+  services: MindooDBAppAccountService[];
+}
+
+/** Ask the user for access to one or more accounts. */
+export interface MindooDBAppAccountRequestInput {
+  /** What the app needs. The user sees the list and grants it as a whole. */
+  scopes: MindooDBAppAccountScope[];
+  /** Let the user pick several accounts. Default `false`. */
+  multiple?: boolean;
+  /** Offer only these kinds. Default: every kind. */
+  kinds?: MindooDBAppAccountKind[];
+  /** One sentence the dialog shows, e.g. "To sync your inbox". Max. 200 characters. */
+  reason?: string;
+}
+
+/**
+ * Outcome of {@link MindooDBAppAccountsApi.request}. `declined`: the user
+ * closed the dialog; `unsupported`: this Haven has no accounts.
+ */
+export type MindooDBAppAccountRequestResult =
+  | { ok: true; accounts: MindooDBAppAccountSummary[] }
+  | { ok: false; reason: "declined" | "unsupported" };
+
+export type MindooDBAppJmapMethodCall = [string, Record<string, unknown>, string];
+export type MindooDBAppJmapMethodResponse = [string, Record<string, unknown>, string];
+
+/** A JMAP API request (RFC 8620 §3.3). */
+export interface MindooDBAppJmapRequest {
+  using: string[];
+  methodCalls: MindooDBAppJmapMethodCall[];
+}
+
+/**
+ * A JMAP API response. A method the app's grant does not cover comes back as
+ * `["error", { type: "forbidden", ... }, id]`, like any other method error.
+ */
+export interface MindooDBAppJmapResponse {
+  methodResponses: MindooDBAppJmapMethodResponse[];
+  sessionState?: string;
+}
+
+/**
+ * The JMAP session of an account (RFC 8620 §2), without URLs: requests go
+ * through {@link MindooDBAppAccountsApi.jmap}, not over the network.
+ */
+export interface MindooDBAppJmapSession {
+  username: string;
+  capabilities: Record<string, unknown>;
+  accounts: Record<string, { name: string; isPersonal?: boolean; accountCapabilities: Record<string, unknown> }>;
+  primaryAccounts: Record<string, string>;
+  state?: string;
+}
+
+export interface MindooDBAppAccountBlobUpload {
+  /** File name for the attachment. */
+  name: string;
+  /** MIME type, e.g. `application/pdf`. */
+  type: string;
+  /** Max. 25 MB. */
+  data: Uint8Array;
+}
+
+export interface MindooDBAppAccountBlobDownload {
+  blobId: string;
+  name?: string;
+  type?: string;
+}
+
+/**
+ * `session.accounts`: mail, calendar and contacts accounts the user connected
+ * in Haven.
+ *
+ * Haven keeps the credentials and signs in to the provider; the app only ever
+ * sees account ids and speaks JMAP. Each app gets only what the user granted it
+ * for each account, enforced per JMAP method.
+ */
+export interface MindooDBAppAccountsApi {
+  /** Accounts this app may use, with the scopes granted. Empty until the user grants one. */
+  list(): Promise<MindooDBAppAccountSummary[]>;
+  /**
+   * Shows Haven's account dialog: the user picks accounts (or connects a new
+   * one) and grants `scopes` to this app. It always asks, so an app can let
+   * the user add a second account; use {@link list} at startup for the
+   * accounts it already holds.
+   */
+  request(input: MindooDBAppAccountRequestInput): Promise<MindooDBAppAccountRequestResult>;
+  /** Gives up this app's access to an account. Idempotent. */
+  release(accountId: string): Promise<void>;
+  /** The account's JMAP session: capabilities and account ids for method calls. */
+  jmapSession(accountId: string): Promise<MindooDBAppJmapSession>;
+  /** One JMAP API request against the account. */
+  jmap(accountId: string, request: MindooDBAppJmapRequest): Promise<MindooDBAppJmapResponse>;
+  /** Uploads an attachment for a message to send; reference `blobId` in `Email/set`. */
+  uploadBlob(
+    accountId: string,
+    input: MindooDBAppAccountBlobUpload,
+  ): Promise<{ blobId: string; type: string; size: number }>;
+  /** Downloads an attachment by the `blobId` from `Email/get`. */
+  downloadBlob(
+    accountId: string,
+    input: MindooDBAppAccountBlobDownload,
+  ): Promise<{ name: string; type: string; data: Uint8Array }>;
+}
+
 /** Corner of the page for a visible signature stamp, as the viewer displays the page. */
 export type MindooDBAppPdfSignaturePosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
@@ -4228,6 +4380,11 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /**
+   * Mail, calendar and contacts accounts the user connected in Haven, reached
+   * through JMAP. See {@link MindooDBAppAccountsApi}.
+   */
+  accounts: MindooDBAppAccountsApi;
   /** PDF services that need the user, such as signing with a certificate. */
   pdf: MindooDBAppPdfApi;
   /**
