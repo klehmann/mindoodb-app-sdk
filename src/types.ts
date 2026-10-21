@@ -1761,10 +1761,11 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
 /**
  * Kind of a mail account the user connected in Haven. `jmap`: a JMAP server
  * (Fastmail, Stalwart, a MindooMail bridge). `microsoft`: Microsoft 365 or
- * Outlook.com through Microsoft Graph. Haven translates both to JMAP, so an
- * app speaks JMAP to every kind.
+ * Outlook.com through Microsoft Graph. `server`: a classic account on
+ * standard protocols, today CalDAV and CardDAV (IMAP/SMTP to follow). Haven
+ * translates every kind to JMAP, so an app speaks JMAP to all of them.
  */
-export type MindooDBAppAccountKind = "jmap" | "microsoft";
+export type MindooDBAppAccountKind = "jmap" | "microsoft" | "server";
 
 /** Part of an account an app can use. */
 export type MindooDBAppAccountService = "mail" | "calendar" | "contacts";
