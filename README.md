@@ -2378,6 +2378,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openSealedChannel(input)`            | `Promise<MindooDBAppSealedChannelOpenResult>` |
 | `sealedChannelRequest(input)`         | `Promise<T>`                         |
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
+| `getDevice()`                         | `Promise<MindooDBAppDeviceInfo \| null>` |
 | `accounts.list()`                     | `Promise<MindooDBAppAccountSummary[]>` |
 | `accounts.request(input)`             | `Promise<MindooDBAppAccountRequestResult>` |
 | `accounts.release(accountId)`         | `Promise<void>`                      |

@@ -120,6 +120,7 @@ import type {
   MindooDBAppHostShortcutBinding,
   MindooDBAppNotifyInput,
   MindooDBAppNotifyResult,
+  MindooDBAppDeviceInfo,
 } from "../types";
 import { pageUsers } from "../directoryPaging";
 import { installHostFocusCapture } from "../hostFocus";
@@ -1784,6 +1785,18 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Returns the product names currently licensed in the Haven host. */
   async getLicensedProducts(): Promise<string[]> {
     return await this.rpc.call("session.getLicensedProducts", {});
+  }
+
+  async getDevice(): Promise<MindooDBAppDeviceInfo | null> {
+    try {
+      return await this.rpc.call<MindooDBAppDeviceInfo>("session.getDevice", {});
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "method-not-found" || code === "unsupported") {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
