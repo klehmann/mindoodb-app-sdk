@@ -40,6 +40,12 @@ import type {
   MindooDBAppIncomingContentHandler,
   MindooDBAppPdfSignInput,
   MindooDBAppPdfSignResult,
+  MindooDBAppAccountRequestInput,
+  MindooDBAppAccountScope,
+  MindooDBAppAccountSummary,
+  MindooDBAppJmapRequest,
+  MindooDBAppJmapResponse,
+  MindooDBAppJmapSession,
   MindooDBAppReminder,
   MindooDBAppReminderOpened,
   MindooDBAppReminderOpenedHandler,
@@ -3904,6 +3910,8 @@ type MockSessionState = {
   getDragProfile: () => MindooDBAppDragProfile | null;
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
   listReminders: () => MindooDBAppReminder[];
+  getAccountRequests: () => MindooDBAppAccountRequestInput[];
+  getAccountGrants: () => Record<string, MindooDBAppAccountScope[]>;
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
@@ -3947,6 +3955,16 @@ function createMockSessionState(
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const mockReminders = new Map<string, MindooDBAppReminder>();
+  const mockAccounts = new Map((options.accounts ?? []).map((account) => [account.id, account]));
+  const accountGrants = new Map<string, MindooDBAppAccountScope[]>();
+  const accountRequests: MindooDBAppAccountRequestInput[] = [];
+  function grantedMockAccount(accountId: string): MockMailAccount {
+    const account = mockAccounts.get(accountId);
+    if (!account || !accountGrants.has(accountId)) {
+      throw mockAccountError("forbidden", "This app has no access to that account.");
+    }
+    return account;
+  }
   const pdfSignRequests: MindooDBAppPdfSignInput[] = [];
   let pdfSignOutcome: MockPdfSignOutcome = "signed";
   let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
@@ -4333,6 +4351,62 @@ function createMockSessionState(
         }
       };
     },
+    accounts: {
+      async list() {
+        return [...accountGrants.entries()].flatMap(([id, scopes]) => {
+          const account = mockAccounts.get(id);
+          return account ? [mockAccountSummary(account, scopes)] : [];
+        });
+      },
+      async request(input) {
+        accountRequests.push({ ...input, scopes: [...input.scopes] });
+        const offered = [...mockAccounts.values()].filter((account) => !input.kinds || input.kinds.includes(account.kind));
+        if (offered.length === 0 && mockAccounts.size === 0) {
+          return { ok: false, reason: "unsupported" };
+        }
+        const chosen = options.accountRequest
+          ? options.accountRequest(input, offered)
+          : (input.multiple ? offered : offered.slice(0, 1)).map((account) => account.id);
+        if (!chosen || chosen.length === 0) {
+          return { ok: false, reason: "declined" };
+        }
+        const granted: MindooDBAppAccountSummary[] = [];
+        for (const id of chosen) {
+          const account = mockAccounts.get(id);
+          if (!account) {
+            continue;
+          }
+          const scopes = [...new Set([...(accountGrants.get(id) ?? []), ...input.scopes])];
+          accountGrants.set(id, scopes);
+          granted.push(mockAccountSummary(account, scopes));
+        }
+        return { ok: true, accounts: granted };
+      },
+      async release(accountId) {
+        accountGrants.delete(accountId);
+      },
+      async jmapSession(accountId) {
+        return grantedMockAccount(accountId).session();
+      },
+      async jmap(accountId, request) {
+        const account = grantedMockAccount(accountId);
+        return await account.jmap(request, accountGrants.get(accountId) ?? []);
+      },
+      async uploadBlob(accountId, input) {
+        const account = grantedMockAccount(accountId);
+        if (!account.uploadBlob) {
+          throw mockAccountError("unsupported", "This mock account cannot take attachments.");
+        }
+        return await account.uploadBlob(input);
+      },
+      async downloadBlob(accountId, input) {
+        const account = grantedMockAccount(accountId);
+        if (!account.downloadBlob) {
+          throw mockAccountError("not-found", `Unknown blob ${input.blobId}`);
+        }
+        return await account.downloadBlob(input);
+      },
+    },
     reminders: {
       async schedule(request) {
         const at = request.at instanceof Date ? request.at.getTime() : request.at;
@@ -4489,6 +4563,12 @@ function createMockSessionState(
     listReminders() {
       return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
     },
+    getAccountRequests() {
+      return accountRequests.map((request) => ({ ...request, scopes: [...request.scopes] }));
+    },
+    getAccountGrants() {
+      return Object.fromEntries([...accountGrants.entries()].map(([id, scopes]) => [id, [...scopes]]));
+    },
     getPdfSignRequests() {
       return pdfSignRequests.map((request) => ({ ...request }));
     },
@@ -4644,6 +4724,40 @@ export interface MockSealedChannelOptions {
   }) => MaybePromise<unknown>;
 }
 
+/** A mail account for `session.accounts` in tests. */
+export interface MockMailAccount {
+  id: string;
+  kind: MindooDBAppAccountSummary["kind"];
+  label: string;
+  address: string;
+  services: MindooDBAppAccountSummary["services"];
+  /** The JMAP session `accounts.jmapSession` returns. */
+  session(): MindooDBAppJmapSession;
+  /**
+   * Answers `accounts.jmap`. Gets the scopes this app holds, so a test can answer
+   * like Haven does when a method is not covered (`forbidden`).
+   */
+  jmap(request: MindooDBAppJmapRequest, scopes: MindooDBAppAccountScope[]): MaybePromise<MindooDBAppJmapResponse>;
+  uploadBlob?(input: { name: string; type: string; data: Uint8Array }): MaybePromise<{ blobId: string; type: string; size: number }>;
+  downloadBlob?(input: { blobId: string; name?: string; type?: string }): MaybePromise<{ name: string; type: string; data: Uint8Array }>;
+}
+
+/** Rejects like Haven's bridge errors: `code` (and `name`) carry the reason. */
+function mockAccountError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { name: code, code });
+}
+
+function mockAccountSummary(account: MockMailAccount, scopes: MindooDBAppAccountScope[]): MindooDBAppAccountSummary {
+  return {
+    id: account.id,
+    kind: account.kind,
+    label: account.label,
+    address: account.address,
+    scopes: [...scopes],
+    services: [...account.services],
+  };
+}
+
 export interface CreateMockMindooDBAppSessionOptions {
   launchContext?: Partial<MindooDBAppLaunchContext>;
   databases?: MockMindooDBAppDatabaseDefinition[];
@@ -4693,6 +4807,16 @@ export interface CreateMockMindooDBAppSessionOptions {
   embedInspection?: MockEmbedHostOptions["embedInspection"];
   /** Plays the components for `embed.callTool`. */
   embedTools?: MockEmbedHostOptions["embedTools"];
+  /**
+   * Mail accounts the user has connected in Haven, for `session.accounts`. None are
+   * granted at the start; `accounts.request` grants them (see `accountRequest`).
+   */
+  accounts?: MockMailAccount[];
+  /**
+   * Plays the user in Haven's account dialog: the account ids to grant, or `null` to
+   * decline. Default: the first offered account (all of them with `multiple`).
+   */
+  accountRequest?: (input: MindooDBAppAccountRequestInput, offered: MockMailAccount[]) => string[] | null;
   /** Plays the components for `embed.export`. */
   embedExport?: MockEmbedHostOptions["embedExport"];
   /** For an app under test that runs as a component: the host's variables at start. */
@@ -4780,6 +4904,10 @@ export interface MockMindooDBAppSessionController {
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
   /** Reminders the app scheduled (`session.reminders.schedule`) that were not tapped or cancelled. */
   listReminders(): MindooDBAppReminder[];
+  /** Every `session.accounts.request` input so far, oldest first. */
+  getAccountRequests(): MindooDBAppAccountRequestInput[];
+  /** Account id → scopes this app holds, as `accounts.request` granted them. */
+  getAccountGrants(): Record<string, MindooDBAppAccountScope[]>;
   /**
    * As if the user tapped this reminder (`"open"`) or pressed "Done": delivered
    * to `session.reminders.onOpened` (held until registered).
@@ -5019,6 +5147,8 @@ export function createMockMindooDBAppSession(
     getDragProfile: state.getDragProfile,
     emitIncomingContent: state.emitIncomingContent,
     listReminders: state.listReminders,
+    getAccountRequests: state.getAccountRequests,
+    getAccountGrants: state.getAccountGrants,
     emitReminderOpened: state.emitReminderOpened,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
