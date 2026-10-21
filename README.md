@@ -890,7 +890,7 @@ const reply = await session.accounts.jmap(account.id, {
 ```
 
 - The user grants scopes per app and account: `mail.read`, `mail.write` (move, flag, delete), `mail.send` (create the message to send and submit it), `calendar.read`, `calendar.write`, `contacts.read`, `contacts.write`. An app that may read but not send gets `["error", { type: "forbidden" }, id]` for `EmailSubmission/set`, like any other JMAP method error.
-- `accounts.list()` returns the accounts this app already holds, so a later launch needs no dialog. `accounts.release(id)` gives one up.
+- `accounts.request()` always shows the dialog, so a user can add a second account. `accounts.list()` returns the accounts this app already holds, so a later launch needs no dialog. `accounts.release(id)` gives one up.
 - Attachments: `accounts.uploadBlob(id, { name, type, data })` returns a `blobId` to reference in `Email/set`; `accounts.downloadBlob(id, { blobId })` returns the bytes. 25 MB per file.
 - Outside Haven, or in a Haven without accounts, `request` resolves to `{ ok: false, reason: "unsupported" }`. In tests, pass `accounts` (and optionally `accountRequest`) to `createMockMindooDBAppSession`.
 

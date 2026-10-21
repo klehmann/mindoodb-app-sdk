@@ -1886,8 +1886,9 @@ export interface MindooDBAppAccountsApi {
   list(): Promise<MindooDBAppAccountSummary[]>;
   /**
    * Shows Haven's account dialog: the user picks accounts (or connects a new
-   * one) and grants `scopes` to this app. Accounts already granted with these
-   * scopes come back without a dialog.
+   * one) and grants `scopes` to this app. It always asks, so an app can let
+   * the user add a second account; use {@link list} at startup for the
+   * accounts it already holds.
    */
   request(input: MindooDBAppAccountRequestInput): Promise<MindooDBAppAccountRequestResult>;
   /** Gives up this app's access to an account. Idempotent. */
