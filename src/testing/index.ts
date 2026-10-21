@@ -46,6 +46,7 @@ import type {
   MindooDBAppJmapRequest,
   MindooDBAppJmapResponse,
   MindooDBAppJmapSession,
+  MindooDBAppDeviceInfo,
   MindooDBAppReminder,
   MindooDBAppReminderOpened,
   MindooDBAppReminderOpenedHandler,
@@ -3890,6 +3891,7 @@ type MockSessionState = {
     options?: MockRemoteUpdateOptions,
   ) => Promise<MindooDBAppDocument>;
   getLicensedProducts: () => string[];
+  getDevice: () => MindooDBAppDeviceInfo;
   proposedApps: MindooDBAppProposeAppInput[];
   createViewNavigator: (
     input: MindooDBAppCreateViewNavigatorInput,
@@ -3955,6 +3957,11 @@ function createMockSessionState(
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const mockReminders = new Map<string, MindooDBAppReminder>();
+  const mockDevice: MindooDBAppDeviceInfo = options.device ?? {
+    id: "mock-device",
+    label: "Test device",
+    platform: "browser",
+  };
   const mockAccounts = new Map((options.accounts ?? []).map((account) => [account.id, account]));
   const accountGrants = new Map<string, MindooDBAppAccountScope[]>();
   const accountRequests: MindooDBAppAccountRequestInput[] = [];
@@ -4209,6 +4216,9 @@ function createMockSessionState(
     },
     async getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
+    },
+    async getDevice() {
+      return { ...mockDevice };
     },
     async proposeApp(input) {
       proposedApps.push({ ...input });
@@ -4538,6 +4548,9 @@ function createMockSessionState(
     getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
     },
+    getDevice() {
+      return { ...mockDevice };
+    },
     proposedApps,
     createViewNavigator: session.createViewNavigator,
     openViewNavigator: session.openViewNavigator,
@@ -4807,6 +4820,8 @@ export interface CreateMockMindooDBAppSessionOptions {
   embedInspection?: MockEmbedHostOptions["embedInspection"];
   /** Plays the components for `embed.callTool`. */
   embedTools?: MockEmbedHostOptions["embedTools"];
+  /** What `session.getDevice` returns; two mocks with different ids play two devices. */
+  device?: MindooDBAppDeviceInfo;
   /**
    * Mail accounts the user has connected in Haven, for `session.accounts`. None are
    * granted at the start; `accounts.request` grants them (see `accountRequest`).
@@ -5606,6 +5621,8 @@ export function createFakeBridgeHost(
         return state.getLaunchContext();
       case "session.getLicensedProducts":
         return state.getLicensedProducts();
+      case "session.getDevice":
+        return state.getDevice();
       case "session.listDatabases":
         return state.listDatabaseInfos();
       case "session.listDocumentsSinceViewCursor":

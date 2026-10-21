@@ -4227,6 +4227,24 @@ export type MindooDBAppProposeAppResult =
       message?: string;
     };
 
+/**
+ * The Haven installation this app runs in, from {@link MindooDBAppSession.getDevice}.
+ *
+ * Lets an app tell its devices apart, e.g. to let only the device where the
+ * user pressed "Send" send a queued message.
+ */
+export interface MindooDBAppDeviceInfo {
+  /**
+   * Stable for this app on this Haven installation; another app sees a
+   * different id for the same device, and a restored backup gets a new one.
+   * Not a secret.
+   */
+  id: string;
+  /** For people, e.g. "Haven Desktop (macOS)". Not unique. */
+  label: string;
+  platform: "browser" | "desktop" | "ios" | "android";
+}
+
 /** Connected session between the running app and the Haven host. */
 export interface MindooDBAppSession {
   /**
@@ -4262,6 +4280,11 @@ export interface MindooDBAppSession {
    * that gate features on licensing.
    */
   getLicensedProducts(): Promise<string[]>;
+  /**
+   * This Haven installation, as seen by this app. `null` on hosts that do
+   * not provide it.
+   */
+  getDevice(): Promise<MindooDBAppDeviceInfo | null>;
   /**
    * The databases visible to this app together with their granted
    * capabilities. Same data as `launchContext.databases`, re-fetched from
