@@ -71,6 +71,7 @@ import type {
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
+  MindooDBAppOpenDatabaseOptions,
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
   MindooDBAppSummarySetup,
@@ -1813,9 +1814,24 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   }
 
   /** Opens one database binding and returns a client facade for it. */
-  async openDatabase(databaseId: string): Promise<MindooDBAppDatabase> {
-    await this.rpc.call("session.openDatabase", { databaseId });
-    return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
+  async openDatabase(databaseId: string, options?: MindooDBAppOpenDatabaseOptions): Promise<MindooDBAppDatabase> {
+    const cutoff = options?.timeTravelDate instanceof Date ? options.timeTravelDate.getTime() : options?.timeTravelDate;
+    if (cutoff === undefined || cutoff === null) {
+      await this.rpc.call("session.openDatabase", { databaseId });
+      return new MindooDBAppDatabaseImpl(this.rpc, databaseId);
+    }
+    if (!Number.isFinite(cutoff)) throw new Error("openDatabase: timeTravelDate must be a valid date");
+    // The host answers with the id of a snapshot binding; every later call addresses
+    // that id. A host that ignores the option would answer without it: refuse, so a
+    // snapshot never silently shows live data.
+    const opened = await this.rpc.call<{ databaseId?: string; timeTravelDate?: number } | undefined>("session.openDatabase", {
+      databaseId,
+      timeTravelDate: cutoff,
+    });
+    if (!opened?.databaseId || opened.timeTravelDate !== cutoff) {
+      throw new Error("This Haven version cannot open a database at a past date (openDatabase with timeTravelDate).");
+    }
+    return new MindooDBAppDatabaseImpl(this.rpc, opened.databaseId);
   }
 
   async listDocumentsSinceViewCursor(

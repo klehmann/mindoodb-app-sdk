@@ -439,6 +439,32 @@ export interface MindooDBAppDatabaseInfo {
   title: string;
   role?: string;
   capabilities: MindooDBAppCapability[];
+  /**
+   * Set on a handle opened with `openDatabase(id, { timeTravelDate })` (and in
+   * a time-travel launch): the epoch-millisecond cutoff the handle shows.
+   */
+  timeTravelDate?: number;
+}
+
+/** Options for {@link MindooDBAppSession.openDatabase}. */
+export interface MindooDBAppOpenDatabaseOptions {
+  /**
+   * Open the database read-only as it stood at this moment (epoch ms or a
+   * `Date`), next to the live handle: documents, summary queries, history and
+   * attachments answer as of the cutoff (app-defined views are not available
+   * on such a handle), and every write is
+   * rejected with `forbidden`. Requires the `history` capability.
+   *
+   * The first use of a new cutoff builds that moment's summary from the
+   * changefeed (about 1.5 s for 1,000 documents with three revisions each on a
+   * laptop); later queries on the handle cost what live ones do. Hosts keep a
+   * few recent cutoffs open, so stepping back and forth between dates is
+   * cheap — snap a date slider to whole days rather than opening a handle per
+   * pixel. In a time-travel launch a cutoff later than the launch date is
+   * rejected. Hosts without the feature reject the call, so
+   * `openDatabase(id, { timeTravelDate })` never silently returns live data.
+   */
+  timeTravelDate?: number | Date;
 }
 
 /** Lightweight document row returned by list operations. */
@@ -4294,9 +4320,10 @@ export interface MindooDBAppSession {
   /**
    * Open one of the granted databases by its binding id (from
    * {@link listDatabases} / the launch context) and get the `documents` and
-   * `attachments` APIs for it.
+   * `attachments` APIs for it. With `options.timeTravelDate` the handle is a
+   * read-only snapshot of that moment (see {@link MindooDBAppOpenDatabaseOptions}).
    */
-  openDatabase(databaseId: string): Promise<MindooDBAppDatabase>;
+  openDatabase(databaseId: string, options?: MindooDBAppOpenDatabaseOptions): Promise<MindooDBAppDatabase>;
   /**
    * Legacy polling/delta-sync path: list documents that changed across all
    * granted databases since a view cursor previously obtained from
