@@ -1147,6 +1147,19 @@ An id in `dependencyIds` may name a revision the timeline does not list, because
 
 `decryptionKeyId` is per revision, so a document whose key changed over its life shows that in the timeline — useful when deciding which key to grant before handing an old version to someone. It follows the same rule as on `documents.get`: absent for person-encrypted revisions.
 
+### A database at a past date
+
+`session.openDatabase(id, { timeTravelDate })` opens a granted database read-only as it stood at a moment, next to the live handle. Everything the handle answers is as of the cutoff: `documents.get`, `list`, `query` (from that moment's summary), history and attachments. Writes are rejected with `forbidden`; `createViewNavigator` does not accept a snapshot handle's id. It needs the `history` capability.
+
+```ts
+const live = await session.openDatabase("cms");
+const lastSpring = await session.openDatabase("cms", { timeTravelDate: new Date("2026-04-01T00:00:00") });
+const pages = await lastSpring.documents.query({ filter: 'v.eq(v.field("type"), "cms.page")', fields: ["path"] });
+(await lastSpring.info()).timeTravelDate; // the cutoff in epoch ms
+```
+
+Cost: the first use of a cutoff builds that moment's summary from the changefeed — about 1.5 s for 1,000 documents with three revisions each on a laptop; afterwards queries cost what live ones do. The host keeps a few recent cutoffs open, so a date picker should snap to whole days (or the moments that matter to the app) and open the handle when the user lets go, not on every pixel of a slider. In a time-travel launch a cutoff later than the launch date is rejected. A host that does not support the option rejects the call: the SDK never hands out live data for a past date.
+
 ### Granular JSON edits
 
 When you need to edit nested objects or lists inside a document — not just top-level fields — describe the change as a **granular JSON patch** rather than rewriting the whole document. This is the model behind structured collaborative editing in apps like TeamGrid, where two users can insert different rows into the same worksheet on different devices and the merge keeps both sides cleanly.
@@ -1715,7 +1728,7 @@ Notes:
 - The host caps `limit` (default 200, maximum 1000) so result payloads stay bounded. Page with `offset` for more rows.
 - `coverage: "rebuilding"` means the summary buffer is still backfilling — results may be incomplete and will improve on their own.
 - Queries that reference encrypted fields or fields outside the summary configuration are rejected with a `query-not-supported` bridge error. Use a view with `useFullDocuments` (see below) or `documents.list()` for those cases.
-- Queries require the `read` capability and are not available in time-travel launches (the summary buffer reflects the live state only).
+- Queries require the `read` capability. In a time-travel launch, and on a handle opened with `openDatabase(id, { timeTravelDate })`, they answer from that moment's summary; live queries there deliver one result, as a past state never changes.
 
 **Full-text search** — a query can additionally carry a `text` clause, evaluated against the database's client-side full-text index on the host and combined with `filter` as a logical AND:
 
@@ -2372,7 +2385,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | ------------------------------------- | ------------------------------------ |
 | `getLaunchContext()`                  | `Promise<MindooDBAppLaunchContext>`  |
 | `listDatabases()`                     | `Promise<MindooDBAppDatabaseInfo[]>` |
-| `openDatabase(databaseId)`            | `Promise<MindooDBAppDatabase>`       |
+| `openDatabase(databaseId, options?)`  | `Promise<MindooDBAppDatabase>` — `{ timeTravelDate }` opens a read-only snapshot |
 | `createViewNavigator(input)`          | `Promise<MindooDBAppViewNavigator>`  |
 | `openViewNavigator(viewId, options?)` | `Promise<MindooDBAppViewNavigator>`  |
 | `openSealedChannel(input)`            | `Promise<MindooDBAppSealedChannelOpenResult>` |

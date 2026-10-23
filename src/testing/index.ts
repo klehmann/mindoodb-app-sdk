@@ -74,6 +74,7 @@ import type {
   MindooDBAppCreateKeyInfo,
   MindooDBAppDatabase,
   MindooDBAppDatabaseInfo,
+  MindooDBAppOpenDatabaseOptions,
   MindooDBAppDirectoryApi,
   MindooDBAppRichTextMaterializeValue,
   MindooDBAppRichTextSpan,
@@ -144,7 +145,7 @@ import type {
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
 import { assertValidMindooDBCreateIds } from "../documentIds";
-import { guardDatabase } from "./capabilityGuard";
+import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
 import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
 import { pageUsers } from "../directoryPaging";
@@ -2832,6 +2833,8 @@ function createDatabaseHandle(
   documents: Map<string, MockStoredDocument>;
   notifyLiveQueries: () => void;
   applyRemoteUpdate: MockApplyRemoteUpdate;
+  /** The documents as they stood at `cutoff` (the latest revision before it), for time-travel handles. */
+  seedsAt: (cutoff: number) => MockSeedDocument[];
 } {
   let createCounter = 0;
   let changeCounter = 0;
@@ -3842,6 +3845,25 @@ function createDatabaseHandle(
         })),
     documents: storedDocuments,
     notifyLiveQueries: refreshLiveQueries,
+    seedsAt(cutoff) {
+      const seeds: MockSeedDocument[] = [];
+      for (const [id, timeline] of revisions) {
+        const stored = storedDocuments.get(id);
+        if (stored?.inaccessible) continue;
+        let revision: MockRevision | undefined;
+        for (const entry of timeline) if (entry.timestamp < cutoff) revision = entry;
+        if (!revision || revision.isDeleted) continue;
+        seeds.push({
+          id,
+          data: structuredClone(revision.data),
+          updatedAt: new Date(revision.timestamp).toISOString(),
+          ...(revision.authorLabel ? { authorLabel: revision.authorLabel } : {}),
+          ...(revision.heads ? { heads: [...revision.heads] } : {}),
+          attachments: structuredClone(revision.attachments),
+        });
+      }
+      return seeds;
+    },
     async applyRemoteUpdate(docId, input, options) {
       const existing = storedDocuments.get(docId);
       if (!existing || existing.isDeleted) {
@@ -3868,6 +3890,8 @@ function createDatabaseHandle(
 }
 
 type MockSessionState = {
+  /** Opens (or reuses) a read-only handle of `databaseId` as of `cutoff`; returns its binding id. */
+  openSnapshot: (databaseId: string, cutoff: number) => string;
   getLaunchContext: () => MindooDBAppLaunchContext;
   setLaunchContext: (
     patch?: Partial<MindooDBAppLaunchContext>,
@@ -3991,6 +4015,43 @@ function createMockSessionState(
   const databaseDocumentStores = new Map<string, Map<string, MockStoredDocument>>();
   const databaseLiveQueryRefreshers = new Map<string, () => void>();
   const databaseRemoteUpdaters = new Map<string, MockApplyRemoteUpdate>();
+  const databaseDefinitions = new Map<string, MockMindooDBAppDatabaseDefinition>();
+  const databaseSeedsAt = new Map<string, (cutoff: number) => MockSeedDocument[]>();
+  /** Time-travel handles by binding id (`<id>@tt:<cutoff>`), built from the revisions as of the cutoff. */
+  const snapshotHandles = new Map<string, MindooDBAppDatabase>();
+
+  /** What `openDatabase(id, { timeTravelDate })` returns, as Haven serves it: read-only, as of the cutoff. */
+  const openSnapshot = (databaseId: string, cutoff: number): string => {
+    const definition = databaseDefinitions.get(databaseId);
+    const live = databaseHandles.get(databaseId);
+    const info = databaseInfos.find((entry) => entry.id === databaseId);
+    if (!definition || !live || !info) throw new Error(`Unknown test database: ${databaseId}`);
+    if (enforceCapabilities && !info.capabilities.includes("history")) {
+      throw new MockForbiddenError(`Database "${databaseId}" was not granted the "history" capability (openDatabase with timeTravelDate)`);
+    }
+    const launchCutoff = launchContext.timeTravelDate;
+    if (launchCutoff && cutoff > launchCutoff) {
+      throw new MockForbiddenError("A time-travel launch cannot open a database at a later date than the launch date.");
+    }
+    const key = `${databaseId}@tt:${cutoff}`;
+    if (snapshotHandles.has(key)) return key;
+    const snapshotInfo: MindooDBAppDatabaseInfo = {
+      ...info,
+      id: key,
+      capabilities: info.capabilities.filter((capability) => ["read", "history", "attachments"].includes(capability)),
+      timeTravelDate: cutoff,
+    };
+    const created = createDatabaseHandle(
+      { ...definition, info: snapshotInfo, documents: databaseSeedsAt.get(databaseId)!(cutoff) },
+      databasePeers,
+      () => directoryUsers,
+      options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
+    );
+    // Attachment bytes are not versioned in the mock: reads go to the live database.
+    const handle = guardDatabase({ ...created.handle, attachments: live.attachments }, () => snapshotInfo, () => true);
+    snapshotHandles.set(key, handle);
+    return key;
+  };
   const databasePeers: MockDatabasePeers = {
     getDocuments: (databaseId) => databaseDocumentStores.get(databaseId),
     refreshAllLiveQueries: () => {
@@ -4089,6 +4150,9 @@ function createMockSessionState(
     databaseDocumentStores.clear();
     databaseLiveQueryRefreshers.clear();
     databaseRemoteUpdaters.clear();
+    databaseDefinitions.clear();
+    databaseSeedsAt.clear();
+    snapshotHandles.clear();
     databaseInfos = definitions.map((definition) => ({
       ...definition.info,
       capabilities: [...definition.info.capabilities],
@@ -4113,6 +4177,8 @@ function createMockSessionState(
       databaseDocumentStores.set(definition.info.id, created.documents);
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
       databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
+      databaseDefinitions.set(definition.info.id, definition);
+      databaseSeedsAt.set(definition.info.id, created.seedsAt);
       const createView = async (input: MindooDBAppCreateViewNavigatorInput) => {
           const build = () =>
             createEvaluatingViewNavigator(
@@ -4233,7 +4299,9 @@ function createMockSessionState(
         capabilities: [...entry.capabilities],
       }));
     },
-    async openDatabase(databaseId: string) {
+    async openDatabase(databaseId: string, openOptions?: MindooDBAppOpenDatabaseOptions) {
+      const cutoff = openOptions?.timeTravelDate instanceof Date ? openOptions.timeTravelDate.getTime() : openOptions?.timeTravelDate;
+      if (cutoff !== undefined && cutoff !== null) return snapshotHandles.get(openSnapshot(databaseId, cutoff))!;
       const database = databaseHandles.get(databaseId);
       if (!database) {
         throw new Error(`Unknown test database: ${databaseId}`);
@@ -4531,8 +4599,9 @@ function createMockSessionState(
     replicaStores: () => databaseDocumentStores,
     notifyReplicaChange: (databaseId) => databaseLiveQueryRefreshers.get(databaseId)?.(),
     embedHost,
+    openSnapshot,
     getDatabase(databaseId) {
-      const database = databaseHandles.get(databaseId);
+      const database = databaseHandles.get(databaseId) ?? snapshotHandles.get(databaseId);
       if (!database) {
         throw new Error(`Unknown test database: ${databaseId}`);
       }
@@ -5628,9 +5697,14 @@ export function createFakeBridgeHost(
       case "session.listDocumentsSinceViewCursor":
         // Same answer as the Level 1 session: the mock has no view cursors.
         return { items: [], nextCursor: null } satisfies MindooDBAppViewCursorDocumentListResult;
-      case "session.openDatabase":
+      case "session.openDatabase": {
+        if (typeof params.timeTravelDate === "number") {
+          const databaseId = state.openSnapshot(String(params.databaseId), params.timeTravelDate);
+          return { ok: true, databaseId, timeTravelDate: params.timeTravelDate };
+        }
         state.getDatabase(String(params.databaseId));
         return { ok: true };
+      }
       case "session.createViewNavigator": {
         const navigatorId = `navigator-${(viewCounter += 1)}`;
         const navigator = await state.createViewNavigator({

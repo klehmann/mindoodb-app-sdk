@@ -1648,3 +1648,41 @@ describe("mock session incoming content", () => {
     await expect(result).resolves.toEqual({ status: "accepted", message: "abc|url" });
   });
 });
+
+describe("openDatabase with timeTravelDate", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, "window");
+  });
+
+  function hostAnswering(result: unknown) {
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort;
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind === "request" && message.method === "session.openDatabase") {
+            port.postMessage({ protocol: "mindoodb-app-bridge", kind: "success", id: message.id, result });
+          }
+        });
+        port.start();
+        port.postMessage({ protocol: "mindoodb-app-bridge", type: "mindoodb-app:connected" });
+      },
+    };
+    Object.defineProperty(globalThis, "window", {
+      value: { parent: host, opener: null, location: { search: "?mindoodbAppLaunchId=launch-tt" }, setTimeout, clearTimeout },
+      configurable: true,
+    });
+  }
+
+  it("refuses rather than returning live data when the host ignores the option", async () => {
+    hostAnswering({ ok: true });
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.openDatabase("main", { timeTravelDate: Date.now() })).rejects.toThrow(/cannot open a database at a past date/);
+  });
+
+  it("rejects an invalid date before asking the host", async () => {
+    hostAnswering({ ok: true });
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.openDatabase("main", { timeTravelDate: new Date("nope") })).rejects.toThrow(/valid date/);
+  });
+});
