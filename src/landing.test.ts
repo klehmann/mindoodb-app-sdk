@@ -2,7 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MINDOODB_APP_DEFINITION_FORMAT, MINDOODB_APP_DEFINITION_VERSION } from "./appDefinition";
-import { buildHavenAppInstallUrl, renderHavenAppLandingPage, resolveCurrentHavenAppUrl } from "./landing";
+import {
+  buildHavenAppInstallUrl,
+  HAVEN_APP_LANDING_LOCALES,
+  HAVEN_APP_LANDING_STRINGS,
+  renderHavenAppLandingPage,
+  resolveCurrentHavenAppUrl,
+  resolveHavenAppLandingLocale,
+} from "./landing";
 
 const definition = {
   format: MINDOODB_APP_DEFINITION_FORMAT,
@@ -99,5 +106,45 @@ describe("haven app landing page", () => {
     );
     expect(document.querySelector('[data-testid="haven-app-landing-install"]')).not.toBeNull();
     expect(document.body.textContent).toContain("This app runs inside MindooDB Haven.");
+  });
+
+  it("ships every fixed text in every Haven language with the English placeholders", () => {
+    const placeholders = (text: string) => (text.match(/\{\w+\}/g) ?? []).sort().join(",");
+    const english = HAVEN_APP_LANDING_STRINGS.en;
+    expect(Object.keys(HAVEN_APP_LANDING_STRINGS).sort()).toEqual([...HAVEN_APP_LANDING_LOCALES].sort());
+    for (const locale of HAVEN_APP_LANDING_LOCALES) {
+      const strings: Record<string, string> = HAVEN_APP_LANDING_STRINGS[locale];
+      expect(Object.keys(strings).sort(), locale).toEqual(Object.keys(english).sort());
+      for (const [key, source] of Object.entries(english)) {
+        expect(strings[key]?.trim(), `${locale}.${key}`).toBeTruthy();
+        expect(placeholders(strings[key]!), `${locale}.${key}`).toBe(placeholders(source));
+      }
+    }
+  });
+
+  it("picks the page language by primary subtag, Norwegian as Bokmål, else English", () => {
+    expect(resolveHavenAppLandingLocale("fr-CA")).toBe("fr");
+    expect(resolveHavenAppLandingLocale("pl")).toBe("pl");
+    expect(resolveHavenAppLandingLocale("nb-NO")).toBe("nb");
+    expect(resolveHavenAppLandingLocale("no")).toBe("nb");
+    expect(resolveHavenAppLandingLocale("nn-NO")).toBe("nb");
+    expect(resolveHavenAppLandingLocale("pt-BR")).toBe("en");
+    expect(resolveHavenAppLandingLocale("")).toBe("en");
+  });
+
+  it("renders fixed texts and listing texts in the browser language", async () => {
+    vi.stubGlobal("navigator", { language: "nn-NO" });
+    const localized = {
+      ...definition,
+      listing: { ...definition.listing, summary: { en: "Plan trips together.", nb: "Planlegg turer sammen." } },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(localized), { status: 200 })));
+    await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/" });
+    const root = document.querySelector<HTMLElement>('[data-testid="haven-app-landing"]')!;
+    expect(root.lang).toBe("nb");
+    expect(root.querySelector('[data-testid="haven-app-landing-install"]')?.textContent).toBe("Åpne i MindooDB Haven");
+    expect(root.querySelector(".mdb-landing__summary")?.textContent).toBe("Planlegg turer sammen.");
+    expect(root.querySelector(".mdb-landing__meta")?.textContent).toBe("fra Mindoo · fra trips.example.com");
+    expect(root.querySelector(".mdb-landing__shots-title")?.textContent).toBe("Skjermbilder");
   });
 });

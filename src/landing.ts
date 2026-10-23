@@ -38,7 +38,10 @@ export interface RenderHavenAppLandingPageOptions {
   definition?: MindooDBAppDefinition;
   /** Element the page renders into. Defaults to `document.body`, which is cleared. */
   container?: HTMLElement;
-  /** Defaults to `navigator.language`. The page itself speaks English and German. */
+  /**
+   * Defaults to `navigator.language`. Picks the page language (Haven's eight; others fall
+   * back to English) and the matching texts of the listing.
+   */
   locale?: string;
 }
 
@@ -49,20 +52,32 @@ export interface HavenAppLandingPage {
   installUrl: string;
 }
 
-const STRINGS = {
-  en: {
-    eyebrow: "App for MindooDB Haven",
-    cta: "Open in MindooDB Haven",
-    ctaHint:
-      "Haven sets up your encrypted workspace and installs {label}. Already using Haven? Then the app is simply added.",
-    from: "from {origin}",
-    by: "by {publisher}",
-    screenshots: "Screenshots",
-    footer:
-      "{label} runs inside MindooDB Haven, which keeps its data end-to-end encrypted and local-first. Opening this address on its own shows only this page.",
-    learnMore: "What is MindooDB?",
-    fallbackSummary: "This app runs inside MindooDB Haven.",
-  },
+/** The languages Haven's UI speaks; the landing page speaks the same ones. */
+export const HAVEN_APP_LANDING_LOCALES = ["en", "de", "es", "fr", "it", "nb", "nl", "pl"] as const;
+export type HavenAppLandingLocale = (typeof HAVEN_APP_LANDING_LOCALES)[number];
+
+const EN = {
+  eyebrow: "App for MindooDB Haven",
+  cta: "Open in MindooDB Haven",
+  ctaHint:
+    "Haven sets up your encrypted workspace and installs {label}. Already using Haven? Then the app is simply added.",
+  from: "from {origin}",
+  by: "by {publisher}",
+  screenshots: "Screenshots",
+  footer:
+    "{label} runs inside MindooDB Haven, which keeps its data end-to-end encrypted and local-first. Opening this address on its own shows only this page.",
+  learnMore: "What is MindooDB?",
+  fallbackSummary: "This app runs inside MindooDB Haven.",
+};
+
+type LandingStrings = { [K in keyof typeof EN]: string };
+
+/**
+ * Every fixed text of the page in every Haven language. French uses a non-breaking space
+ * (U+00A0) before `?`, like Haven's own French strings.
+ */
+export const HAVEN_APP_LANDING_STRINGS = {
+  en: EN,
   de: {
     eyebrow: "App für MindooDB Haven",
     cta: "In MindooDB Haven öffnen",
@@ -76,12 +91,96 @@ const STRINGS = {
     learnMore: "Was ist MindooDB?",
     fallbackSummary: "Diese App läuft in MindooDB Haven.",
   },
-} as const;
+  es: {
+    eyebrow: "App para MindooDB Haven",
+    cta: "Abrir en MindooDB Haven",
+    ctaHint:
+      "Haven configura tu entorno cifrado e instala {label}. ¿Ya usas Haven? Entonces la app simplemente se añade.",
+    from: "desde {origin}",
+    by: "de {publisher}",
+    screenshots: "Capturas de pantalla",
+    footer:
+      "{label} funciona dentro de MindooDB Haven, que cifra sus datos de extremo a extremo y los guarda primero en local. Abierta directamente, esta dirección solo muestra esta página.",
+    learnMore: "¿Qué es MindooDB?",
+    fallbackSummary: "Esta app funciona dentro de MindooDB Haven.",
+  },
+  fr: {
+    eyebrow: "App pour MindooDB Haven",
+    cta: "Ouvrir dans MindooDB Haven",
+    ctaHint:
+      "Haven configure votre environnement chiffré et installe {label}. Vous utilisez déjà Haven\u00a0? L'app y est alors simplement ajoutée.",
+    from: "sur {origin}",
+    by: "par {publisher}",
+    screenshots: "Captures d'écran",
+    footer:
+      "{label} fonctionne dans MindooDB Haven, qui chiffre ses données de bout en bout et les conserve d'abord en local. Ouverte directement, cette adresse n'affiche que cette page.",
+    learnMore: "Qu'est-ce que MindooDB\u00a0?",
+    fallbackSummary: "Cette app fonctionne dans MindooDB Haven.",
+  },
+  it: {
+    eyebrow: "App per MindooDB Haven",
+    cta: "Apri in MindooDB Haven",
+    ctaHint:
+      "Haven configura il tuo ambiente cifrato e installa {label}. Usi già Haven? Allora l'app viene semplicemente aggiunta.",
+    from: "da {origin}",
+    by: "di {publisher}",
+    screenshots: "Screenshot",
+    footer:
+      "{label} funziona in MindooDB Haven, che cifra i suoi dati end-to-end e li tiene prima di tutto in locale. Aperto direttamente, questo indirizzo mostra solo questa pagina.",
+    learnMore: "Che cos'è MindooDB?",
+    fallbackSummary: "Questa app funziona in MindooDB Haven.",
+  },
+  nb: {
+    eyebrow: "App for MindooDB Haven",
+    cta: "Åpne i MindooDB Haven",
+    ctaHint:
+      "Haven setter opp det krypterte miljøet ditt og installerer {label}. Bruker du Haven allerede? Da blir appen bare lagt til.",
+    from: "fra {origin}",
+    by: "fra {publisher}",
+    screenshots: "Skjermbilder",
+    footer:
+      "{label} kjører i MindooDB Haven, som krypterer dataene ende-til-ende og holder dem lokalt først. Åpnet direkte viser denne adressen bare denne siden.",
+    learnMore: "Hva er MindooDB?",
+    fallbackSummary: "Denne appen kjører i MindooDB Haven.",
+  },
+  nl: {
+    eyebrow: "App voor MindooDB Haven",
+    cta: "Openen in MindooDB Haven",
+    ctaHint:
+      "Haven richt je versleutelde omgeving in en installeert {label}. Gebruik je Haven al? Dan wordt de app gewoon toegevoegd.",
+    from: "van {origin}",
+    by: "van {publisher}",
+    screenshots: "Schermafbeeldingen",
+    footer:
+      "{label} draait in MindooDB Haven, dat de gegevens end-to-end versleutelt en eerst lokaal bewaart. Rechtstreeks geopend toont dit adres alleen deze pagina.",
+    learnMore: "Wat is MindooDB?",
+    fallbackSummary: "Deze app draait in MindooDB Haven.",
+  },
+  pl: {
+    eyebrow: "Aplikacja dla MindooDB Haven",
+    cta: "Otwórz w MindooDB Haven",
+    ctaHint:
+      "Haven skonfiguruje twoje zaszyfrowane środowisko i zainstaluje {label}. Już korzystasz z Haven? Wtedy aplikacja zostanie po prostu dodana.",
+    from: "z {origin}",
+    by: "od {publisher}",
+    screenshots: "Zrzuty ekranu",
+    footer:
+      "{label} działa w MindooDB Haven, który szyfruje dane end-to-end i przechowuje je najpierw lokalnie. Otwarty bezpośrednio ten adres pokazuje tylko tę stronę.",
+    learnMore: "Czym jest MindooDB?",
+    fallbackSummary: "Ta aplikacja działa w MindooDB Haven.",
+  },
+} as const satisfies Record<HavenAppLandingLocale, LandingStrings>;
 
-type LandingStrings = { [K in keyof (typeof STRINGS)["en"]]: string };
-
-function stringsFor(locale: string): LandingStrings {
-  return locale.toLowerCase().startsWith("de") ? STRINGS.de : STRINGS.en;
+/**
+ * The page language for a BCP 47 tag: its primary subtag when Haven speaks it (`de-AT` →
+ * `de`), Norwegian `no`/`nn` → `nb`, anything else → `en`.
+ */
+export function resolveHavenAppLandingLocale(tag: string): HavenAppLandingLocale {
+  const primary = tag.trim().split(/[-_]/)[0]?.toLowerCase() ?? "";
+  const language = primary === "no" || primary === "nn" ? "nb" : primary;
+  return (HAVEN_APP_LANDING_LOCALES as readonly string[]).includes(language)
+    ? (language as HavenAppLandingLocale)
+    : "en";
 }
 
 function format(template: string, values: Record<string, string>): string {
@@ -214,7 +313,8 @@ export async function renderHavenAppLandingPage(
 ): Promise<HavenAppLandingPage> {
   const appUrl = options.appUrl ?? resolveCurrentHavenAppUrl();
   const locale = options.locale ?? (typeof navigator === "undefined" ? "en" : navigator.language || "en");
-  const strings = stringsFor(locale);
+  const pageLocale = resolveHavenAppLandingLocale(locale);
+  const strings: LandingStrings = HAVEN_APP_LANDING_STRINGS[pageLocale];
   const definition = options.definition ?? (await loadDefinition(appUrl));
   const installUrl = buildHavenAppInstallUrl(appUrl, options.havenUrl);
   const listing = definition?.listing;
@@ -230,6 +330,7 @@ export async function renderHavenAppLandingPage(
   document.title = label;
 
   const root = el("main", "mdb-landing");
+  root.lang = pageLocale;
   root.dataset.testid = "haven-app-landing";
   const card = el("article", "mdb-landing__card");
   root.append(card);
