@@ -3702,6 +3702,10 @@ function createDatabaseHandle(
     },
     listUsers: (async (options?: MindooDBAppListUsersOptions) =>
       options ? pageUsers(directoryUsers(), options) : [...directoryUsers()]) as MindooDBAppDirectoryApi["listUsers"],
+    // Like a host whose directory has no names entered: usernames only.
+    async lookupUsers(usernames) {
+      return usernames.map((username) => ({ username }));
+    },
   };
 
   const defaultViews: MockViewApi = {
@@ -6233,6 +6237,10 @@ export function createFakeBridgeHost(
           .directory.excerpt(
             Array.isArray(params.publicKeys) ? params.publicKeys.map(String) : [],
           );
+      case "directory.lookupUsers":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.lookupUsers(Array.isArray(params.usernames) ? params.usernames.map(String) : []);
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =
