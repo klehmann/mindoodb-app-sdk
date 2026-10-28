@@ -959,6 +959,23 @@ const stopViewport = session.onViewportChange((viewport) => {
 
 Both subscription functions return an unsubscribe callback. Call it during teardown.
 
+### Full screen on phones (safe areas)
+
+Haven keeps an app's frame clear of the iPhone's Dynamic Island and home indicator. An app with its own top and bottom bars can use the whole screen instead:
+
+```ts
+await session.setEdgeToEdge(true); // false on hosts that predate it
+```
+
+Haven then lets the frame run under those areas where it shows the app full screen, and reports how far it reaches there in `viewport.safeAreaInsets` (`{ top, right, bottom, left }` in CSS pixels). The SDK keeps the same values as CSS variables on `<html>`, so most apps only need CSS:
+
+```css
+.app-header { padding-top: var(--mindoodb-safe-area-top, env(safe-area-inset-top)); }
+.tab-bar { padding-bottom: var(--mindoodb-safe-area-bottom, env(safe-area-inset-bottom)); }
+```
+
+Inside Haven the variables are `0px` until the frame really reaches under an unsafe area. Prefer them to a bare `env(safe-area-inset-*)`: in an iframe that reports the whole device's insets even where Haven already keeps clear, which pads the app twice. The `env()` fallback covers the app running on its own.
+
 ### Language
 
 `ctx.locale` is Haven's UI language as a BCP-47 tag; `session.onLocaleChange` reports when the user switches it. Map the tag to the app's languages (`de-AT` → `de`, `nb-NO` and the legacy `no` → `nb`, anything unknown → `en`), set `document.documentElement.lang`, and format dates and numbers with `Intl` in that locale:
@@ -2430,6 +2447,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `storage`                             | `MindooDBAppStorageApi`              |
 | `onThemeChange(listener)`             | `() => void` (unsubscribe)           |
 | `onViewportChange(listener)`          | `() => void` (unsubscribe)           |
+| `setEdgeToEdge(enabled)`              | `Promise<boolean>`                   |
 | `onLocaleChange(listener)`            | `() => void` (unsubscribe)           |
 | `onBeforeClose(listener)`             | `() => void` (unsubscribe)           |
 | `disconnect()`                        | `Promise<void>`                      |

@@ -101,10 +101,28 @@ export interface MindooDBAppHostTheme {
   preset: string;
 }
 
+/**
+ * How far the app's frame reaches under the device's unsafe areas (notch,
+ * Dynamic Island, home indicator, rounded corners), in CSS pixels per side.
+ */
+export interface MindooDBAppSafeAreaInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 /** Iframe viewport dimensions reported by the Haven host. */
 export interface MindooDBAppViewport {
   width: number;
   height: number;
+  /**
+   * The part of the frame that lies under the device's unsafe areas. Zero on
+   * every side unless the app asked for {@link MindooDBAppSession.setEdgeToEdge}
+   * and the frame reaches there. Absent on hosts that predate it. The SDK also
+   * sets it as CSS variables (`--mindoodb-safe-area-top` and so on).
+   */
+  safeAreaInsets?: MindooDBAppSafeAreaInsets;
 }
 
 /** Host-controlled UI preferences exposed to embedded apps. */
@@ -4488,6 +4506,19 @@ export interface MindooDBAppSession {
    * whether to notify without polling. Returns an unsubscribe function.
    */
   onHostFocusChange(listener: (focused: boolean) => void): () => void;
+  /**
+   * Let this app's frame run under the device's unsafe areas (on an iPhone:
+   * behind the Dynamic Island and the home indicator) where Haven shows it
+   * full screen, instead of Haven keeping clear of them. The app then pads its
+   * own top and bottom bars by `viewport.safeAreaInsets`, most simply with the
+   * CSS variables the SDK keeps current:
+   * `var(--mindoodb-safe-area-top, env(safe-area-inset-top))` and so on.
+   *
+   * Resolves `true` when the host honours it, `false` on hosts that predate
+   * it (the frame then stays clear of the unsafe areas and the variables stay
+   * `0px`).
+   */
+  setEdgeToEdge(enabled: boolean): Promise<boolean>;
   /**
    * Ask Haven to show a notice. The headline is the app name Haven already
    * knows; `text` is the body. Pass the same `id` to update that notice in

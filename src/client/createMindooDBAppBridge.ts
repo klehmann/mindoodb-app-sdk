@@ -87,6 +87,7 @@ import type {
   MindooDBAppIdentityApi,
   MindooDBAppTimestampApi,
   MindooDBAppLaunchContext,
+  MindooDBAppViewport,
   MindooDBAppLiveQuerySubscription,
   MindooDBAppDragApi,
   MindooDBAppDragBindSourceOptions,
@@ -126,6 +127,7 @@ import type {
 } from "../types";
 import { pageUsers } from "../directoryPaging";
 import { installHostFocusCapture } from "../hostFocus";
+import { applySafeAreaVariables } from "../safeArea";
 import {
   applyHostedDocumentOverscrollContain,
   DEFAULT_HAVEN_HOST_SHORTCUTS,
@@ -1654,6 +1656,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   private hostShortcuts: readonly MindooDBAppHostShortcutBinding[] = DEFAULT_HAVEN_HOST_SHORTCUTS;
   private readonly stopHostShortcuts: () => void;
   private readonly stopHostFocus: () => void;
+  private readonly stopSafeArea: () => void;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -1738,6 +1741,15 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
         }
       },
     });
+    // Inside Haven the frame keeps clear of the unsafe areas until the app asks
+    // otherwise, so the variables start at 0px (env() in an iframe would report
+    // the whole device's insets) and follow every viewport change.
+    applySafeAreaVariables(undefined);
+    this.stopSafeArea = this.rpc.addMessageListener((message) => {
+      if (isViewportChangedMessage(message)) {
+        applySafeAreaVariables(message.viewport.safeAreaInsets);
+      }
+    });
   }
 
   /**
@@ -1772,7 +1784,9 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
 
   /** Returns the launch context provided by the Haven host. */
   async getLaunchContext(): Promise<MindooDBAppLaunchContext> {
-    return await this.rpc.call("session.getLaunchContext", {});
+    const context = await this.rpc.call<MindooDBAppLaunchContext>("session.getLaunchContext", {});
+    applySafeAreaVariables(context?.viewport?.safeAreaInsets);
+    return context;
   }
 
   /**
@@ -1959,6 +1973,25 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     return result?.focused === true;
   }
 
+  /** Let the frame run under the device's unsafe areas; false on hosts without it. */
+  async setEdgeToEdge(enabled: boolean): Promise<boolean> {
+    try {
+      const result = await this.rpc.call<{ enabled?: boolean; viewport?: MindooDBAppViewport | null }>(
+        "session.setEdgeToEdge",
+        { enabled },
+      );
+      if (result?.viewport) {
+        applySafeAreaVariables(result.viewport.safeAreaInsets);
+      }
+      return result?.enabled === true;
+    } catch (error) {
+      if (isMethodNotFoundError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   /** Fires when the host-focus answer for this launch changes. */
   onHostFocusChange(listener: (focused: boolean) => void) {
     return this.rpc.addMessageListener((message) => {
@@ -1985,6 +2018,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   async disconnect(): Promise<void> {
     this.stopHostShortcuts();
     this.stopHostFocus();
+    this.stopSafeArea();
     this.drag.dispose();
     this.agent.dispose();
     this.incoming.dispose();

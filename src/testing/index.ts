@@ -3932,6 +3932,7 @@ type MockSessionState = {
   session: MindooDBAppSession;
   emitThemeChange: (theme: MindooDBAppHostTheme) => void;
   emitViewportChange: (viewport: MindooDBAppViewport) => void;
+  isEdgeToEdge: () => boolean;
   emitUiPreferencesChange: (uiPreferences: MindooDBAppUiPreferences) => void;
   emitLocaleChange: (locale: string) => void;
   emitBeforeClose: () => Promise<void>;
@@ -4008,6 +4009,7 @@ function createMockSessionState(
   let incomingCounter = 0;
   const hostFocusListeners = new Set<(focused: boolean) => void>();
   let hostFocused = false;
+  let edgeToEdge = false;
   const viewportListeners = new Set<(viewport: MindooDBAppViewport) => void>();
   const uiPreferencesListeners = new Set<
     (uiPreferences: MindooDBAppUiPreferences) => void
@@ -4555,6 +4557,10 @@ function createMockSessionState(
     async hasHostFocus() {
       return hostFocused;
     },
+    async setEdgeToEdge(enabled) {
+      edgeToEdge = enabled;
+      return true;
+    },
     onHostFocusChange(listener) {
       hostFocusListeners.add(listener);
       return () => {
@@ -4680,6 +4686,9 @@ function createMockSessionState(
       themeListeners.forEach((listener) =>
         listener({ ...launchContext.theme }),
       );
+    },
+    isEdgeToEdge() {
+      return edgeToEdge;
     },
     emitViewportChange(viewport) {
       launchContext = mergeLaunchContext(launchContext, { viewport });
@@ -4976,6 +4985,8 @@ export interface MockMindooDBAppSessionController {
   ): Promise<MindooDBAppDocument>;
   emitThemeChange(theme: MindooDBAppHostTheme): void;
   emitViewportChange(viewport: MindooDBAppViewport): void;
+  /** Whether the app asked for {@link MindooDBAppSession.setEdgeToEdge}. */
+  isEdgeToEdge(): boolean;
   emitUiPreferencesChange(uiPreferences: MindooDBAppUiPreferences): void;
   emitLocaleChange(locale: string): void;
   /** Runs the app's `onBeforeClose` listeners, as the host does before a teardown. */
@@ -5225,6 +5236,7 @@ export function createMockMindooDBAppSession(
     applyRemoteUpdate: state.applyRemoteUpdate,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
+    isEdgeToEdge: state.isEdgeToEdge,
     emitUiPreferencesChange: state.emitUiPreferencesChange,
     emitLocaleChange: state.emitLocaleChange,
     emitBeforeClose: state.emitBeforeClose,
@@ -5903,6 +5915,8 @@ export function createFakeBridgeHost(
         return null;
       case "session.hasHostFocus":
         return { focused: await state.session.hasHostFocus() };
+      case "session.setEdgeToEdge":
+        return { enabled: await state.session.setEdgeToEdge(params.enabled === true), viewport: null };
       case "notifications.show":
         return await state.session.notify(
           request.params as unknown as MindooDBAppNotifyInput,
