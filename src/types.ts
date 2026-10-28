@@ -3515,6 +3515,25 @@ export interface MindooDBAppDirectoryApi {
    */
   listUsers(): Promise<string[]>;
   listUsers(options: MindooDBAppListUsersOptions): Promise<MindooDBAppListUsersPage>;
+  /**
+   * First and last name (and display name) of directory users, as a tenant
+   * admin entered them under "Manage user" in Haven. Only these name fields
+   * are shared, never address or phone. One entry per username asked for, in
+   * that order; fields nobody entered are left out, so fall back to the common
+   * name of the username (`abbreviateCanonicalName(username).split("/")[0]`).
+   * Hosts that do not know the call (older Haven) give the usernames alone.
+   * Requires the `directory` capability; at most 200 usernames per call.
+   */
+  lookupUsers(usernames: string[]): Promise<MindooDBAppDirectoryPerson[]>;
+}
+
+/** One user of {@link MindooDBAppDirectoryApi.lookupUsers}. */
+export interface MindooDBAppDirectoryPerson {
+  /** The username asked for. */
+  username: string;
+  firstName?: string;
+  lastName?: string;
+  displayName?: string;
 }
 
 /** Paging and search for {@link MindooDBAppDirectoryApi.listUsers}. */

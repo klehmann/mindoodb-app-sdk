@@ -802,7 +802,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
-| `directory`   | List the tenant's users (`directory.listUsers()`), resolve signing keys |
+| `directory`   | List the tenant's users (`directory.listUsers()`), their names (`directory.lookupUsers()`), resolve signing keys |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -832,6 +832,16 @@ do {
 ```
 
 Hosts that do not page yet answer with the full list; the SDK then filters and pages it on the client, so the paged form works with every Haven version.
+
+First and last names, for a greeting or a people list, come from `db.directory.lookupUsers(usernames)` — what a tenant admin entered under "Manage user" in Haven. Only the name fields are shared (never address or phone), and fields nobody entered are left out, so keep the common name of the username as the fallback:
+
+```ts
+const me = ctx.user.username; // "CN=Karsten Lehmann/O=Mindoo"
+const [person] = await db.directory.lookupUsers([me]);
+const firstName = person?.firstName ?? abbreviateCanonicalName(me).split("/")[0]!.split(" ")[0];
+```
+
+Older Haven versions do not know the call; the SDK then returns the usernames alone, so the fallback covers them too. At most 200 usernames per call.
 
 ### Sealed channels
 

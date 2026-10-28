@@ -78,6 +78,7 @@ import type {
   MindooDBAppDirectoryApi,
   MindooDBAppListUsersOptions,
   MindooDBAppListUsersPage,
+  MindooDBAppDirectoryPerson,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -1312,6 +1313,20 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         // hosts without paging answer with the full list
         return Array.isArray(result) ? pageUsers(result, options) : result;
       }) as MindooDBAppDirectoryApi["listUsers"],
+      lookupUsers: async (usernames) => {
+        try {
+          return await this.rpc.call<MindooDBAppDirectoryPerson[]>("directory.lookupUsers", {
+            databaseId: this.databaseId,
+            usernames,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          // Hosts without name lookups: usernames only, callers fall back to the common name.
+          return usernames.map((username) => ({ username }));
+        }
+      },
     };
 
     this.attachments = {
