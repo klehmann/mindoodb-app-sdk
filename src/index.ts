@@ -131,6 +131,7 @@ export {
   resolveCurrentHavenAppUrl,
 } from "./landing";
 export type { HavenAppLandingPage, RenderHavenAppLandingPageOptions } from "./landing";
+export { applySafeAreaVariables, MINDOODB_SAFE_AREA_CSS_VARIABLES } from "./safeArea";
 export { listingMarkdownToPlainText, parseListingMarkdown, sanitizeListingHref } from "./listingMarkdown";
 export type { ListingBlock, ListingInline } from "./listingMarkdown";
 export { installHavenStorageShim } from "./client/havenStorageShim";

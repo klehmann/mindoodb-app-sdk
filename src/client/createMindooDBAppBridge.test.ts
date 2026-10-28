@@ -1686,3 +1686,87 @@ describe("openDatabase with timeTravelDate", () => {
     await expect(session.openDatabase("main", { timeTravelDate: new Date("nope") })).rejects.toThrow(/valid date/);
   });
 });
+
+describe("createMindooDBAppBridge safe area", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, "window");
+    Reflect.deleteProperty(globalThis, "document");
+  });
+
+  /** A host that answers `session.setEdgeToEdge` (or not) and can push viewport changes. */
+  function connectTo(launchId: string, supportsEdgeToEdge: boolean) {
+    const variables = new Map<string, string>();
+    Object.defineProperty(globalThis, "document", {
+      value: {
+        documentElement: { style: { setProperty: (name: string, value: string) => variables.set(name, value) } },
+        addEventListener() {},
+        removeEventListener() {},
+      },
+      configurable: true,
+    });
+    let hostPort: MessagePort | null = null;
+    const host = {
+      postMessage(_message: unknown, _targetOrigin?: string, transfer?: Transferable[]) {
+        const port = transfer?.[0] as MessagePort;
+        hostPort = port;
+        port.addEventListener("message", (event: MessageEvent<MindooDBAppBridgePortMessage>) => {
+          const message = event.data;
+          if (message.kind !== "request" || message.method !== "session.setEdgeToEdge") return;
+          port.postMessage(
+            supportsEdgeToEdge
+              ? {
+                  protocol: "mindoodb-app-bridge",
+                  kind: "success",
+                  id: message.id,
+                  result: {
+                    enabled: true,
+                    viewport: { width: 402, height: 874, safeAreaInsets: { top: 62, right: 0, bottom: 34, left: 0 } },
+                  },
+                }
+              : {
+                  protocol: "mindoodb-app-bridge",
+                  kind: "error",
+                  id: message.id,
+                  error: { code: "method-not-found", message: "Unknown method." },
+                },
+          );
+        });
+        port.start();
+        port.postMessage({ protocol: "mindoodb-app-bridge", type: "mindoodb-app:connected" });
+      },
+    };
+    Object.defineProperty(globalThis, "window", {
+      value: { parent: host, opener: null, location: { search: `?mindoodbAppLaunchId=${launchId}` }, setTimeout, clearTimeout },
+      configurable: true,
+    });
+    return { variables, hostPort: () => hostPort as MessagePort | null };
+  }
+
+  it("starts the CSS variables at 0px, applies the host's insets and follows viewport changes", async () => {
+    const { variables, hostPort } = connectTo("launch-safe-area", true);
+    const session = await createMindooDBAppBridge().connect();
+    expect(variables.get("--mindoodb-safe-area-top")).toBe("0px");
+    expect(variables.get("--mindoodb-safe-area-bottom")).toBe("0px");
+
+    await expect(session.setEdgeToEdge(true)).resolves.toBe(true);
+    expect(variables.get("--mindoodb-safe-area-top")).toBe("62px");
+    expect(variables.get("--mindoodb-safe-area-bottom")).toBe("34px");
+
+    hostPort()!.postMessage({
+      protocol: "mindoodb-app-bridge",
+      kind: "viewport-changed",
+      viewport: { width: 874, height: 402, safeAreaInsets: { top: 0, right: 62, bottom: 21, left: 62 } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(variables.get("--mindoodb-safe-area-top")).toBe("0px");
+    expect(variables.get("--mindoodb-safe-area-left")).toBe("62px");
+    expect(variables.get("--mindoodb-safe-area-bottom")).toBe("21px");
+  });
+
+  it("answers false on hosts without edge-to-edge and leaves the variables at 0px", async () => {
+    const { variables } = connectTo("launch-safe-area-old", false);
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.setEdgeToEdge(true)).resolves.toBe(false);
+    expect(variables.get("--mindoodb-safe-area-top")).toBe("0px");
+  });
+});
