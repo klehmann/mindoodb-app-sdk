@@ -9,6 +9,11 @@
  * agents send for optional fields are removed first ({@link normalizeAgentToolInput}),
  * unless the tool sets `keepEmptyInput`.
  *
+ * While `execute` runs, every bridge request carries the call's id
+ * (`agentCallId`), so Haven can mark the document changes it causes as made by
+ * an AI agent. {@link MindooDBAppAgentApi.withCall} does the same for writes
+ * that happen after a tool returned.
+ *
  * @module agentTools
  */
 import type {
@@ -57,6 +62,8 @@ export interface AgentToolsRpc {
   call<TResult>(method: string, params: unknown): Promise<TResult>;
   postMessage(message: MindooDBAppBridgePortMessage): void;
   addMessageListener(listener: (message: MindooDBAppBridgePortMessage) => void): () => void;
+  /** Lets requests carry the agent call that is running (see {@link PortRpcClient}). */
+  setAgentCallProvider?(provider: (() => string | undefined) | null): void;
 }
 
 /** Tool results must be plain JSON; this also strips reactive proxies before cloning. */
@@ -67,6 +74,8 @@ function toJson(value: unknown): unknown {
 export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
   private tools = new Map<string, MindooDBAppAgentTool>();
   private readonly stopListening: () => void;
+  /** Calls whose writes are attributed right now, oldest first. */
+  private readonly activeCalls: string[] = [];
 
   constructor(private readonly rpc: AgentToolsRpc) {
     this.stopListening = rpc.addMessageListener((message) => {
@@ -74,6 +83,25 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
         void this.invoke(message.callId, message.tool, message.input);
       }
     });
+    rpc.setAgentCallProvider?.(() => this.currentCallId());
+  }
+
+  /** The most recently started call that is still running, if any. */
+  currentCallId(): string | undefined {
+    return this.activeCalls[this.activeCalls.length - 1];
+  }
+
+  async withCall<T>(callId: string, fn: () => Promise<T> | T): Promise<T> {
+    if (typeof callId !== "string" || !callId) {
+      return await fn();
+    }
+    this.activeCalls.push(callId);
+    try {
+      return await fn();
+    } finally {
+      const index = this.activeCalls.lastIndexOf(callId);
+      if (index >= 0) this.activeCalls.splice(index, 1);
+    }
   }
 
   async registerTools(tools: MindooDBAppAgentTool[]): Promise<MindooDBAppAgentRegistration> {
@@ -150,7 +178,9 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
 
   dispose() {
     this.stopListening();
+    this.rpc.setAgentCallProvider?.(null);
     this.tools.clear();
+    this.activeCalls.length = 0;
   }
 
   private async invoke(callId: string, name: string, input: Record<string, unknown>) {
@@ -161,7 +191,9 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
         throw new MindooDBAppAgentToolError("NOT_FOUND", `The app has no tool "${name}" (any more).`);
       }
       const raw = input ?? {};
-      const result = await tool.execute(tool.keepEmptyInput ? raw : normalizeAgentToolInput(raw, tool.inputSchema));
+      const result = await this.withCall(callId, () =>
+        tool.execute(tool.keepEmptyInput ? raw : normalizeAgentToolInput(raw, tool.inputSchema), { callId }),
+      );
       reply = { protocol: "mindoodb-app-bridge", kind: "agent-result", callId, ok: true, result: toJson(result) };
     } catch (error) {
       reply = {
