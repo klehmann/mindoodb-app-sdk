@@ -519,6 +519,18 @@ export interface MindooDBAppDocument {
 export type MindooDBAppDocumentRevisionId = string;
 
 /** One entry in the document history timeline. */
+/** How an AI agent made a revision; see {@link MindooDBAppDocumentHistoryEntry.agent}. */
+export interface MindooDBAppDocumentHistoryAgent {
+  /** `haven-assistant`, `webmcp` (agent in the browser) or `mcp` (agent on this computer). */
+  via: string;
+  /** Tool the agent called, e.g. `todo_tasks_complete`. */
+  tool?: string;
+  /** Language model, known for Haven's assistant only. */
+  model?: string;
+  /** The user confirmed the tool call before it ran. */
+  confirmed?: boolean;
+}
+
 export interface MindooDBAppDocumentHistoryEntry {
   revisionId: MindooDBAppDocumentRevisionId;
   timestamp: number;
@@ -529,6 +541,12 @@ export interface MindooDBAppDocumentHistoryEntry {
   isDeleted: boolean;
   isCurrent: boolean;
   summary?: string;
+  /**
+   * Set when an AI agent made this change on the user's behalf (through an app
+   * tool or Haven's assistant). The author is still `identityLabel`: show it as
+   * "Name (AI agent)". Absent for the user's own changes and on older hosts.
+   */
+  agent?: MindooDBAppDocumentHistoryAgent;
   /**
    * Named shared key this revision was written with, so a key change along the
    * timeline stays visible. Absent for person-encrypted revisions and on hosts
@@ -1235,6 +1253,12 @@ export interface MindooDBAppBridgeRpcRequest<TParams = unknown> {
   id: string;
   method: string;
   params: TParams;
+  /**
+   * The agent tool call this request belongs to (`agent-invoke` callId). Set by
+   * the SDK while a tool runs, or inside {@link MindooDBAppAgentApi.withCall};
+   * Haven marks the resulting document changes as made by an AI agent.
+   */
+  agentCallId?: string;
 }
 
 /** Successful RPC response envelope. */
@@ -1527,9 +1551,25 @@ export interface MindooDBAppAgentToolDescriptor {
   scope?: MindooDBAppAgentToolScope;
 }
 
-/** One agent tool an app offers. `execute` runs inside the app; its result must be JSON. */
+/** What {@link MindooDBAppAgentTool.execute} learns about the call besides its input. */
+export interface MindooDBAppAgentCallContext {
+  /**
+   * Haven's id for this call. Pass it to {@link MindooDBAppAgentApi.withCall}
+   * when the tool's edit is saved after `execute` returned (debounced autosave).
+   */
+  callId: string;
+}
+
+/**
+ * One agent tool an app offers. `execute` runs inside the app; its result must be JSON.
+ *
+ * Document writes the app sends through the bridge while `execute` runs are
+ * marked as made by an AI agent in the document history. Writes that happen
+ * later need {@link MindooDBAppAgentApi.withCall}.
+ */
 export interface MindooDBAppAgentTool extends MindooDBAppAgentToolDescriptor {
-  execute(input: Record<string, unknown>): Promise<unknown>;
+  /** `context` is always set when Haven calls the tool; optional for direct calls in tests. */
+  execute(input: Record<string, unknown>, context?: MindooDBAppAgentCallContext): Promise<unknown>;
   /**
    * Pass blank strings, empty arrays and empty objects in optional fields through
    * to `execute`. By default the SDK drops them, because some agents send them for
@@ -1562,6 +1602,18 @@ export interface MindooDBAppAgentRegistration {
 export interface MindooDBAppAgentApi {
   /** Replaces the app's whole tool set. Pass `[]` to withdraw all tools. */
   registerTools(tools: MindooDBAppAgentTool[]): Promise<MindooDBAppAgentRegistration>;
+  /**
+   * Runs `fn` with its bridge writes attributed to the agent call `callId`
+   * (from the `context` of {@link MindooDBAppAgentTool.execute}). For apps that
+   * persist a tool's edit after the tool returned, e.g. by debounced autosave.
+   * Haven accepts a call for a short while after it finished (two minutes);
+   * later or unknown ids leave the writes unmarked.
+   *
+   * The SDK cannot tell which async work belongs to which call: user edits
+   * saved while a tool runs (or inside `fn`) are marked too, and with several
+   * tools running at once their writes carry the most recently started call.
+   */
+  withCall<T>(callId: string, fn: () => Promise<T> | T): Promise<T>;
   /**
    * The app's state as an agent should see it (open document, view, selection).
    * Shown to agents in `haven_get_context` under the focused app. `null` clears it.

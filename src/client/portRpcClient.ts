@@ -89,6 +89,7 @@ export class PortRpcClient {
   private readonly listeners = new Set<(message: MindooDBAppBridgePortMessage) => void>();
   private requestCounter = 0;
   private disposed = false;
+  private agentCallProvider: (() => string | undefined) | null = null;
 
   constructor(private readonly port: MessagePort) {
     this.handleMessage = this.handleMessage.bind(this);
@@ -104,12 +105,14 @@ export class PortRpcClient {
 
     const normalizedParams = normalizeRpcValue(params);
     const id = `${Date.now()}-${this.requestCounter += 1}`;
+    const agentCallId = this.agentCallProvider?.();
     const message: MindooDBAppBridgeRpcRequest = {
       protocol: PROTOCOL,
       kind: "request",
       id,
       method,
       params: normalizedParams,
+      ...(agentCallId ? { agentCallId } : {}),
     };
 
     return await new Promise<TResult>((resolve, reject) => {
@@ -122,6 +125,14 @@ export class PortRpcClient {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  }
+
+  /**
+   * Requests sent while `provider` returns an id carry it as `agentCallId`, so
+   * Haven can attribute the writes to that agent tool call.
+   */
+  setAgentCallProvider(provider: (() => string | undefined) | null) {
+    this.agentCallProvider = provider;
   }
 
   /** Closes the port and rejects any requests that are still waiting for a response. */
