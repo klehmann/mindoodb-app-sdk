@@ -240,6 +240,29 @@ describe("MindooDBAppAgentApiImpl", () => {
       expect(api.currentCallId()).toBeUndefined();
     });
 
+    it("hands the change message Haven prepared to execute", async () => {
+      const { rpc } = createAttributingRpc();
+      const api = new MindooDBAppAgentApiImpl(rpc);
+      const seen: unknown[] = [];
+      await api.registerTools([
+        { name: "edit", description: "", inputSchema: {}, execute: async (_input, context) => seen.push(context) },
+      ]);
+      rpc.emit({
+        protocol: "mindoodb-app-bridge",
+        kind: "agent-invoke",
+        callId: "c2",
+        tool: "edit",
+        input: {},
+        changeMessage: '{"mindoo.attribution":{"v":1,"kind":"agent","via":"mcp"}}',
+      });
+      invoke(rpc, "edit");
+      await flush();
+      expect(seen).toEqual([
+        { callId: "c2", changeMessage: '{"mindoo.attribution":{"v":1,"kind":"agent","via":"mcp"}}' },
+        { callId: "c1" },
+      ]);
+    });
+
     it("clears the call when the tool fails", async () => {
       const { rpc } = createAttributingRpc();
       const api = new MindooDBAppAgentApiImpl(rpc);

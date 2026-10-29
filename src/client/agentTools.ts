@@ -80,7 +80,7 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
   constructor(private readonly rpc: AgentToolsRpc) {
     this.stopListening = rpc.addMessageListener((message) => {
       if (message.kind === "agent-invoke") {
-        void this.invoke(message.callId, message.tool, message.input);
+        void this.invoke(message.callId, message.tool, message.input, message.changeMessage);
       }
     });
     rpc.setAgentCallProvider?.(() => this.currentCallId());
@@ -183,7 +183,12 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
     this.activeCalls.length = 0;
   }
 
-  private async invoke(callId: string, name: string, input: Record<string, unknown>) {
+  private async invoke(
+    callId: string,
+    name: string,
+    input: Record<string, unknown>,
+    changeMessage: string | undefined,
+  ) {
     let reply: MindooDBAppBridgeAgentResultMessage;
     const tool = this.tools.get(name);
     try {
@@ -192,7 +197,10 @@ export class MindooDBAppAgentApiImpl implements MindooDBAppAgentApi {
       }
       const raw = input ?? {};
       const result = await this.withCall(callId, () =>
-        tool.execute(tool.keepEmptyInput ? raw : normalizeAgentToolInput(raw, tool.inputSchema), { callId }),
+        tool.execute(tool.keepEmptyInput ? raw : normalizeAgentToolInput(raw, tool.inputSchema), {
+          callId,
+          ...(typeof changeMessage === "string" && changeMessage ? { changeMessage } : {}),
+        }),
       );
       reply = { protocol: "mindoodb-app-bridge", kind: "agent-result", callId, ok: true, result: toJson(result) };
     } catch (error) {
