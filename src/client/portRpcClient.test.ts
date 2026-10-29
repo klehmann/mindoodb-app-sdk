@@ -53,4 +53,26 @@ describe("PortRpcClient", () => {
     await expect(client.call("views.page", params)).resolves.toEqual({ ok: true });
     client.dispose();
   });
+
+  it("adds the running agent call to requests", async () => {
+    const channel = new MessageChannel();
+    const client = new PortRpcClient(channel.port1);
+    const received: unknown[] = [];
+    channel.port2.addEventListener("message", (event) => {
+      received.push(event.data.agentCallId);
+      channel.port2.postMessage({ protocol: "mindoodb-app-bridge", kind: "success", id: event.data.id, result: null });
+    });
+    channel.port2.start();
+
+    let current: string | undefined = "call-7";
+    client.setAgentCallProvider(() => current);
+    await client.call("documents.update", {});
+    current = undefined;
+    await client.call("documents.update", {});
+    client.setAgentCallProvider(null);
+    await client.call("documents.update", {});
+
+    expect(received).toEqual(["call-7", undefined, undefined]);
+    client.dispose();
+  });
 });

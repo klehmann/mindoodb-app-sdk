@@ -191,4 +191,102 @@ describe("MindooDBAppAgentApiImpl", () => {
       /needs an image/,
     );
   });
+
+  describe("attributing writes to the call", () => {
+    function createAttributingRpc() {
+      const base = createRpc();
+      let provider: (() => string | undefined) | null = null;
+      const sent: Array<{ method: string; agentCallId?: string }> = [];
+      const rpc = Object.assign(base.rpc, {
+        setAgentCallProvider: (next: (() => string | undefined) | null) => {
+          provider = next;
+        },
+        call: vi.fn(async (method: string) => {
+          sent.push({ method, agentCallId: provider?.() });
+          return { enabled: true, exposedNames: [] };
+        }) as AgentToolsRpc["call"],
+      });
+      return { rpc, posted: base.posted, sent, provider: () => provider };
+    }
+
+    it("passes the call id to execute and on every request made while it runs", async () => {
+      const { rpc, sent } = createAttributingRpc();
+      const api = new MindooDBAppAgentApiImpl(rpc);
+      let seen: unknown;
+      await api.registerTools([
+        {
+          name: "save",
+          description: "",
+          inputSchema: {},
+          execute: async (_input, context) => {
+            seen = context;
+            await rpc.call("documents.update", {});
+            await flush();
+            await rpc.call("documents.create", {});
+            return null;
+          },
+        },
+      ]);
+      invoke(rpc, "save");
+      await flush();
+      await flush();
+      await rpc.call("documents.update", {});
+      expect(seen).toEqual({ callId: "c1" });
+      expect(sent.slice(1)).toEqual([
+        { method: "documents.update", agentCallId: "c1" },
+        { method: "documents.create", agentCallId: "c1" },
+        { method: "documents.update", agentCallId: undefined },
+      ]);
+      expect(api.currentCallId()).toBeUndefined();
+    });
+
+    it("clears the call when the tool fails", async () => {
+      const { rpc } = createAttributingRpc();
+      const api = new MindooDBAppAgentApiImpl(rpc);
+      await api.registerTools([
+        {
+          name: "boom",
+          description: "",
+          inputSchema: {},
+          execute: async () => {
+            throw new Error("nope");
+          },
+        },
+      ]);
+      invoke(rpc, "boom");
+      await flush();
+      expect(api.currentCallId()).toBeUndefined();
+    });
+
+    it("attributes later writes inside withCall, the latest call winning", async () => {
+      const { rpc, sent } = createAttributingRpc();
+      const api = new MindooDBAppAgentApiImpl(rpc);
+      let release!: () => void;
+      const outer = api.withCall("first", async () => {
+        await new Promise<void>((resolve) => (release = resolve));
+        await rpc.call("documents.update", {});
+      });
+      await api.withCall("second", async () => {
+        await rpc.call("documents.update", {});
+      });
+      release();
+      await outer;
+      await api.withCall("", async () => {
+        await rpc.call("documents.delete", {});
+      });
+      expect(sent).toEqual([
+        { method: "documents.update", agentCallId: "second" },
+        { method: "documents.update", agentCallId: "first" },
+        { method: "documents.delete", agentCallId: undefined },
+      ]);
+    });
+
+    it("stops providing call ids once disposed", () => {
+      const { rpc, provider } = createAttributingRpc();
+      const api = new MindooDBAppAgentApiImpl(rpc);
+      expect(provider()).not.toBeNull();
+      api.dispose();
+      expect(provider()).toBeNull();
+    });
+  });
 });
