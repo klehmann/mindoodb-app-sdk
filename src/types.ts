@@ -1558,6 +1558,18 @@ export interface MindooDBAppAgentCallContext {
    * when the tool's edit is saved after `execute` returned (debounced autosave).
    */
   callId: string;
+  /**
+   * The Automerge change message that marks a change as this agent call's,
+   * prepared by Haven. Only for apps that write raw Automerge changes
+   * (`documents.automerge.applyChanges`): make the agent's edit in changes of
+   * its own with `Automerge.change(doc, { message: changeMessage }, …)`, never
+   * together with the user's edits, and send them while the call runs (or
+   * inside {@link MindooDBAppAgentApi.withCall}). Haven refuses changes that
+   * carry a message it did not hand out for this app's running call. Haven
+   * cannot mark raw changes itself: the message is part of the change hash.
+   * Absent on hosts without change attribution.
+   */
+  changeMessage?: string;
 }
 
 /**
@@ -1684,6 +1696,8 @@ export interface MindooDBAppBridgeAgentInvokeMessage {
   /** The tool's name as the app registered it, without the prefix. */
   tool: string;
   input: Record<string, unknown>;
+  /** See {@link MindooDBAppAgentCallContext.changeMessage}. */
+  changeMessage?: string;
 }
 
 /** App → host: the outcome of an {@link MindooDBAppBridgeAgentInvokeMessage}. */
