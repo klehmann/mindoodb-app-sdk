@@ -40,6 +40,7 @@ import type {
   MindooDBAppIncomingContentHandler,
   MindooDBAppPdfSignInput,
   MindooDBAppPdfSignResult,
+  MindooDBAppFilesShareResult,
   MindooDBAppAccountRequestInput,
   MindooDBAppAccountScope,
   MindooDBAppAccountSummary,
@@ -144,6 +145,7 @@ import type {
   MindooDBAppTextCursorPosition,
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
+import { toShareFilePayloads, type MindooDBAppShareFilePayload } from "../client/files";
 import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
@@ -3946,6 +3948,8 @@ type MockSessionState = {
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
+  getShareRequests: () => MockShareRequest[];
+  setShareOutcome: (outcome: MockShareOutcome) => void;
   embedHost: ReturnType<typeof createMockEmbedHost>;
 };
 
@@ -3956,6 +3960,15 @@ type MockSessionState = {
  * never held. The other values answer `ok: false` with that reason.
  */
 export type MockPdfSignOutcome = "signed" | "declined" | "unsupported" | "invalid";
+
+/** What the mock answers to `session.files.share`: `"share"` (default) as if the user shared. */
+export type MockShareOutcome = "share" | "download" | "cancelled" | "unsupported";
+
+/** One `session.files.share` call the mock received. */
+export interface MockShareRequest {
+  files: MindooDBAppShareFilePayload[];
+  title?: string;
+}
 
 const MOCK_PDF_SIGNER = Object.freeze({
   commonName: "Test Signer",
@@ -4003,6 +4016,8 @@ function createMockSessionState(
   }
   const pdfSignRequests: MindooDBAppPdfSignInput[] = [];
   let pdfSignOutcome: MockPdfSignOutcome = "signed";
+  const shareRequests: MockShareRequest[] = [];
+  let shareOutcome: MockShareOutcome = "share";
   let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
   const pendingReminderTaps: MindooDBAppReminderOpened[] = [];
   const pendingIncoming: Array<() => void> = [];
@@ -4544,6 +4559,21 @@ function createMockSessionState(
         };
       },
     },
+    files: {
+      async share(files, options): Promise<MindooDBAppFilesShareResult> {
+        let payloads: MindooDBAppShareFilePayload[];
+        try {
+          payloads = await toShareFilePayloads(files);
+        } catch (error) {
+          return { ok: false, reason: "invalid", message: error instanceof Error ? error.message : String(error) };
+        }
+        shareRequests.push({ files: payloads, ...(options?.title ? { title: options.title } : {}) });
+        if (shareOutcome === "cancelled" || shareOutcome === "unsupported") {
+          return { ok: false, reason: shareOutcome };
+        }
+        return { ok: true, method: shareOutcome };
+      },
+    },
     onBeforeClose(listener) {
       beforeCloseListeners.add(listener);
       return () => {
@@ -4666,6 +4696,12 @@ function createMockSessionState(
     },
     setPdfSignOutcome(outcome: MockPdfSignOutcome) {
       pdfSignOutcome = outcome;
+    },
+    getShareRequests() {
+      return shareRequests.map((request) => ({ ...request, files: request.files.map((file) => ({ ...file })) }));
+    },
+    setShareOutcome(outcome: MockShareOutcome) {
+      shareOutcome = outcome;
     },
     async emitReminderOpened(id, action = "open") {
       const reminder = mockReminders.get(id);
@@ -5016,6 +5052,10 @@ export interface MockMindooDBAppSessionController {
   getPdfSignRequests(): MindooDBAppPdfSignInput[];
   /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
   setPdfSignOutcome(outcome: MockPdfSignOutcome): void;
+  /** Every `session.files.share` call so far, oldest first. */
+  getShareRequests(): MockShareRequest[];
+  /** What the next `session.files.share` calls answer; see {@link MockShareOutcome}. */
+  setShareOutcome(outcome: MockShareOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -5252,6 +5292,8 @@ export function createMockMindooDBAppSession(
     emitReminderOpened: state.emitReminderOpened,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
+    getShareRequests: state.getShareRequests,
+    setShareOutcome: state.setShareOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),
@@ -5376,6 +5418,10 @@ export interface FakeBridgeHostController {
   getPdfSignRequests(): MindooDBAppPdfSignInput[];
   /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
   setPdfSignOutcome(outcome: MockPdfSignOutcome): void;
+  /** Every `session.files.share` call so far, oldest first. */
+  getShareRequests(): MockShareRequest[];
+  /** What the next `session.files.share` calls answer; see {@link MockShareOutcome}. */
+  setShareOutcome(outcome: MockShareOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -5939,6 +5985,11 @@ export function createFakeBridgeHost(
         return await state.session.proposeApp(params as unknown as MindooDBAppProposeAppInput);
       case "pdf.sign":
         return await state.session.pdf.sign(params as unknown as MindooDBAppPdfSignInput);
+      case "files.share":
+        return await state.session.files.share(
+          (params.files ?? []) as MindooDBAppShareFilePayload[],
+          { title: typeof params.title === "string" ? params.title : undefined },
+        );
       case "documents.list":
         return await state
           .getDatabase(String(params.databaseId))
@@ -6804,6 +6855,8 @@ export function createFakeBridgeHost(
     applyRemoteUpdate: state.applyRemoteUpdate,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
+    getShareRequests: state.getShareRequests,
+    setShareOutcome: state.setShareOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
     closeEmbed: (embedId, reason, result) => state.embedHost.closeEmbed(embedId, reason, result),

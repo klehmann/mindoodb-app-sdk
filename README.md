@@ -929,6 +929,24 @@ download(result.pdf, "Site survey (signed).pdf");
 - Acrobat shows a green check only for certificates that chain to the Adobe Approved Trust List or that the reader trusts; a self-signed or company certificate shows "validity unknown", which is expected.
 - No capability is needed: nothing is signed without the user choosing a certificate and entering its password in Haven's own dialog.
 
+### Sharing files
+
+`session.files.share` hands one or more files to the system share sheet together, so the user can mail them, send them in a chat, AirDrop them or save them to Files. Browsers and iOS only open a share sheet on a tap, so Haven first shows its own small sheet ("3 files ready · Share") and the user's tap there opens the system one. Where there is no share sheet (most desktop browsers), Haven downloads the files instead.
+
+```ts
+const pdfs = await Promise.all(selected.map((doc) => embedOf(doc).export({ format: "pdf" })));
+const result = await session.files.share(pdfs, { title: "3 offers" });
+if (!result.ok) {
+  // "cancelled": the user closed a sheet. "unsupported": older Haven. Not errors.
+  return;
+}
+// result.method: "share" (system share sheet) or "download"
+```
+
+- Each file is a `File`, or `{ name, type?, data }` with `Uint8Array` or `Blob` data. At most 50 files and 200 MB together, else `{ ok: false, reason: "invalid", message }`.
+- No capability is needed: nothing leaves the device unless the user picks a target in the system sheet.
+- In tests, `getShareRequests()` lists what the app shared and `setShareOutcome("cancelled")` changes the answer.
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
@@ -2434,6 +2452,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
 | `notify(input)`                       | `Promise<{ id: string }>`            |
 | `pdf.sign(input)`                     | `Promise<MindooDBAppPdfSignResult>`  |
+| `files.share(files, options?)`        | `Promise<MindooDBAppFilesShareResult>` |
 | `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
 | `agent?.setContext(context)`          | `Promise<void>`                      |
 | `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |
