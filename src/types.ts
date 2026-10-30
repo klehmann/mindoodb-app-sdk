@@ -1869,6 +1869,105 @@ export interface MindooDBAppRemindersApi {
   onOpened(handler: MindooDBAppReminderOpenedHandler): () => void;
 }
 
+/**
+ * State of `session.localFiles`. `available`: the app may read and write.
+ * `not-allowed`: the user has not allowed files for this app (definition field
+ * `allowFiles`, switch in "Configure application"). `locked`: Haven is locked;
+ * the files are encrypted and readable again after unlocking. `unsupported`:
+ * an older Haven, or a browser without storage for files (private browsing).
+ */
+export type MindooDBAppLocalFilesState = "available" | "not-allowed" | "locked" | "unsupported";
+
+/**
+ * Why a `session.localFiles` call failed; on the thrown error as `code`.
+ * `not-found`: no such file. `no-space`: the device has too little room for
+ * the size given to `create`. `invalid`: a bad name, size or range.
+ * `closed`: the writer or reader was closed or aborted.
+ */
+export type MindooDBAppLocalFilesErrorCode = Exclude<MindooDBAppLocalFilesState, "available"> | "not-found" | "no-space" | "invalid" | "closed";
+
+export interface MindooDBAppLocalFileInfo {
+  /** Path inside the app's file area, e.g. `areas/karlsruhe.pmtiles`. */
+  name: string;
+  /** Bytes as the app wrote them (Haven's encryption overhead not included). */
+  size: number;
+  /** Epoch milliseconds of the last `close()`. */
+  modifiedAt: number;
+  /** Included in Haven's backup (see `allowFiles.backup`). */
+  backup: boolean;
+}
+
+export interface MindooDBAppLocalFilesEstimate {
+  /** Bytes all files of this app take on this device (in this tenant). */
+  used: number;
+  /** Bytes still free for files, or null when the device does not tell. */
+  available: number | null;
+}
+
+export interface MindooDBAppLocalFileCreateOptions {
+  /** Final size in bytes; Haven checks the room for it before the first write. */
+  size: number;
+  /**
+   * Include this file in Haven's backup. Only honoured when the definition
+   * says `allowFiles: { backup: "perFile" }`; `backup: true` there includes
+   * every file anyway.
+   */
+  backup?: boolean;
+}
+
+/**
+ * A file being written. Pieces may arrive in any order and at any offset
+ * inside `size`; the file becomes visible under its name on `close()`, until
+ * then a file of the same name keeps its old content.
+ */
+export interface MindooDBAppLocalFileWriter {
+  readonly name: string;
+  readonly size: number;
+  /** Writes `data` at byte offset `at`. Wait for it before sending much more (back pressure). */
+  write(data: ArrayBuffer | ArrayBufferView, at: number): Promise<void>;
+  /** Finishes the file; bytes never written read as zeros. */
+  close(): Promise<MindooDBAppLocalFileInfo>;
+  /** Drops the unfinished file; an older file of the same name stays. */
+  abort(): Promise<void>;
+}
+
+/** A file opened for reading byte ranges. */
+export interface MindooDBAppLocalFileReader {
+  readonly name: string;
+  readonly size: number;
+  /** `length` bytes from `offset` (fewer at the end of the file). */
+  read(offset: number, length: number): Promise<Uint8Array>;
+  /** Several ranges in one round trip, results in the same order. */
+  readMany(ranges: ReadonlyArray<readonly [offset: number, length: number]>): Promise<Uint8Array[]>;
+  /** Releases the file in Haven; reads afterwards fail with `closed`. */
+  close(): Promise<void>;
+}
+
+/**
+ * `session.localFiles`: large files on this device, kept by Haven for this app
+ * — offline map areas, media caches, models. Haven stores them encrypted
+ * (readable only while unlocked), separately per user, tenant and app, and in
+ * its own storage, which is larger than an app frame's (on iOS about 10 GB
+ * instead of 1 GB). Files stay when the app is removed, so a reinstall finds
+ * them; the user deletes them in Haven's storage settings.
+ *
+ * Needs the definition field `allowFiles` and the user's consent; check
+ * `state()` and fall back to the app's own storage when it is not `available`.
+ * Names are paths of `[A-Za-z0-9._-]` segments separated by `/`.
+ */
+export interface MindooDBAppLocalFilesApi {
+  state(): Promise<MindooDBAppLocalFilesState>;
+  estimate(): Promise<MindooDBAppLocalFilesEstimate>;
+  create(name: string, options: MindooDBAppLocalFileCreateOptions): Promise<MindooDBAppLocalFileWriter>;
+  open(name: string): Promise<MindooDBAppLocalFileReader>;
+  /** The file's info, or null when there is none. */
+  stat(name: string): Promise<MindooDBAppLocalFileInfo | null>;
+  /** Files whose names start with `prefix` (all without), sorted by name. */
+  list(prefix?: string): Promise<MindooDBAppLocalFileInfo[]>;
+  /** Deletes the file; unknown names are ignored. */
+  remove(name: string): Promise<void>;
+}
+
 /** Push message: a reminder of this app was tapped. */
 export interface MindooDBAppBridgeReminderOpenedMessage {
   protocol: "mindoodb-app-bridge";
@@ -4591,6 +4690,11 @@ export interface MindooDBAppSession {
   pdf: MindooDBAppPdfApi;
   /** Hand files to the user's other apps through the system share sheet. */
   files: MindooDBAppFilesApi;
+  /**
+   * Large files on this device, kept encrypted by Haven for this app. See
+   * {@link MindooDBAppLocalFilesApi}.
+   */
+  localFiles: MindooDBAppLocalFilesApi;
   /**
    * Run work before the host tears this launch down, e.g. flushing buffered writes.
    *

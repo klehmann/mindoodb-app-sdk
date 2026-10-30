@@ -123,6 +123,13 @@ export interface MindooDBAppDefinition {
   allowWebRtc?: boolean;
   allowWorkers?: boolean;
   /**
+   * Large files on the device through `session.localFiles` (offline maps, caches).
+   * `true` or an object; the user still allows it per app. `purpose` explains why, per
+   * language, in the consent. `backup`: `false` (default) keeps the files out of
+   * Haven's backup, `true` includes all, `"perFile"` lets the app decide per file.
+   */
+  allowFiles?: boolean | MindooDBAppFilesPermission;
+  /**
    * Prefix for the app's agent tools: `vega` turns `map_get` into `vega_map_get`.
    * Lowercase letters, digits and `_`, starting with a letter, at most 16 characters;
    * `haven` is reserved. Without it Haven derives a prefix from the app id or label.
@@ -330,6 +337,14 @@ export interface MindooDBAppComponentSpec {
  * `en`, the fallback for every locale it does not name.
  */
 export type MindooDBAppLocalizedText = string | ({ en: string } & Record<string, string>);
+
+/** Definition field `allowFiles` in its object form. */
+export interface MindooDBAppFilesPermission {
+  /** Why the app keeps files, shown when the user allows it. */
+  purpose?: MindooDBAppLocalizedText;
+  /** `false` (default): not in Haven's backup; `true`: all files; `"perFile"`: per `create` option. */
+  backup?: boolean | "perFile";
+}
 
 export interface MindooDBAppDefinitionScreenshot {
   /** Image path relative to the app origin, or an absolute `https:` URL. */
@@ -588,6 +603,26 @@ function readLocalizedText(
     return undefined;
   }
   return result as { en: string } & Record<string, string>;
+}
+
+function readFilesPermission(value: unknown, errors: string[]): boolean | MindooDBAppFilesPermission | undefined {
+  if (value === undefined || value === null || value === false) {
+    return undefined;
+  }
+  if (value === true) {
+    return true;
+  }
+  if (!isPlainObject(value)) {
+    errors.push("App definition allowFiles must be a boolean or an object.");
+    return undefined;
+  }
+  const purpose = readLocalizedText(value.purpose, "App definition allowFiles.purpose", 200, errors);
+  const backup = value.backup;
+  if (backup !== undefined && backup !== true && backup !== false && backup !== "perFile") {
+    errors.push('App definition allowFiles.backup must be true, false or "perFile".');
+    return undefined;
+  }
+  return { ...(purpose ? { purpose } : {}), ...(backup ? { backup } : {}) };
 }
 
 export const MINDOODB_APP_ACCEPTS_MAX = 16;
@@ -1400,6 +1435,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowLocalFonts = readOptionalBoolean(raw, "allowLocalFonts", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
+  const allowFiles = readFilesPermission(raw.allowFiles, errors);
   const listing = readListing(raw.listing, errors);
   const accepts = readAccepts(raw.accepts, errors);
   const components = readComponents(raw.components, errors);
@@ -1448,6 +1484,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowLocalFonts,
       allowWebRtc,
       allowWorkers,
+      allowFiles,
       agentToolPrefix,
       permissions,
       launchParameters,

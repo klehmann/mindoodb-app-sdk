@@ -227,6 +227,8 @@ export function mockDatabasesFromDefinition(
  * - `enforce=1` turns the capability checks on
  * - `users=<count>` fills the directory with generated users
  * - `locale=<tag>`, `theme=dark|light`
+ * - `files=not-allowed|locked|unsupported` starts `session.localFiles` in that state,
+ *   `filesFree=<bytes>` (or `50MB`, `2GB`) sets the free room it reports
  * - `automerge=1` backs every database with real Automerge documents (concurrent
  *   `baseHeads` merges, real heads); `automerge=0` turns it off
  */
@@ -237,6 +239,7 @@ export interface TestHostUrlSettings {
   directoryUserCount?: number;
   locale?: string;
   theme?: "dark" | "light";
+  localFiles?: { state?: "not-allowed" | "locked" | "unsupported"; available?: number };
 }
 
 export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
@@ -269,6 +272,15 @@ export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
   if (locale) settings.locale = locale;
   const theme = params.get("theme");
   if (theme === "dark" || theme === "light") settings.theme = theme;
+  const files = params.get("files");
+  const filesFree = /^(\d+(?:\.\d+)?)\s*(KB|MB|GB)?$/i.exec(params.get("filesFree") ?? "");
+  if (files === "not-allowed" || files === "locked" || files === "unsupported" || filesFree) {
+    const unit = { KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }[(filesFree?.[2] ?? "").toUpperCase() as "KB"] ?? 1;
+    settings.localFiles = {
+      ...(files === "not-allowed" || files === "locked" || files === "unsupported" ? { state: files } : {}),
+      ...(filesFree ? { available: Math.round(Number(filesFree[1]) * unit) } : {}),
+    };
+  }
   return settings;
 }
 
@@ -897,6 +909,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     ...hostOptions,
     databases,
     launchContext,
+    ...(url.localFiles ? { localFiles: url.localFiles } : {}),
     enforceCapabilities: url.enforceCapabilities ?? hostOptions.enforceCapabilities,
     directoryUsers:
       url.directoryUserCount !== undefined

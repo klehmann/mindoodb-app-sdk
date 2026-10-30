@@ -949,6 +949,60 @@ if (!result.ok) {
 
 **Downloads in Haven's apps.** A plain download link (`<a download href="blob:…">` or a `data:` URL, clicked by the user or with `a.click()`) works in a browser, but not in Haven's iOS, Android and desktop apps: the app runs in a frame there, which cannot download a blob, and Haven blocks the navigation it turns into. So the SDK takes such clicks over when `session.getDevice().platform` is not `"browser"` and hands the file to `session.files.share` instead (Haven's sheet, then the system share sheet). In a browser nothing changes, and an existing download button needs no change of its own. Turn it off with `bridge.connect({ downloadsToShare: false })`.
 
+### Large files on the device
+
+`session.localFiles` asks Haven to keep large local files for the app: offline map areas, media caches, models — data that does not belong in documents and would not fit in the app frame's own storage (on iOS a frame gets about 1 GB, Haven's own storage about 10 GB; Haven Desktop stores real files in its app data folder).
+
+- **Encrypted.** Haven seals the files block by block with a key derived from the user's identity, so they are readable only while Haven is unlocked (state `locked` otherwise). File names are encrypted too.
+- **Separate** per user, tenant and app. Another app never sees them.
+- **No quota per app.** The limit is the device's free space; `create` checks the size you pass against it.
+- **Kept on uninstall.** Removing the app leaves its files, so a reinstall finds them. The user sees and deletes them under Preferences → Stats → App files.
+
+Request it in `haven-app.json`; the user can switch it off per app in "Configure application":
+
+```json
+"allowFiles": {
+  "purpose": { "en": "Offline map areas", "de": "Offline-Kartengebiete" },
+  "backup": false
+}
+```
+
+`allowFiles: true` also works. `backup` decides what goes into Haven's backup: `false` (default — data the app can download again), `true` (every file) or `"perFile"` (the app passes `{ backup: true }` to `create`; without `"perFile"` that option is ignored).
+
+```ts
+const files = session.localFiles;
+if ((await files.state()) === "available") {
+  const { used, available } = await files.estimate();          // bytes; available may be null
+  const writer = await files.create("areas/karlsruhe.pmtiles", { size: totalBytes });
+  try {
+    for (const { bytes, offset } of pieces) {
+      await writer.write(bytes, offset);   // any order, any offset inside size; await = back pressure
+    }
+    await writer.close();                  // only now the file appears under its name
+  } catch (error) {
+    await writer.abort();                  // drops the unfinished file; an older one of that name stays
+    throw error;
+  }
+
+  const reader = await files.open("areas/karlsruhe.pmtiles");
+  const header = await reader.read(0, 16384);                       // fewer bytes at the end of the file
+  const [tileA, tileB] = await reader.readMany([[12_000, 48_000], [990_000, 51_000]]);   // one round trip
+  await reader.close();
+
+  await files.list("areas/");    // [{ name, size, modifiedAt, backup }], sorted by name
+  await files.stat("areas/karlsruhe.pmtiles");   // or null
+  await files.remove("areas/old.pmtiles");       // unknown names are ignored
+} else {
+  // "not-allowed", "locked", "unsupported" (older Haven, private browsing): use the frame's own storage
+}
+```
+
+- **States**: `available`, `not-allowed` (no `allowFiles`, or the user switched it off), `locked`, `unsupported`.
+- **Errors** carry a `code`: the three states above, `not-found`, `no-space` (the size given to `create` does not fit), `invalid` (bad name, size or range), `closed` (writer or reader already closed).
+- **Names** are paths of `[A-Za-z0-9._-]` segments separated by `/`, at most 200 characters (`localFileNameProblem(name)` tells why one is not valid).
+- **Cost**: Haven seals 64 KiB blocks with AES-GCM and opens only the blocks a read touches. A tile-sized read takes about 0.5–2 ms including the bridge round trip; writes run at hundreds of MB/s, far above download speed. Keep a reader open for repeated reads and use `readMany` for several ranges.
+- **Tests**: the mock session keeps files in memory; `setLocalFilesState("not-allowed")`, `setLocalFilesAvailable(bytes)` and `listLocalFiles()` on the controller, `?files=not-allowed|locked|unsupported` and `?filesFree=50MB` in the browser test host.
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
@@ -2455,6 +2509,11 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `notify(input)`                       | `Promise<{ id: string }>`            |
 | `pdf.sign(input)`                     | `Promise<MindooDBAppPdfSignResult>`  |
 | `files.share(files, options?)`        | `Promise<MindooDBAppFilesShareResult>` |
+| `localFiles.state()`                  | `Promise<MindooDBAppLocalFilesState>` |
+| `localFiles.estimate()`               | `Promise<{ used; available }>`       |
+| `localFiles.create(name, { size, backup? })` | `Promise<MindooDBAppLocalFileWriter>` (`write(data, at)`, `close()`, `abort()`) |
+| `localFiles.open(name)`               | `Promise<MindooDBAppLocalFileReader>` (`read(offset, length)`, `readMany(ranges)`, `close()`) |
+| `localFiles.stat(name)` / `list(prefix?)` / `remove(name)` | `Promise<MindooDBAppLocalFileInfo \| null>` / `Promise<MindooDBAppLocalFileInfo[]>` / `Promise<void>` |
 | `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
 | `agent?.setContext(context)`          | `Promise<void>`                      |
 | `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |
