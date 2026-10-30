@@ -1,3 +1,5 @@
+import { localFilesError } from "../localFiles";
+import { createMockLocalFiles } from "./mockLocalFiles";
 import * as Automerge from "@automerge/automerge";
 import {
   evaluateExpression,
@@ -48,6 +50,10 @@ import type {
   MindooDBAppJmapResponse,
   MindooDBAppJmapSession,
   MindooDBAppDeviceInfo,
+  MindooDBAppLocalFileInfo,
+  MindooDBAppLocalFileReader,
+  MindooDBAppLocalFilesState,
+  MindooDBAppLocalFileWriter,
   MindooDBAppReminder,
   MindooDBAppReminderOpened,
   MindooDBAppReminderOpenedHandler,
@@ -3943,6 +3949,9 @@ type MockSessionState = {
   getDragProfile: () => MindooDBAppDragProfile | null;
   emitIncomingContent: (input: MockIncomingContentInput) => Promise<MindooDBAppIncomingResult>;
   listReminders: () => MindooDBAppReminder[];
+  setLocalFilesState: (state: MindooDBAppLocalFilesState) => void;
+  setLocalFilesAvailable: (bytes: number | null) => void;
+  listLocalFiles: () => MindooDBAppLocalFileInfo[];
   getAccountRequests: () => MindooDBAppAccountRequestInput[];
   getAccountGrants: () => Record<string, MindooDBAppAccountScope[]>;
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
@@ -3999,6 +4008,7 @@ function createMockSessionState(
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const mockReminders = new Map<string, MindooDBAppReminder>();
+  const mockLocalFiles = createMockLocalFiles(options.localFiles);
   const mockDevice: MindooDBAppDeviceInfo = options.device ?? {
     id: "mock-device",
     label: "Test device",
@@ -4506,6 +4516,7 @@ function createMockSessionState(
         return await account.downloadBlob(input);
       },
     },
+    localFiles: mockLocalFiles.api,
     reminders: {
       async schedule(request) {
         const at = request.at instanceof Date ? request.at.getTime() : request.at;
@@ -4684,6 +4695,15 @@ function createMockSessionState(
     },
     listReminders() {
       return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
+    },
+    setLocalFilesState(state) {
+      mockLocalFiles.setState(state);
+    },
+    setLocalFilesAvailable(bytes) {
+      mockLocalFiles.setAvailable(bytes);
+    },
+    listLocalFiles() {
+      return mockLocalFiles.list();
     },
     getAccountRequests() {
       return accountRequests.map((request) => ({ ...request, scopes: [...request.scopes] }));
@@ -4891,6 +4911,8 @@ function mockAccountSummary(account: MockMailAccount, scopes: MindooDBAppAccount
 
 export interface CreateMockMindooDBAppSessionOptions {
   launchContext?: Partial<MindooDBAppLaunchContext>;
+  /** Start state and free bytes of `session.localFiles` (default: available, 10 GB). */
+  localFiles?: { state?: MindooDBAppLocalFilesState; available?: number | null };
   databases?: MockMindooDBAppDatabaseDefinition[];
   onDisconnect?: () => MaybePromise<void>;
   sealedChannel?: MockSealedChannelOptions;
@@ -5039,6 +5061,12 @@ export interface MockMindooDBAppSessionController {
   emitIncomingContent(input: MockIncomingContentInput): Promise<MindooDBAppIncomingResult>;
   /** Reminders the app scheduled (`session.reminders.schedule`) that were not tapped or cancelled. */
   listReminders(): MindooDBAppReminder[];
+  /** What `session.localFiles.state()` answers; other states make every other call fail with it. */
+  setLocalFilesState(state: MindooDBAppLocalFilesState): void;
+  /** Free bytes `session.localFiles` reports and checks in `create`; null: unknown. */
+  setLocalFilesAvailable(bytes: number | null): void;
+  /** Files the app keeps through `session.localFiles`, sorted by name. */
+  listLocalFiles(): MindooDBAppLocalFileInfo[];
   /** Every `session.accounts.request` input so far, oldest first. */
   getAccountRequests(): MindooDBAppAccountRequestInput[];
   /** Account id → scopes this app holds, as `accounts.request` granted them. */
@@ -5287,6 +5315,9 @@ export function createMockMindooDBAppSession(
     getDragProfile: state.getDragProfile,
     emitIncomingContent: state.emitIncomingContent,
     listReminders: state.listReminders,
+    setLocalFilesState: state.setLocalFilesState,
+    setLocalFilesAvailable: state.setLocalFilesAvailable,
+    listLocalFiles: state.listLocalFiles,
     getAccountRequests: state.getAccountRequests,
     getAccountGrants: state.getAccountGrants,
     emitReminderOpened: state.emitReminderOpened,
@@ -5488,6 +5519,14 @@ export function createFakeBridgeHost(
   );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
+  // Open `session.localFiles` writers and readers by handle, as Haven keeps them.
+  const localFileHandles = new Map<string, MindooDBAppLocalFileWriter | MindooDBAppLocalFileReader>();
+  let nextLocalFileHandle = 0;
+  const localFileHandle = <T>(params: Record<string, unknown>): T => {
+    const handle = localFileHandles.get(String(params.handle));
+    if (!handle) throw localFilesError("closed", "unknown file handle");
+    return handle as T;
+  };
   const agentHost = createMockAgentHost({
     ...(options.agentToolPrefix !== undefined ? { agentToolPrefix: options.agentToolPrefix } : {}),
     ...(options.agentToolsEnabled !== undefined ? { agentToolsEnabled: options.agentToolsEnabled } : {}),
@@ -5983,6 +6022,47 @@ export function createFakeBridgeHost(
         return { ok: true };
       case "apps.propose":
         return await state.session.proposeApp(params as unknown as MindooDBAppProposeAppInput);
+      case "localFiles.state":
+        return await state.session.localFiles.state();
+      case "localFiles.estimate":
+        return await state.session.localFiles.estimate();
+      case "localFiles.create": {
+        const writer = await state.session.localFiles.create(String(params.name), { size: Number(params.size), backup: params.backup === true });
+        const handle = `w${(nextLocalFileHandle += 1)}`;
+        localFileHandles.set(handle, writer);
+        return { handle };
+      }
+      case "localFiles.write":
+        await localFileHandle<MindooDBAppLocalFileWriter>(params).write(params.data as Uint8Array, Number(params.at));
+        return { ok: true };
+      case "localFiles.close": {
+        const info = await localFileHandle<MindooDBAppLocalFileWriter>(params).close();
+        localFileHandles.delete(String(params.handle));
+        return info;
+      }
+      case "localFiles.abort":
+        await (localFileHandles.get(String(params.handle)) as MindooDBAppLocalFileWriter | undefined)?.abort?.();
+        localFileHandles.delete(String(params.handle));
+        return { ok: true };
+      case "localFiles.open": {
+        const reader = await state.session.localFiles.open(String(params.name));
+        const handle = `r${(nextLocalFileHandle += 1)}`;
+        localFileHandles.set(handle, reader);
+        return { handle, size: reader.size };
+      }
+      case "localFiles.read":
+        return await localFileHandle<MindooDBAppLocalFileReader>(params).readMany(params.ranges as Array<[number, number]>);
+      case "localFiles.release":
+        await (localFileHandles.get(String(params.handle)) as MindooDBAppLocalFileReader | undefined)?.close();
+        localFileHandles.delete(String(params.handle));
+        return { ok: true };
+      case "localFiles.stat":
+        return await state.session.localFiles.stat(String(params.name));
+      case "localFiles.list":
+        return await state.session.localFiles.list(typeof params.prefix === "string" ? params.prefix : undefined);
+      case "localFiles.remove":
+        await state.session.localFiles.remove(String(params.name));
+        return { ok: true };
       case "pdf.sign":
         return await state.session.pdf.sign(params as unknown as MindooDBAppPdfSignInput);
       case "files.share":
