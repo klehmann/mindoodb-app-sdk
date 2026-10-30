@@ -41,6 +41,7 @@ import { parseMindooDBFormulaBooleanExpression } from "mindoodb-view-language";
 import { MindooDBAppAgentApiImpl } from "./agentTools";
 import { MindooDBAppEmbedsClient } from "./embeds";
 import { MindooDBAppIncomingApiImpl } from "./incomingContent";
+import { MindooDBAppFilesApiImpl } from "./files";
 import { MindooDBAppPdfApiImpl } from "./pdf";
 import { MindooDBAppAccountsApiImpl } from "./accounts";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
@@ -1648,6 +1649,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly reminders: MindooDBAppRemindersApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
   public readonly pdf: MindooDBAppPdfApiImpl;
+  public readonly files: MindooDBAppFilesApiImpl;
   private readonly embedsClient: MindooDBAppEmbedsClient;
   public readonly components: MindooDBAppComponentsApi;
   public readonly embeds: MindooDBAppEmbedsApi;
@@ -1676,6 +1678,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
     this.pdf = new MindooDBAppPdfApiImpl(this.rpc);
+    this.files = new MindooDBAppFilesApiImpl(this.rpc);
     this.embedsClient = new MindooDBAppEmbedsClient(this.rpc);
     this.components = this.embedsClient.components;
     this.embeds = this.embedsClient.embeds;
