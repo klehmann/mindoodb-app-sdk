@@ -23,6 +23,30 @@ function isUnknownMethod(error: unknown): boolean {
   return code === "method-not-found" || code === "unsupported";
 }
 
+/** A copy of the bytes of a typed array, ArrayBuffer or Blob/File. */
+async function bytesOf(source: unknown): Promise<Uint8Array> {
+  if (ArrayBuffer.isView(source)) {
+    return new Uint8Array(source.buffer, source.byteOffset, source.byteLength).slice();
+  }
+  if (Object.prototype.toString.call(source) === "[object ArrayBuffer]") {
+    return new Uint8Array(source as ArrayBuffer).slice();
+  }
+  const blob = source as Blob;
+  if (typeof blob?.arrayBuffer === "function") {
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+  if (typeof FileReader !== "undefined" && typeof blob?.size === "number") {
+    // Blobs without arrayBuffer() (jsdom).
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+  throw new Error("Every file needs its bytes: a File, a Blob or a Uint8Array.");
+}
+
 /** Name, type and bytes of each file; throws a message when a limit is broken. */
 export async function toShareFilePayloads(files: readonly MindooDBAppShareFile[]): Promise<MindooDBAppShareFilePayload[]> {
   if (!Array.isArray(files) || files.length === 0) {
@@ -38,12 +62,13 @@ export async function toShareFilePayloads(files: readonly MindooDBAppShareFile[]
     if (!name) {
       throw new Error("Every file needs a name.");
     }
-    const source = typeof File !== "undefined" && file instanceof File ? file : (file as { data: Uint8Array | Blob }).data;
-    const data =
-      source instanceof Uint8Array ? source.slice() : new Uint8Array(await (source as Blob).arrayBuffer());
+    // No instanceof: files and bytes may come from another realm (a frame, a
+    // MessagePort in jsdom), where they are not this realm's File or Uint8Array.
+    const data = await bytesOf((file as { data?: unknown }).data ?? file);
+    const source = (file as { data?: unknown }).data ?? file;
+    const sourceType = (source as { type?: unknown }).type;
     const type =
-      (file as { type?: string }).type || (typeof Blob !== "undefined" && source instanceof Blob ? source.type : "") ||
-      "application/octet-stream";
+      (file as { type?: string }).type || (typeof sourceType === "string" ? sourceType : "") || "application/octet-stream";
     total += data.byteLength;
     if (total > MAX_SHARE_BYTES) {
       throw new Error("The files are larger than 200 MB together.");
