@@ -402,7 +402,7 @@ mountHavenTestHost({
 });
 ```
 
-The panel keeps its settings in the page URL, so a scenario can be linked or opened by Playwright directly: `/__haven-test/?db=main:read,attachments&db=archive:none&enforce=1&users=120&locale=de-DE&theme=dark` (`db=<id>:none` unmaps a database; `automerge=1` backs all databases with Automerge documents; URL settings win over the options). The same controls are scriptable as `window.__havenTestHost`:
+The panel keeps its settings in the page URL, so a scenario can be linked or opened by Playwright directly: `/__haven-test/?db=main:read,attachments&db=archive:none&enforce=1&users=120&locale=de-DE&theme=dark` (`db=<id>:none` unmaps a database; `automerge=1` backs all databases with Automerge documents; `files=not-allowed|locked|unsupported` starts `session.localFiles` in that state and `filesFree=50MB` sets the free room it reports; URL settings win over the options). The same controls are scriptable as `window.__havenTestHost`:
 
 ```ts
 await page.goto("/__haven-test/?enforce=1");
@@ -436,7 +436,7 @@ const file = await page.evaluate((ref) => agent().getFile(ref)?.name, (exported 
 
 `setNextScan()` decides only the next scan (pass `bytes` to attach real content); `setScanMode()` decides the ones after it. `setDirectoryUsers()` and `setEnforceCapabilities()` apply to the next call.
 
-The Level 1 and 2 helpers take the same options: `createMockMindooDBAppSession({ enforceCapabilities: true, directoryUsers: generateDirectoryUsers(120) })`, with `setCapabilities()`, `setEnforceCapabilities()` and `setDirectoryUsers()` on the controller, and `createMemoryAttachments()` for a database's `methods.attachments`. `createFakeBridgeHost({ onResponse })` reports every answer with its duration.
+The Level 1 and 2 helpers take the same options: `createMockMindooDBAppSession({ enforceCapabilities: true, directoryUsers: generateDirectoryUsers(120) })`, with `setCapabilities()`, `setEnforceCapabilities()` and `setDirectoryUsers()` on the controller, and `createMemoryAttachments()` for a database's `methods.attachments`. `createFakeBridgeHost({ onResponse })` reports every answer with its duration. `session.localFiles` keeps files in memory: `createMockMindooDBAppSession({ localFiles: { state: "locked", available: 1_000_000 } })` sets the start, `setLocalFilesState()`, `setLocalFilesAvailable()` and `listLocalFiles()` on the controller change and inspect it.
 
 Lower-level pieces, if you build your own page: `createBrowserTestHost({ frame, appUrl, ...mockOptions })` wires one iframe to a fake host, and `host.acceptConnection(message, ports)` answers a handshake you received yourself.
 
