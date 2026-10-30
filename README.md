@@ -947,6 +947,8 @@ if (!result.ok) {
 - No capability is needed: nothing leaves the device unless the user picks a target in the system sheet.
 - In tests, `getShareRequests()` lists what the app shared and `setShareOutcome("cancelled")` changes the answer.
 
+**Downloads in Haven's apps.** A plain download link (`<a download href="blob:…">` or a `data:` URL, clicked by the user or with `a.click()`) works in a browser, but not in Haven's iOS, Android and desktop apps: the app runs in a frame there, which cannot download a blob, and Haven blocks the navigation it turns into. So the SDK takes such clicks over when `session.getDevice().platform` is not `"browser"` and hands the file to `session.files.share` instead (Haven's sheet, then the system share sheet). In a browser nothing changes, and an existing download button needs no change of its own. Turn it off with `bridge.connect({ downloadsToShare: false })`.
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
