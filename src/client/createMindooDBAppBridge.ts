@@ -44,6 +44,7 @@ import { MindooDBAppIncomingApiImpl } from "./incomingContent";
 import { MindooDBAppFilesApiImpl } from "./files";
 import { MindooDBAppPdfApiImpl } from "./pdf";
 import { MindooDBAppAccountsApiImpl } from "./accounts";
+import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
 import { PortRpcClient } from "./portRpcClient";
 import type {
@@ -1648,6 +1649,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
   public readonly reminders: MindooDBAppRemindersApiImpl;
+  public readonly localFiles: MindooDBAppLocalFilesApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
   public readonly pdf: MindooDBAppPdfApiImpl;
   public readonly files: MindooDBAppFilesApiImpl;
@@ -1679,6 +1681,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
     this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
+    this.localFiles = new MindooDBAppLocalFilesApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
     this.pdf = new MindooDBAppPdfApiImpl(this.rpc);
     this.files = new MindooDBAppFilesApiImpl(this.rpc);

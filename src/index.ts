@@ -75,8 +75,10 @@ export type {
   MindooDBAppDefinitionPermission,
   MindooDBAppDefinitionRegistrationPermission,
   MindooDBAppDefinitionValidation,
+  MindooDBAppFilesPermission,
 } from "./appDefinition";
 export { canPreviewAttachment } from "./attachmentPreview";
+export { LOCAL_FILE_NAME_MAX, localFileNameProblem, localFilesError } from "./localFiles";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 export {
   DEFAULT_DRAG_LONG_PRESS_MS,
