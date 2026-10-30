@@ -333,7 +333,7 @@ if (session.agent) {
 - **Files** never travel through the agent. `agent.provideFile(blob, { name, mimeType })` hands Haven a file the app produced and returns a `fileRef` (valid ten minutes) for the agent to pass to `haven_files_export`, which saves it into the user's exchange folder. `agent.takeFile(fileRef)` returns a `File` the agent imported for this app with `haven_files_import`.
 - **Images** for the agent to look at (a rendered slide, page or chart) go through `agent.provideImage(png, { name, alt, width, height })`. It returns a small marker (`{ type: "image", fileRef, … }`) to put anywhere in the tool's result. Haven replaces it with what the agent can use: an image for a model that sees images (Haven's assistant), a file in the exchange folder with its absolute path for agents on the same computer, otherwise a placeholder with `alt`. Do not return data URLs: agents get results as text, cut to a few thousand characters.
 - A call that runs longer than two minutes fails with `FAILED`; files are limited to 50 MB.
-- **History marks agent writes.** Bridge requests the app sends while `execute` runs carry the call's id, and Haven records the resulting document changes as made by an AI agent (shown as "Name (AI agent)" in the document history, stored encrypted inside the change). Nothing to do for tools that write before they return. An app that saves a tool's edit *later* (debounced autosave) passes the call on: `execute(input, { callId })` receives it, and `agent.withCall(callId, () => save())` attributes the writes inside. Haven accepts a call for two minutes after it finished. Limits: user edits saved while a tool runs are marked too, and with several tools running at once writes carry the most recently started call. Raw Automerge changes (`documents.automerge.applyChanges`) keep the message the app's replica wrote; Haven cannot mark them.
+- **History marks agent writes.** Bridge requests the app sends while `execute` runs carry the call's id, and Haven records the resulting document changes as made by an AI agent (shown as "Name (AI agent)" in the document history, stored encrypted inside the change). Nothing to do for tools that write before they return. An app that saves a tool's edit *later* (debounced autosave) passes the call on: `execute(input, { callId })` receives it, and `agent.withCall(callId, () => save())` attributes the writes inside. Haven accepts a call for two minutes after it finished. Limits: user edits saved while a tool runs are marked too, and with several tools running at once writes carry the most recently started call. Apps that write raw Automerge changes (`documents.automerge.applyChanges`) mark them themselves: `execute` gets `context.changeMessage` from Haven; make the agent's edit in changes of its own with `Automerge.change(doc, { message: context.changeMessage }, …)` and send them while the call runs. Haven refuses changes with a mark it did not hand out for the running call, and cannot add one itself (the message is part of the change hash).
 
 #### An op guide for edit tools
 
@@ -928,6 +928,24 @@ download(result.pdf, "Site survey (signed).pdf");
 - Signing is an incremental update: the original bytes stay unchanged and earlier signatures stay valid. Edit the PDF before signing, never after, or the signature breaks.
 - Acrobat shows a green check only for certificates that chain to the Adobe Approved Trust List or that the reader trusts; a self-signed or company certificate shows "validity unknown", which is expected.
 - No capability is needed: nothing is signed without the user choosing a certificate and entering its password in Haven's own dialog.
+
+### Sharing files
+
+`session.files.share` hands one or more files to the system share sheet together, so the user can mail them, send them in a chat, AirDrop them or save them to Files. Browsers and iOS only open a share sheet on a tap, so Haven first shows its own small sheet ("3 files ready · Share") and the user's tap there opens the system one. Where there is no share sheet (most desktop browsers), Haven downloads the files instead.
+
+```ts
+const pdfs = await Promise.all(selected.map((doc) => embedOf(doc).export({ format: "pdf" })));
+const result = await session.files.share(pdfs, { title: "3 offers" });
+if (!result.ok) {
+  // "cancelled": the user closed a sheet. "unsupported": older Haven. Not errors.
+  return;
+}
+// result.method: "share" (system share sheet) or "download"
+```
+
+- Each file is a `File`, or `{ name, type?, data }` with `Uint8Array` or `Blob` data. At most 50 files and 200 MB together, else `{ ok: false, reason: "invalid", message }`.
+- No capability is needed: nothing leaves the device unless the user picks a target in the system sheet.
+- In tests, `getShareRequests()` lists what the app shared and `setShareOutcome("cancelled")` changes the answer.
 
 ### Theme and viewport events
 
@@ -2434,6 +2452,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `onHostFocusChange(listener)`         | `() => void` (unsubscribe)           |
 | `notify(input)`                       | `Promise<{ id: string }>`            |
 | `pdf.sign(input)`                     | `Promise<MindooDBAppPdfSignResult>`  |
+| `files.share(files, options?)`        | `Promise<MindooDBAppFilesShareResult>` |
 | `agent?.registerTools(tools)`         | `Promise<MindooDBAppAgentRegistration>` |
 | `agent?.setContext(context)`          | `Promise<void>`                      |
 | `agent?.provideFile(data, options)`   | `Promise<{ fileRef: string; size: number }>` |

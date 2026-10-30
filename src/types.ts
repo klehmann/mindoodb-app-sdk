@@ -1558,6 +1558,18 @@ export interface MindooDBAppAgentCallContext {
    * when the tool's edit is saved after `execute` returned (debounced autosave).
    */
   callId: string;
+  /**
+   * The Automerge change message that marks a change as this agent call's,
+   * prepared by Haven. Only for apps that write raw Automerge changes
+   * (`documents.automerge.applyChanges`): make the agent's edit in changes of
+   * its own with `Automerge.change(doc, { message: changeMessage }, …)`, never
+   * together with the user's edits, and send them while the call runs (or
+   * inside {@link MindooDBAppAgentApi.withCall}). Haven refuses changes that
+   * carry a message it did not hand out for this app's running call. Haven
+   * cannot mark raw changes itself: the message is part of the change hash.
+   * Absent on hosts without change attribution.
+   */
+  changeMessage?: string;
 }
 
 /**
@@ -1684,6 +1696,8 @@ export interface MindooDBAppBridgeAgentInvokeMessage {
   /** The tool's name as the app registered it, without the prefix. */
   tool: string;
   input: Record<string, unknown>;
+  /** See {@link MindooDBAppAgentCallContext.changeMessage}. */
+  changeMessage?: string;
 }
 
 /** App → host: the outcome of an {@link MindooDBAppBridgeAgentInvokeMessage}. */
@@ -2094,6 +2108,47 @@ export interface MindooDBAppPdfApi {
    * signed or cancelled.
    */
   sign(input: MindooDBAppPdfSignInput): Promise<MindooDBAppPdfSignResult>;
+}
+
+/** One file for {@link MindooDBAppFilesApi.share}: a `File`, or its name, type and bytes. */
+export type MindooDBAppShareFile =
+  | File
+  | {
+      /** File name the receiver sees, e.g. "Offer Miller Ltd.pdf". */
+      name: string;
+      /** MIME type; default from the Blob, else `application/octet-stream`. */
+      type?: string;
+      data: Uint8Array | Blob;
+    };
+
+/** Options of {@link MindooDBAppFilesApi.share}. */
+export interface MindooDBAppFilesShareOptions {
+  /** Shown above the files, e.g. "3 offers"; Haven words it when left out. */
+  title?: string;
+}
+
+/**
+ * Outcome of {@link MindooDBAppFilesApi.share}. `share`: the system share sheet took
+ * the files (the user may still have closed it without picking a target where the
+ * platform does not tell). `download`: there was no share sheet, so the files were
+ * downloaded. `cancelled`: the user dismissed Haven's sheet or the system one.
+ * `unsupported`: older Haven. `invalid`: no files, more than 50, or more than 200 MB
+ * together (`message` says which).
+ */
+export type MindooDBAppFilesShareResult =
+  | { ok: true; method: "share" | "download" }
+  | { ok: false; reason: "cancelled" | "unsupported" | "invalid"; message?: string };
+
+/** `session.files`: handing files to the user's other apps. */
+export interface MindooDBAppFilesApi {
+  /**
+   * Hands `files` to the system share sheet together (mail, messages, AirDrop, Files
+   * …). A share sheet only opens on a tap, so Haven first shows its own sheet ("3 files
+   * ready · Share") and the user's tap opens the system one. Where there is none (a
+   * desktop browser), Haven downloads the files. Resolves when the user shared,
+   * downloaded or cancelled.
+   */
+  share(files: MindooDBAppShareFile[], options?: MindooDBAppFilesShareOptions): Promise<MindooDBAppFilesShareResult>;
 }
 
 /** A component another app offers, as `session.components.list` returns it. */
@@ -4526,6 +4581,8 @@ export interface MindooDBAppSession {
   accounts: MindooDBAppAccountsApi;
   /** PDF services that need the user, such as signing with a certificate. */
   pdf: MindooDBAppPdfApi;
+  /** Hand files to the user's other apps through the system share sheet. */
+  files: MindooDBAppFilesApi;
   /**
    * Run work before the host tears this launch down, e.g. flushing buffered writes.
    *
