@@ -1218,6 +1218,14 @@ export interface MindooDBAppBridgeConnectOptions {
    * on its own pages are reported from inside the iframe.
    */
   hostShortcuts?: boolean;
+  /**
+   * When `false`, download links stay as they are. Default is on: in Haven's own
+   * apps (iOS, Android, desktop; `session.getDevice().platform` other than
+   * `"browser"`), a click on `<a download>` with a `blob:` or `data:` URL (also
+   * `a.click()`) hands the file to `session.files.share` instead, because a frame
+   * there cannot download it. In a browser nothing changes.
+   */
+  downloadsToShare?: boolean;
 }
 
 /** Initial postMessage handshake sent from the app to the Haven. */

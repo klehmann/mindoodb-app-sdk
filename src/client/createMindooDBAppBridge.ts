@@ -127,6 +127,7 @@ import type {
   MindooDBAppDeviceInfo,
 } from "../types";
 import { pageUsers } from "../directoryPaging";
+import { installDownloadCapture } from "../downloadCapture";
 import { installHostFocusCapture } from "../hostFocus";
 import { applySafeAreaVariables } from "../safeArea";
 import {
@@ -1659,11 +1660,13 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   private readonly stopHostShortcuts: () => void;
   private readonly stopHostFocus: () => void;
   private readonly stopSafeArea: () => void;
+  private readonly stopDownloads: () => void;
 
   constructor(
     private readonly rpc: PortRpcClient,
     private readonly onDisconnect?: () => void,
     hostShortcutsEnabled = true,
+    downloadsToShare = true,
   ) {
     this.menus = {
       show: async (input: MindooDBAppShowMenuInput) =>
@@ -1732,6 +1735,18 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
           },
         })
       : () => undefined;
+    // In Haven's own apps a frame cannot download a blob: link; those go to the share sheet.
+    let downloadsActive = false;
+    this.stopDownloads = downloadsToShare
+      ? installDownloadCapture({ active: () => downloadsActive, share: (files) => this.files.share(files) })
+      : () => undefined;
+    if (downloadsToShare) {
+      void this.getDevice()
+        .then((device) => {
+          downloadsActive = Boolean(device && device.platform !== "browser");
+        })
+        .catch(() => undefined);
+    }
     this.stopHostFocus = installHostFocusCapture({
       onPointerDown: () => {
         try {
@@ -2020,6 +2035,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Disconnects from the host and always disposes the underlying port client. */
   async disconnect(): Promise<void> {
     this.stopHostShortcuts();
+    this.stopDownloads();
     this.stopHostFocus();
     this.stopSafeArea();
     this.drag.dispose();
@@ -2098,6 +2114,7 @@ export function createMindooDBAppBridge(): MindooDBAppBridge {
             }
           },
           options?.hostShortcuts !== false,
+          options?.downloadsToShare !== false,
         );
       })();
 

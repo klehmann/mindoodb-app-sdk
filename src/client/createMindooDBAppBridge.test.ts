@@ -390,6 +390,10 @@ describe("createMindooDBAppBridge attachment streaming", () => {
             });
             return;
           }
+          // The session asks for the device on connect (downloads to the share sheet).
+          if (message.method === "session.getDevice") {
+            return;
+          }
           methods.push(message.method);
           if (message.method === "documents.listCreateKeys") {
             port.postMessage({
