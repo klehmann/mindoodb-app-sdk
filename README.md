@@ -989,12 +989,12 @@ Request it in `haven-app.json`; the user can switch it off per app in "Configure
 
 ```json
 "allowFiles": {
-  "purpose": { "en": "Offline map areas", "de": "Offline-Kartengebiete" },
+  "purpose": { "en": "Offline map areas" },
   "backup": false
 }
 ```
 
-`allowFiles: true` also works. `backup` decides what goes into Haven's backup: `false` (default — data the app can download again), `true` (every file) or `"perFile"` (the app passes `{ backup: true }` to `create`; without `"perFile"` that option is ignored).
+`purpose` is shown when the user allows files; add further locales next to `en` as needed. `allowFiles: true` also works. `backup` decides what goes into Haven's backup: `false` (default — data the app can download again), `true` (every file) or `"perFile"` (the app passes `{ backup: true }` to `create`; without `"perFile"` that option is ignored).
 
 ```ts
 const files = session.localFiles;
