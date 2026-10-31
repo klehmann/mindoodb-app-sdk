@@ -12,6 +12,7 @@ import {
   validateMindooDBAppAgentProfile,
   validateMindooDBAppComponents,
   validateMindooDBAppDefinition,
+  validateMindooDBAppUses,
 } from "./appDefinition";
 
 function baseDefinition(overrides: Record<string, unknown> = {}) {
@@ -466,5 +467,47 @@ describe("agent profile", () => {
       agent: undefined,
       errors: ["App definition agent.capabilities must be an array of 1-8 capabilities."],
     });
+  });
+});
+
+describe("app definition uses", () => {
+  it("keeps the apps whose components this app shows", () => {
+    const { definition, errors } = validateMindooDBAppDefinition(
+      baseDefinition({
+        uses: [
+          {
+            appId: " mindoodb-app-teamgrid ",
+            url: "https://app-teamgrid.mindoodb.com/",
+            components: ["spreadsheet", "spreadsheet"],
+            required: true,
+            reason: { en: "Spreadsheets", de: "Tabellen" },
+          },
+          { appId: "local-app", url: "http://127.0.0.1:4400" },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(definition?.uses).toEqual([
+      {
+        appId: "mindoodb-app-teamgrid",
+        url: "https://app-teamgrid.mindoodb.com/",
+        components: ["spreadsheet"],
+        required: true,
+        reason: { en: "Spreadsheets", de: "Tabellen" },
+      },
+      { appId: "local-app", url: "http://127.0.0.1:4400" },
+    ]);
+  });
+
+  it("leaves uses out when there are none", () => {
+    expect(validateMindooDBAppDefinition(baseDefinition()).definition).not.toHaveProperty("uses");
+  });
+
+  it("refuses insecure origins, duplicates and malformed entries", () => {
+    expect(validateMindooDBAppUses([{ appId: "a", url: "http://example.com" }]).errors[0]).toMatch(/https/);
+    expect(validateMindooDBAppUses([{ appId: "a", url: "https://a.test" }, { appId: "a", url: "https://b.test" }]).errors[0]).toMatch(/twice/);
+    expect(validateMindooDBAppUses([{ appId: "a", url: "https://a.test", components: [1] }]).errors[0]).toMatch(/component ids/);
+    expect(validateMindooDBAppUses([{ appId: "a", url: "https://a.test", required: "yes" }]).errors[0]).toMatch(/boolean/);
+    expect(validateMindooDBAppUses({}).errors[0]).toMatch(/array/);
   });
 });
