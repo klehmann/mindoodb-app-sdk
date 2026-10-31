@@ -240,6 +240,9 @@ export interface MindooDBAppAcceptSpec {
 /** What a host may ask a component for. */
 export type MindooDBAppComponentIntent = "create" | "edit" | "view";
 
+/** See {@link MindooDBAppComponentSpec.scope}. */
+export type MindooDBAppComponentScope = "document" | "app";
+
 /** A plain field value a component matches documents on. */
 export type MindooDBAppComponentFieldValue = string | number | boolean;
 
@@ -304,6 +307,16 @@ export interface MindooDBAppComponentReference {
 export interface MindooDBAppComponentSpec {
   /** Stable id, unique within the app. Lowercase letters, digits, `-` and `_`. */
   id: string;
+  /**
+   * `document` (default): works on one root document of the host's database, as
+   * described above. `app`: shows a part of this app with its own databases, e.g. a
+   * mail app's mailbox inside a CRM. Haven launches it like the app itself, with
+   * the app's own database mappings and network access; the host gets no access to
+   * that data, only what the component hands over (`session.embedding.request`).
+   * Such a component has no `match`, `create`, `children` or `references`, and its
+   * only intent is `view`.
+   */
+  scope?: MindooDBAppComponentScope;
   /** Shown in the host's "New" and "Open with" menus, e.g. "Spreadsheet". */
   label: MindooDBAppLocalizedText;
   description?: MindooDBAppLocalizedText;
@@ -311,7 +324,10 @@ export interface MindooDBAppComponentSpec {
   icon?: string;
   /** What hosts may ask for. `create` makes the component appear under "New". */
   intents: MindooDBAppComponentIntent[];
-  /** Top-level fields a root document carries, e.g. `{ "form": "teamgrid" }`. At least one. */
+  /**
+   * Top-level fields a root document carries, e.g. `{ "form": "teamgrid" }`. At least
+   * one. Empty (and not declared) for `scope: "app"`: such a component has no documents.
+   */
   match: Record<string, MindooDBAppComponentFieldValue>;
   /**
    * Further top-level fields of a new, empty root document (`create` intent). The
@@ -928,6 +944,46 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
         intents.push(intent as MindooDBAppComponentIntent);
       }
     }
+    let scope: MindooDBAppComponentScope = "document";
+    if (entry.scope !== undefined) {
+      if (entry.scope !== "document" && entry.scope !== "app") {
+        errors.push(`${label}.scope must be "document" or "app".`);
+        return;
+      }
+      scope = entry.scope;
+    }
+    if (scope === "app") {
+      const forbidden = ["match", "create", "children", "references"].filter((key) => entry[key] !== undefined);
+      if (forbidden.length) {
+        errors.push(`${label} has scope "app" and must not declare ${forbidden.join(", ")}: it works on its own app's data.`);
+        return;
+      }
+      if (intents.some((intent) => intent !== "view")) {
+        errors.push(`${label} has scope "app"; its only intent is "view".`);
+        return;
+      }
+      const category = entry.category === undefined ? undefined : typeof entry.category === "string" ? entry.category.trim() : "";
+      if (category !== undefined && !COMPONENT_CATEGORY_PATTERN.test(category)) {
+        errors.push(`${label}.category must be 1-32 lowercase letters, digits or "-", e.g. "editor" or "form".`);
+        return;
+      }
+      const supports = readComponentSupports(entry.supports, `${label}.supports`, errors);
+      if (errors.length !== errorCount) {
+        return;
+      }
+      result.push({
+        id,
+        scope,
+        label: text,
+        ...(description ? { description } : {}),
+        ...(icon ? { icon } : {}),
+        intents,
+        match: {},
+        ...(category ? { category } : {}),
+        ...(supports ? { supports } : {}),
+      });
+      return;
+    }
     const match = readComponentFieldMatch(entry.match, `${label}.match`, errors);
     if (!match) {
       return;
@@ -1132,7 +1188,8 @@ export function mindooDBAppComponentFieldsMatch(
   match: Readonly<Record<string, MindooDBAppComponentFieldValue>>,
   data: Readonly<Record<string, unknown>> | null | undefined,
 ): boolean {
-  if (!data) {
+  // An empty match (components with `scope: "app"`) claims no document at all.
+  if (!data || !Object.keys(match).length) {
     return false;
   }
   return Object.entries(match).every(([field, value]) => data[field] === value);

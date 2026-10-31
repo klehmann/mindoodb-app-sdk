@@ -749,6 +749,49 @@ without real fields. In tests, `embedExport` plays the components, `getEmbedRequ
 records exports, and for an app that is a component `embeddingVariables`,
 `requestEmbeddingVariables` and `requestEmbeddingExport` drive it.
 
+**Components of a whole app (`scope: "app"`).** Some components do not edit a host
+document but show a part of their own app with its own data, e.g. a mail app's mailbox
+inside a CRM:
+
+```json
+{ "id": "mailbox", "scope": "app", "label": { "en": "Mailbox", "de": "Postfach" }, "intents": ["view"] }
+```
+
+Such a component has no `match`, `create`, `children` or `references`. The host opens it
+without a document, `session.embeds.open({ componentKey, container })`. Haven asks the user
+once ("CRM may show the MindooMail mailbox") and launches the app with its own database
+mappings and network access; `launchContext.embed.scope` is `"app"`, `databaseId` and
+`docId` are empty. The host cannot read that data: it only gets what the component hands
+over.
+
+**Messages between host and component.** Either side sends the other a message and gets
+an answer (plain JSON):
+
+```ts
+// component: the user files a mail
+const answer = await session.embedding.request({
+  type: "mindoo.file.document@1",          // what it is; shared meanings are contracts
+  data: { fields, emails },                // plain JSON, up to 1 MiB
+  files: attachments,                      // File[], up to 32 MiB together
+});
+session.embedding.onRequest(async (message) => {
+  if (message.type === "mindoo.mail.compose@1") return { draftId: await createDraft(message) };
+  throw new Error(`Unknown message ${message.type}`);
+});
+
+// host
+embed.onRequest(async (message) => ({ docId: await fileDocument(message) }));
+const { draftId } = (await embed.request({ type: "mindoo.mail.compose@1", data: draft, files })) as { draftId: string };
+```
+
+Without a handler on the other side a request fails with `unsupported`; a handler that
+throws rejects it with its message. A request waits up to 10 minutes by default (the other
+side may show a dialog first), `timeoutMs` changes that. Haven passes messages on unchanged
+after checking sizes and types; it only lets a component talk to its own host. In tests,
+`embedMessages` and `embeddingMessages` play the other side, `sendFromEmbed(embedId,
+message)` and `requestEmbeddingMessage(message)` send one, and `getEmbedRequests` /
+`getEmbeddingMessages` record them.
+
 Havens that predate this lay the component over the container instead, above the host's
 frame (`embed.placement === "overlay"`). The host then cannot draw on top of it: hide it
 with `embed.setVisible(false)` while a menu or dialog of the host should be visible.

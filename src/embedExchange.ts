@@ -164,3 +164,129 @@ export async function mindooDBAppExportPayload(
 export function mindooDBAppExportFile(payload: MindooDBAppEmbedExportPayload): File {
   return new File([payload.data], payload.name, { type: payload.mimeType });
 }
+
+/**
+ * A message between a host and its component (`embed.request`,
+ * `session.embedding.request`). What `type` means is up to the two apps; shared
+ * meanings are contracts named like components' contracts, e.g.
+ * `mindoo.file.document@1` ("file this document") or `mindoo.mail.compose@1`.
+ */
+export interface MindooDBAppEmbedMessage {
+  /** What the message is, e.g. `mindoo.file.document@1`. 1-80 characters. */
+  type: string;
+  /** Plain JSON. */
+  data?: unknown;
+  /** Files that go with it, e.g. a mail's attachments. */
+  files?: File[];
+}
+
+/** A message as it travels over the bridge: files as bytes. */
+export interface MindooDBAppEmbedMessagePayload {
+  type: string;
+  data?: unknown;
+  files?: Array<{ name: string; mimeType: string; data: ArrayBuffer }>;
+}
+
+/** All files of one message together, at most. */
+export const MINDOODB_APP_EMBED_MESSAGE_MAX_BYTES = 32 * 1024 * 1024;
+/** `data` of one message (and an answer), as JSON, at most. */
+export const MINDOODB_APP_EMBED_MESSAGE_DATA_MAX_BYTES = 1024 * 1024;
+/** Files per message, at most. */
+export const MINDOODB_APP_EMBED_MESSAGE_MAX_FILES = 100;
+/** How long a request waits for its answer by default, and at most. */
+export const MINDOODB_APP_EMBED_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+export const MINDOODB_APP_EMBED_REQUEST_MAX_TIMEOUT_MS = 60 * 60 * 1000;
+
+const MESSAGE_TYPE = /^[A-Za-z0-9][A-Za-z0-9._@:/-]{0,79}$/;
+
+function plainJson(value: unknown, what: string): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    throw new Error(`${what} must be plain JSON.`);
+  }
+  if (json === undefined) {
+    return undefined;
+  }
+  if (json.length > MINDOODB_APP_EMBED_MESSAGE_DATA_MAX_BYTES) {
+    throw new Error(`${what} must not be larger than ${MINDOODB_APP_EMBED_MESSAGE_DATA_MAX_BYTES} bytes as JSON.`);
+  }
+  return JSON.parse(json) as unknown;
+}
+
+/** An answer to a request: plain JSON (no files), checked for size. */
+export function normalizeMindooDBAppEmbedAnswer(value: unknown): unknown {
+  return plainJson(value, "An answer");
+}
+
+/** Turns a message into what goes over the bridge; checks type, JSON and sizes. */
+export async function mindooDBAppEmbedMessagePayload(message: MindooDBAppEmbedMessage): Promise<MindooDBAppEmbedMessagePayload> {
+  const files = message?.files ?? [];
+  if (!Array.isArray(files) || files.length > MINDOODB_APP_EMBED_MESSAGE_MAX_FILES) {
+    throw new Error(`A message carries at most ${MINDOODB_APP_EMBED_MESSAGE_MAX_FILES} files.`);
+  }
+  const payloadFiles = await Promise.all(
+    files.map(async (file) => ({
+      name: String(file?.name || "file").slice(0, 255),
+      mimeType: String(file?.type || "application/octet-stream"),
+      data: await file.arrayBuffer(),
+    })),
+  );
+  return normalizeMindooDBAppEmbedMessagePayload({ type: message?.type, data: message?.data, files: payloadFiles });
+}
+
+/**
+ * Checks a message from the bridge (Haven checks both directions with it): a valid
+ * type, plain JSON data, files as ArrayBuffers within the limits. Throws otherwise.
+ */
+export function normalizeMindooDBAppEmbedMessagePayload(raw: unknown): MindooDBAppEmbedMessagePayload {
+  const input = (raw ?? {}) as { type?: unknown; data?: unknown; files?: unknown };
+  const type = typeof input.type === "string" ? input.type.trim() : "";
+  if (!MESSAGE_TYPE.test(type)) {
+    throw new Error("A message needs a type of 1-80 letters, digits or . _ @ : / -.");
+  }
+  const data = plainJson(input.data, "Message data");
+  const rawFiles = input.files === undefined ? [] : input.files;
+  if (!Array.isArray(rawFiles) || rawFiles.length > MINDOODB_APP_EMBED_MESSAGE_MAX_FILES) {
+    throw new Error(`A message carries at most ${MINDOODB_APP_EMBED_MESSAGE_MAX_FILES} files.`);
+  }
+  let total = 0;
+  const files = rawFiles.map((entry) => {
+    const file = (entry ?? {}) as { name?: unknown; mimeType?: unknown; data?: unknown };
+    // Checked structurally: buffers sent across a MessagePort may come from another realm.
+    if (Object.prototype.toString.call(file.data) !== "[object ArrayBuffer]") {
+      throw new Error("A message file must carry its bytes as an ArrayBuffer.");
+    }
+    total += (file.data as ArrayBuffer).byteLength;
+    if (total > MINDOODB_APP_EMBED_MESSAGE_MAX_BYTES) {
+      throw new Error(`The files of a message must not be larger than ${MINDOODB_APP_EMBED_MESSAGE_MAX_BYTES} bytes together.`);
+    }
+    const name = typeof file.name === "string" && file.name.trim() ? file.name.trim().slice(0, 255) : "file";
+    const mimeType =
+      typeof file.mimeType === "string" && /^[\w.+-]+\/[\w.+-]+/.test(file.mimeType) ? file.mimeType : "application/octet-stream";
+    return { name, mimeType, data: file.data as ArrayBuffer };
+  });
+  return { type, ...(data === undefined ? {} : { data }), ...(files.length ? { files } : {}) };
+}
+
+/** The message a handler gets: files as `File`s again. */
+export function mindooDBAppEmbedMessageFromPayload(payload: MindooDBAppEmbedMessagePayload): MindooDBAppEmbedMessage {
+  return {
+    type: payload.type,
+    ...(payload.data === undefined ? {} : { data: payload.data }),
+    files: (payload.files ?? []).map((file) => new File([file.data], file.name, { type: file.mimeType })),
+  };
+}
+
+/** A request's timeout as Haven and the SDK use it: default, clamped to the maximum. */
+export function mindooDBAppEmbedRequestTimeout(timeoutMs: unknown): number {
+  const value = Number(timeoutMs);
+  if (!Number.isFinite(value) || value <= 0) {
+    return MINDOODB_APP_EMBED_REQUEST_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(1000, Math.round(value)), MINDOODB_APP_EMBED_REQUEST_MAX_TIMEOUT_MS);
+}

@@ -1,4 +1,9 @@
 import {
+  mindooDBAppEmbedMessageFromPayload,
+  mindooDBAppEmbedMessagePayload,
+  mindooDBAppEmbedRequestTimeout,
+  normalizeMindooDBAppEmbedAnswer,
+  normalizeMindooDBAppEmbedMessagePayload,
   mindooDBAppExportFile,
   mindooDBAppExportPayload,
   normalizeMindooDBAppEmbedExportRequest,
@@ -6,6 +11,7 @@ import {
   type MindooDBAppEmbeddingExport,
   type MindooDBAppEmbedExportPayload,
   type MindooDBAppEmbedExportRequest,
+  type MindooDBAppEmbedMessage,
   type MindooDBAppEmbedVariable,
 } from "../embedExchange";
 import {
@@ -89,6 +95,17 @@ interface EmbedOpenResponse {
   supports?: string[];
 }
 
+type MessageHandler = (message: MindooDBAppEmbedMessage) => unknown;
+
+/** Runs a message handler on a payload from Haven and checks its answer. */
+async function answerMessage(handler: MessageHandler | null, rawMessage: unknown) {
+  if (!handler) {
+    throw new Error("unsupported");
+  }
+  const message = mindooDBAppEmbedMessageFromPayload(normalizeMindooDBAppEmbedMessagePayload(rawMessage));
+  return normalizeMindooDBAppEmbedAnswer(await handler(message));
+}
+
 type BeforeSaveHandler = (
   input: MindooDBAppEmbedBeforeSaveInput,
 ) => MindooDBAppEmbedBeforeSaveResult | Promise<MindooDBAppEmbedBeforeSaveResult>;
@@ -167,6 +184,7 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
   private toolsState: MindooDBAppEmbedAgentTools | null = null;
   private readonly toolsListeners = new Set<(tools: MindooDBAppEmbedAgentTools | null) => void>();
   private beforeSaveHandler: BeforeSaveHandler | null = null;
+  private messageHandler: MessageHandler | null = null;
   private readonly savedListeners = new Set<(event: MindooDBAppEmbedSavedEvent) => void>();
 
   constructor(
@@ -385,6 +403,28 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     return mindooDBAppExportFile(payload);
   }
 
+  async request(message: MindooDBAppEmbedMessage, options?: { timeoutMs?: number }) {
+    const timeoutMs = mindooDBAppEmbedRequestTimeout(options?.timeoutMs);
+    return await this.rpc.call(
+      "embeds.request",
+      { embedId: this.embedId, message: await mindooDBAppEmbedMessagePayload(message), timeoutMs },
+    );
+  }
+
+  onRequest(handler: MessageHandler) {
+    this.messageHandler = handler;
+    return () => {
+      if (this.messageHandler === handler) {
+        this.messageHandler = null;
+      }
+    };
+  }
+
+  /** The component sent this app a message (`embedding.request`). */
+  async answerMessage(rawMessage: unknown) {
+    return await answerMessage(this.closedEvent ? null : this.messageHandler, rawMessage);
+  }
+
   async callTool(name: string, input?: Record<string, unknown>) {
     return await this.rpc.call("embeds.callTool", {
       embedId: this.embedId,
@@ -454,6 +494,7 @@ class MindooDBAppEmbedImpl implements MindooDBAppEmbed {
     this.dirtyListeners.clear();
     this.savedListeners.clear();
     this.beforeSaveHandler = null;
+    this.messageHandler = null;
     this.toolsState = null;
     this.toolsListeners.forEach((listener) => {
       try {
@@ -495,6 +536,7 @@ export class MindooDBAppEmbedsClient {
   private exportProvider:
     | ((request: MindooDBAppEmbedExportRequest) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>)
     | null = null;
+  private messageHandler: MessageHandler | null = null;
   /** The host's variables as last pushed; null until known (then asked for on first use). */
   private variables: MindooDBAppEmbedVariable[] | null = null;
   private readonly variableListeners = new Set<(variables: MindooDBAppEmbedVariable[]) => void>();
@@ -580,8 +622,8 @@ export class MindooDBAppEmbedsClient {
           this.rpc,
           response.embedId,
           input.componentKey,
-          input.databaseId,
-          input.docId,
+          input.databaseId ?? "",
+          input.docId ?? "",
           frame,
           container,
           Array.isArray(response.supports) ? response.supports.filter((entry) => typeof entry === "string") : [],
@@ -715,6 +757,21 @@ export class MindooDBAppEmbedsClient {
           }
         };
       },
+      request: async (message, options) => {
+        const timeoutMs = mindooDBAppEmbedRequestTimeout(options?.timeoutMs);
+        return await this.rpc.call(
+          "embedding.request",
+          { message: await mindooDBAppEmbedMessagePayload(message), timeoutMs },
+        );
+      },
+      onRequest: (handler) => {
+        this.messageHandler = handler;
+        return () => {
+          if (this.messageHandler === handler) {
+            this.messageHandler = null;
+          }
+        };
+      },
       validate: async (options) => await this.validate(options),
       save: async (flush, options) =>
         await performMindooDBAppEmbeddingSave({
@@ -782,6 +839,8 @@ export class MindooDBAppEmbedsClient {
           }
         });
         response = { ok: true };
+      } else if (message.request === "message" && this.messageHandler) {
+        response = { ok: true, result: await answerMessage(this.messageHandler, params.message) };
       } else if (message.request === "export" && this.exportProvider) {
         const request = normalizeMindooDBAppEmbedExportRequest(params.request);
         response = { ok: true, result: await mindooDBAppExportPayload(await this.exportProvider(request), request) };
@@ -803,10 +862,21 @@ export class MindooDBAppEmbedsClient {
     let response: { ok: boolean; error?: string; result?: unknown };
     const embed = this.open.get(message.embedId);
     try {
-      response =
-        message.request === "beforeSave"
-          ? { ok: true, result: embed ? await embed.answerBeforeSave(message.params) : { issues: [] } }
-          : { ok: false, error: "unsupported" };
+      if (message.request === "message") {
+        try {
+          response = { ok: true, result: embed ? await embed.answerMessage(message.params?.message) : null };
+          if (!embed) {
+            response = { ok: false, error: "unsupported" };
+          }
+        } catch (error) {
+          response = { ok: false, error: errorMessage(error) };
+        }
+      } else {
+        response =
+          message.request === "beforeSave"
+            ? { ok: true, result: embed ? await embed.answerBeforeSave(message.params) : { issues: [] } }
+            : { ok: false, error: "unsupported" };
+      }
     } catch (error) {
       // A failing check must not lose the user's work silently: say so, as a warning.
       response = {
