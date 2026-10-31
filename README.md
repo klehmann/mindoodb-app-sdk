@@ -790,6 +790,33 @@ complete host, `src/app/useEmbedsSection.ts`):
 A host with agent tools marks the component in the front tab with `embed.setActive()`
 and reads `embed.agentTools`; see *Agent tools of embedded components*.
 
+#### Apps a host uses (`uses`)
+
+A host that shows other apps' components lists those apps in its `haven-app.json`, so
+the user gets them in the same step as the host instead of finding out later that an
+editor is missing:
+
+```json
+"uses": [
+  {
+    "appId": "mindoodb-app-teamgrid",
+    "url": "https://app-teamgrid.mindoodb.com/",
+    "components": ["spreadsheet"],
+    "required": true,
+    "reason": { "en": "Spreadsheets in Vega are TeamGrid workbooks.", "de": "Tabellen in Vega sind TeamGrid-Arbeitsmappen." }
+  }
+]
+```
+
+When the host is installed, Haven shows these apps in one step: `required` ones are
+installed with the host, the others as the user ticks them (apps already installed are
+listed too). For all of them the host may show the listed components (all of the app's
+when `components` is left out) in its databases without the prompt `embeds.open` would
+otherwise show. `url` is the app's origin, `https:` (`http:` only on loopback); Haven
+installs from its App Store entry when it has one for that origin. Without `uses`, or
+when the user skips an app, a host still finds out with `components.list` and asks with
+`embeds.requestAccess`, as before.
+
 ### Databases and capabilities
 
 Each database mapped to your app carries a set of **capabilities** that Haven controls. Your app should check capabilities before attempting operations and adapt its UI accordingly.

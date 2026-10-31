@@ -157,6 +157,14 @@ export interface MindooDBAppDefinition {
    */
   components?: MindooDBAppComponentSpec[];
   /**
+   * Other apps whose components this app shows (a CRM showing editors, Vega showing
+   * TeamGrid's spreadsheet). When this app is installed, Haven offers them in the
+   * same step: required ones are installed with it, optional ones as the user picks,
+   * and this app may show their components in its databases without asking again.
+   * See {@link MindooDBAppUsedApp}.
+   */
+  uses?: MindooDBAppUsedApp[];
+  /**
    * What a person sees before installing: the app's landing page when its URL is
    * opened directly, and Haven's setup wizard when it arrives through a shared link.
    * Display-only; nothing in here affects what the app is granted.
@@ -1017,6 +1025,99 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
  * Validates a `components` list on its own, for hosts that read it from another
  * manifest format (Haven's app store catalog).
  */
+/** At most this many entries in `uses`. */
+export const MINDOODB_APP_USES_MAX = 16;
+
+/** Another app whose components this app shows (`uses` in haven-app.json). */
+export interface MindooDBAppUsedApp {
+  /** The other app's `appId`, e.g. `mindoodb-app-teamgrid`. */
+  appId: string;
+  /** Where Haven installs it from: the app's origin (`https:`, or `http:` on loopback). */
+  url: string;
+  /** Its components this app shows, by `id`; all of them when omitted. */
+  components?: string[];
+  /** Installed together with this app; else offered for the user to pick. Default false. */
+  required?: boolean;
+  /** What this app does with it, shown in the install step. Up to 200 characters. */
+  reason?: MindooDBAppLocalizedText;
+}
+
+function readUses(value: unknown, errors: string[]): MindooDBAppUsedApp[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("App definition uses must be an array.");
+    return undefined;
+  }
+  if (value.length > MINDOODB_APP_USES_MAX) {
+    errors.push(`App definition uses must not have more than ${MINDOODB_APP_USES_MAX} entries.`);
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const result: MindooDBAppUsedApp[] = [];
+  value.forEach((entry, index) => {
+    const label = `App definition uses[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${label} must be an object.`);
+      return;
+    }
+    const appId = typeof entry.appId === "string" ? entry.appId.trim() : "";
+    if (!appId) {
+      errors.push(`${label}.appId must be a non-empty string.`);
+      return;
+    }
+    if (seen.has(appId)) {
+      errors.push(`${label}.appId "${appId}" is listed twice.`);
+      return;
+    }
+    seen.add(appId);
+    const url = typeof entry.url === "string" ? entry.url.trim() : "";
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+    const loopback = parsed && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+    if (!parsed || !(parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback))) {
+      errors.push(`${label}.url must be an https: URL (http: only on localhost).`);
+      return;
+    }
+    let components: string[] | undefined;
+    if (entry.components !== undefined) {
+      if (
+        !Array.isArray(entry.components)
+        || entry.components.some((id) => typeof id !== "string" || !id.trim())
+      ) {
+        errors.push(`${label}.components must be an array of component ids.`);
+        return;
+      }
+      components = [...new Set((entry.components as string[]).map((id) => id.trim()))];
+    }
+    if (entry.required !== undefined && typeof entry.required !== "boolean") {
+      errors.push(`${label}.required must be a boolean.`);
+      return;
+    }
+    const reason = readLocalizedText(entry.reason, `${label}.reason`, 200, errors);
+    result.push({
+      appId,
+      url,
+      ...(components ? { components } : {}),
+      ...(entry.required === true ? { required: true } : {}),
+      ...(reason ? { reason } : {}),
+    });
+  });
+  return result.length ? result : undefined;
+}
+
+/** Checks a `uses` list on its own, e.g. in an app-store catalog. */
+export function validateMindooDBAppUses(value: unknown): { uses: MindooDBAppUsedApp[] | undefined; errors: string[] } {
+  const errors: string[] = [];
+  const uses = readUses(value, errors);
+  return { uses: errors.length ? undefined : uses, errors };
+}
+
 export function validateMindooDBAppComponents(value: unknown): {
   components: MindooDBAppComponentSpec[] | undefined;
   errors: string[];
@@ -1439,6 +1540,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const listing = readListing(raw.listing, errors);
   const accepts = readAccepts(raw.accepts, errors);
   const components = readComponents(raw.components, errors);
+  const uses = readUses(raw.uses, errors);
   const agent = readAgentProfile(raw.agent, errors);
   const agentToolPrefix = readOptionalString(raw, "agentToolPrefix", errors);
   if (
@@ -1492,6 +1594,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       databases,
       accepts,
       components,
+      ...(uses ? { uses } : {}),
       listing,
       agent,
     },
