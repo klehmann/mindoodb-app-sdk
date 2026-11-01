@@ -1,12 +1,18 @@
 import { mindooDBAppComponentFieldsMatch } from "../appDefinition.js";
 import {
+  mindooDBAppEmbedMessageFromPayload,
+  mindooDBAppEmbedMessagePayload,
   mindooDBAppExportFile,
   mindooDBAppExportPayload,
+  normalizeMindooDBAppEmbedAnswer,
   normalizeMindooDBAppEmbedExportRequest,
+  normalizeMindooDBAppEmbedMessagePayload,
   normalizeMindooDBAppEmbedVariables,
   type MindooDBAppEmbeddingExport,
   type MindooDBAppEmbedExportPayload,
   type MindooDBAppEmbedExportRequest,
+  type MindooDBAppEmbedMessage,
+  type MindooDBAppEmbedMessagePayload,
   type MindooDBAppEmbedVariable,
 } from "../embedExchange.js";
 import {
@@ -80,7 +86,8 @@ export type MockEmbedRequest =
   | { request: "showIssues"; issues: MindooDBAppIssue[] }
   | { request: "reveal"; anchor: MindooDBAppInspectAnchor }
   | { request: "callTool"; name: string; input: Record<string, unknown> }
-  | { request: "export"; export: MindooDBAppEmbedExportRequest };
+  | { request: "export"; export: MindooDBAppEmbedExportRequest }
+  | { request: "message"; type: string; data?: unknown; fileNames: string[] };
 
 type MockBeforeSaveHandler = (
   input: MindooDBAppEmbedBeforeSaveInput,
@@ -132,6 +139,16 @@ export interface MockEmbedHostOptions {
   ) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>;
   /** For an app under test that runs as a component: the host's variables at start. */
   embeddingVariables?: MindooDBAppEmbedVariable[];
+  /**
+   * Plays the components for `embed.request`: returns the answer (plain JSON) or
+   * throws. Without it requests fail with `unsupported`.
+   */
+  embedMessages?: (embed: MockEmbedState, message: MindooDBAppEmbedMessage) => unknown;
+  /**
+   * For an app under test that runs as a component: plays its host for
+   * `session.embedding.request`. Without it requests fail with `unsupported`.
+   */
+  embeddingMessages?: (message: MindooDBAppEmbedMessage) => unknown;
   /** Plays the components for `embed.callTool`; without it calls fail with `unsupported`. */
   embedTools?: (embed: MockEmbedState, name: string, input: Record<string, unknown>) => unknown;
   /**
@@ -249,6 +266,25 @@ export interface MockEmbedHost {
    * would (`embed.export`); rejects with `unsupported` without a provider.
    */
   requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
+  /** `embed.request` from the app: asks `embedMessages`. */
+  requestEmbed(embedId: string, message: MindooDBAppEmbedMessagePayload): Promise<unknown>;
+  /** The app's `embed.onRequest` for this embed; the port host passes one that asks over its port. */
+  setEmbedRequestHandler(embedId: string, handler: ((message: MindooDBAppEmbedMessagePayload) => Promise<unknown>) | null): void;
+  /**
+   * As if the component sent the app a message (`session.embedding.request`):
+   * resolves with the app's answer, rejects with `unsupported` without a handler.
+   */
+  sendFromEmbed(embedId: string, message: MindooDBAppEmbedMessage): Promise<unknown>;
+  /** For an app under test that runs as a component: its `embedding.request`, answered by `embeddingMessages`. */
+  requestEmbedding(message: MindooDBAppEmbedMessagePayload): Promise<unknown>;
+  /** Every `embedding.request` of the app as a component so far, oldest first. */
+  getEmbeddingMessages(): MindooDBAppEmbedMessage[];
+  setEmbeddingRequestHandler(handler: ((message: MindooDBAppEmbedMessagePayload) => Promise<unknown>) | null): void;
+  /**
+   * For an app under test that runs as a component: its host sends a message
+   * (`embed.request`); resolves with the app's answer.
+   */
+  requestEmbeddingMessage(message: MindooDBAppEmbedMessage): Promise<unknown>;
 }
 
 /**
@@ -287,6 +323,9 @@ export function createMockEmbedHost(
   const embeddingValidations: Array<{ interactive: boolean; result: MindooDBAppEmbedValidation }> = [];
   let embeddingSaveCount = 0;
   const beforeSaveHandlers = new Map<string, MockBeforeSaveHandler>();
+  const embedRequestHandlers = new Map<string, (message: MindooDBAppEmbedMessagePayload) => Promise<unknown>>();
+  let embeddingRequestHandler: ((message: MindooDBAppEmbedMessagePayload) => Promise<unknown>) | null = null;
+  const embeddingMessages: MindooDBAppEmbedMessage[] = [];
   const savedListeners = new Set<(event: MindooDBAppEmbedSavedEvent) => void>();
   let embedCounter = 0;
   let embeddingFinish: MockEmbeddingFinish | null = null;
@@ -336,9 +375,34 @@ export function createMockEmbedHost(
     if (!component) {
       throw new Error(`Unknown component "${input.componentKey}".`);
     }
+    if (component.scope === "app") {
+      // Like Haven: no document; the component works on its own app's data.
+      embedCounter += 1;
+      const embedId = `mock-embed-${embedCounter}`;
+      embeds.set(embedId, {
+        embedId,
+        component,
+        databaseId: "",
+        docId: "",
+        intent: "view",
+        rect: mockRect(input),
+        visible: input.visible !== false,
+        active: false,
+        agentTools: null,
+        supports: [...(component.supports ?? [])],
+        beforeSave: null,
+        requests: [],
+        variables: [],
+      });
+      setActive(embedId);
+      return embedId;
+    }
     const intent = input.intent ?? "edit";
     if (!component.intents.includes(intent) && !(intent === "edit" && component.intents.includes("create"))) {
       throw new Error(`Component "${component.label}" does not support "${intent}".`);
+    }
+    if (!input.databaseId || !input.docId) {
+      throw new Error("databaseId and docId are required for this component.");
     }
     const document = await getDatabase(input.databaseId).documents.get(input.docId);
     if (!document) {
@@ -437,6 +501,7 @@ export function createMockEmbedHost(
     handles.delete(embedId);
     toolNames.delete(embedId);
     beforeSaveHandlers.delete(embedId);
+    embedRequestHandlers.delete(embedId);
     closedListeners.forEach((listener) => listener(event));
     notifyChange();
   }
@@ -496,6 +561,21 @@ export function createMockEmbedHost(
 
     async export(request: MindooDBAppEmbedExportRequest) {
       return mindooDBAppExportFile(await exportEmbed(this.embedId, request));
+    }
+
+    async request(message: MindooDBAppEmbedMessage) {
+      return await requestEmbed(this.embedId, await mindooDBAppEmbedMessagePayload(message));
+    }
+
+    onRequest(handler: (message: MindooDBAppEmbedMessage) => unknown) {
+      const wrapped = async (payload: MindooDBAppEmbedMessagePayload) =>
+        normalizeMindooDBAppEmbedAnswer(await handler(mindooDBAppEmbedMessageFromPayload(payload)));
+      embedRequestHandlers.set(this.embedId, wrapped);
+      return () => {
+        if (embedRequestHandlers.get(this.embedId) === wrapped) {
+          embedRequestHandlers.delete(this.embedId);
+        }
+      };
     }
 
     onDirtyChange(listener: (dirty: boolean) => void) {
@@ -767,6 +847,32 @@ export function createMockEmbedHost(
     return await mindooDBAppExportPayload(await options.embedExport(structuredClone(entry), normalized), normalized);
   }
 
+  async function requestEmbed(embedId: string, rawMessage: MindooDBAppEmbedMessagePayload) {
+    const entry = entryOf(embedId);
+    const payload = normalizeMindooDBAppEmbedMessagePayload(rawMessage);
+    entry.requests.push({
+      request: "message",
+      type: payload.type,
+      ...(payload.data === undefined ? {} : { data: structuredClone(payload.data) }),
+      fileNames: (payload.files ?? []).map((file) => file.name),
+    });
+    if (!options.embedMessages) {
+      throw unsupported("The component takes no messages.");
+    }
+    return normalizeMindooDBAppEmbedAnswer(
+      await options.embedMessages(structuredClone(entry), mindooDBAppEmbedMessageFromPayload(payload)),
+    );
+  }
+
+  async function requestEmbedding(rawMessage: MindooDBAppEmbedMessagePayload) {
+    const message = mindooDBAppEmbedMessageFromPayload(normalizeMindooDBAppEmbedMessagePayload(rawMessage));
+    embeddingMessages.push(message);
+    if (!options.embeddingMessages) {
+      throw unsupported("The host takes no messages.");
+    }
+    return normalizeMindooDBAppEmbedAnswer(await options.embeddingMessages(message));
+  }
+
   function unsupportedHandler(): never {
     throw unsupported("unsupported");
   }
@@ -792,7 +898,7 @@ export function createMockEmbedHost(
     embeds: {
       async open(input) {
         const embedId = await openEmbed(input);
-        const handle = new MockEmbed(embedId, input.componentKey, input.databaseId, input.docId);
+        const handle = new MockEmbed(embedId, input.componentKey, input.databaseId ?? "", input.docId ?? "");
         handles.set(embedId, handle);
         return handle;
       },
@@ -854,6 +960,17 @@ export function createMockEmbedHost(
         exportProvider = provider;
         return () => {
           if (exportProvider === provider) exportProvider = null;
+        };
+      },
+      async request(message) {
+        return await requestEmbedding(await mindooDBAppEmbedMessagePayload(message));
+      },
+      onRequest(handler) {
+        const wrapped = async (payload: MindooDBAppEmbedMessagePayload) =>
+          normalizeMindooDBAppEmbedAnswer(await handler(mindooDBAppEmbedMessageFromPayload(payload)));
+        embeddingRequestHandler = wrapped;
+        return () => {
+          if (embeddingRequestHandler === wrapped) embeddingRequestHandler = null;
         };
       },
       async save(flush, saveOptions) {
@@ -981,6 +1098,31 @@ export function createMockEmbedHost(
       if (!exportProvider) unsupportedHandler();
       const normalized = normalizeMindooDBAppEmbedExportRequest(request);
       return mindooDBAppExportFile(await mindooDBAppExportPayload(await exportProvider(normalized), normalized));
+    },
+    requestEmbed,
+    setEmbedRequestHandler(embedId, handler) {
+      if (handler) {
+        embedRequestHandlers.set(embedId, handler);
+      } else {
+        embedRequestHandlers.delete(embedId);
+      }
+    },
+    async sendFromEmbed(embedId, message) {
+      entryOf(embedId);
+      const handler = embedRequestHandlers.get(embedId);
+      if (!handler) unsupportedHandler();
+      return await handler(await mindooDBAppEmbedMessagePayload(message));
+    },
+    requestEmbedding,
+    getEmbeddingMessages() {
+      return [...embeddingMessages];
+    },
+    setEmbeddingRequestHandler(handler) {
+      embeddingRequestHandler = handler;
+    },
+    async requestEmbeddingMessage(message) {
+      if (!embeddingRequestHandler) unsupportedHandler();
+      return await embeddingRequestHandler(await mindooDBAppEmbedMessagePayload(message));
     },
   };
 }

@@ -21,9 +21,11 @@ import {
 import type {
   MindooDBAppEmbedExportPayload,
   MindooDBAppEmbedExportRequest,
+  MindooDBAppEmbedMessage,
+  MindooDBAppEmbedMessagePayload,
   MindooDBAppEmbedVariable,
 } from "../embedExchange.js";
-import { mindooDBAppExportFile } from "../embedExchange.js";
+import { mindooDBAppEmbedMessagePayload, mindooDBAppExportFile } from "../embedExchange.js";
 import type {
   MindooDBAppEmbedValidation,
   MindooDBAppInspectAnchor,
@@ -4974,6 +4976,10 @@ export interface CreateMockMindooDBAppSessionOptions {
   accountRequest?: (input: MindooDBAppAccountRequestInput, offered: MockMailAccount[]) => string[] | null;
   /** Plays the components for `embed.export`. */
   embedExport?: MockEmbedHostOptions["embedExport"];
+  /** Plays the components for `embed.request`. */
+  embedMessages?: MockEmbedHostOptions["embedMessages"];
+  /** For an app under test that runs as a component: plays its host for `embedding.request`. */
+  embeddingMessages?: MockEmbedHostOptions["embeddingMessages"];
   /** For an app under test that runs as a component: the host's variables at start. */
   embeddingVariables?: MockEmbedHostOptions["embeddingVariables"];
   /** Plays the user when a save check found only warnings; default: save anyway. */
@@ -5127,6 +5133,15 @@ export interface MockMindooDBAppSessionController {
   requestEmbeddingVariables(variables: MindooDBAppEmbedVariable[]): Promise<void>;
   /** For an app under test that runs as a component: asks it for a file (`embed.export`). */
   requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
+  /**
+   * As if the component sent the app (as a host) a message, `session.embedding.request`;
+   * resolves with the answer of the app's `embed.onRequest`.
+   */
+  sendFromEmbed(embedId: string, message: MindooDBAppEmbedMessage): Promise<unknown>;
+  /** For an app under test that runs as a component: its host sends a message (`embed.request`). */
+  requestEmbeddingMessage(message: MindooDBAppEmbedMessage): Promise<unknown>;
+  /** For an app under test that runs as a component: its `embedding.request` messages so far. */
+  getEmbeddingMessages(): MindooDBAppEmbedMessage[];
 }
 
 export type { MockEmbeddingFinish, MockEmbedRequest, MockEmbedState } from "./mockEmbeds.js";
@@ -5345,6 +5360,9 @@ export function createMockMindooDBAppSession(
     getEmbeddingSaveCount: () => state.embedHost.getEmbeddingSaveCount(),
     requestEmbeddingVariables: (variables) => state.embedHost.requestEmbeddingVariables(variables),
     requestEmbeddingExport: (request) => state.embedHost.requestEmbeddingExport(request),
+    sendFromEmbed: (embedId, message) => state.embedHost.sendFromEmbed(embedId, message),
+    requestEmbeddingMessage: (message) => state.embedHost.requestEmbeddingMessage(message),
+    getEmbeddingMessages: () => state.embedHost.getEmbeddingMessages(),
   };
   replicaStates.set(controller, state);
   return controller;
@@ -5501,6 +5519,15 @@ export interface FakeBridgeHostController {
   /** For an app under test that runs as a component: asks it for a file (`embed.export`). */
   requestEmbeddingExport(request: MindooDBAppEmbedExportRequest): Promise<File>;
   /**
+   * As if the component sent the app (as a host) a message, `session.embedding.request`;
+   * resolves with the answer of the app's `embed.onRequest`.
+   */
+  sendFromEmbed(embedId: string, message: MindooDBAppEmbedMessage): Promise<unknown>;
+  /** For an app under test that runs as a component: its host sends a message (`embed.request`). */
+  requestEmbeddingMessage(message: MindooDBAppEmbedMessage): Promise<unknown>;
+  /** For an app under test that runs as a component: its `embedding.request` messages so far. */
+  getEmbeddingMessages(): MindooDBAppEmbedMessage[];
+  /**
    * Haven's agent-tool side: the tools and context the app declared, files in the
    * exchange, and `call()` to run a tool as an agent would.
    */
@@ -5578,6 +5605,7 @@ export function createFakeBridgeHost(
   }
   /** Save checks pushed to the app as a host, waiting for `embeds.respond`. */
   const embedRequests = new Map<string, (result: unknown) => void>();
+  const embedMessageRequests = new Map<string, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
   let embedRequestCounter = 0;
   const beforeCloseWaiters = new Map<string, () => void>();
   let beforeCloseCounter = 0;
@@ -5880,6 +5908,17 @@ export function createFakeBridgeHost(
       case "embeds.open": {
         const input = params.input as MindooDBAppEmbedOpenInput & { placement?: string };
         const embedId = await state.embedHost.openEmbed(input);
+        // The app answers its components' messages over its port (`embed.onRequest`).
+        state.embedHost.setEmbedRequestHandler(embedId, (message) => {
+          embedRequestCounter += 1;
+          const requestId = `embed-request-${embedRequestCounter}`;
+          return new Promise((resolve, reject) => {
+            embedMessageRequests.set(requestId, { resolve, reject });
+            connectedPorts.forEach((port) =>
+              port.postMessage({ protocol: PROTOCOL, kind: "embed-request", requestId, embedId, request: "message", params: { message } }),
+            );
+          });
+        });
         const supports = state.embedHost.listEmbeds().find((entry) => entry.embedId === embedId)?.supports ?? [];
         return {
           embedId,
@@ -5920,6 +5959,17 @@ export function createFakeBridgeHost(
         return { ok: true };
       }
       case "embeds.respond": {
+        const message = embedMessageRequests.get(String(params.requestId));
+        if (message) {
+          embedMessageRequests.delete(String(params.requestId));
+          if (params.ok === true) {
+            message.resolve(params.result);
+          } else {
+            const error = typeof params.error === "string" ? params.error : "failed";
+            message.reject(Object.assign(new Error(error), error === "unsupported" ? { name: "unsupported" } : {}));
+          }
+          return { ok: true };
+        }
         const resolve = embedRequests.get(String(params.requestId));
         embedRequests.delete(String(params.requestId));
         resolve?.(params.ok === true ? params.result : { issues: [] });
@@ -5942,6 +5992,10 @@ export function createFakeBridgeHost(
         return { ok: true };
       case "embeds.export":
         return await state.embedHost.exportEmbed(String(params.embedId), params.request);
+      case "embeds.request":
+        return await state.embedHost.requestEmbed(String(params.embedId), params.message as MindooDBAppEmbedMessagePayload);
+      case "embedding.request":
+        return await state.embedHost.requestEmbedding(params.message as MindooDBAppEmbedMessagePayload);
       case "embedding.getVariables":
         return { variables: state.embedHost.getEmbeddingVariables() };
       case "embedding.validate":
@@ -6969,6 +7023,11 @@ export function createFakeBridgeHost(
     async requestEmbeddingExport(request) {
       return mindooDBAppExportFile((await pushEmbeddingRequest("export", { request })) as MindooDBAppEmbedExportPayload);
     },
+    sendFromEmbed: (embedId, message) => state.embedHost.sendFromEmbed(embedId, message),
+    async requestEmbeddingMessage(message) {
+      return await pushEmbeddingRequest("message", { message: await mindooDBAppEmbedMessagePayload(message) });
+    },
+    getEmbeddingMessages: () => state.embedHost.getEmbeddingMessages(),
     dispose() {
       restoreWindow();
       connectedPorts.forEach((port) => {
