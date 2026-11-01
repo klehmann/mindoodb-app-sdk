@@ -953,7 +953,11 @@ function readComponents(value: unknown, errors: string[]): MindooDBAppComponentS
       scope = entry.scope;
     }
     if (scope === "app") {
-      const forbidden = ["match", "create", "children", "references"].filter((key) => entry[key] !== undefined);
+      // An empty `match` is what this parser itself stores for such a component.
+      const emptyMatch = isPlainObject(entry.match) && Object.keys(entry.match).length === 0;
+      const forbidden = ["match", "create", "children", "references"].filter(
+        (key) => entry[key] !== undefined && !(key === "match" && emptyMatch),
+      );
       if (forbidden.length) {
         errors.push(`${label} has scope "app" and must not declare ${forbidden.join(", ")}: it works on its own app's data.`);
         return;

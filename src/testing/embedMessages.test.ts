@@ -54,6 +54,10 @@ describe("components with scope app", () => {
       components: [{ id: "mailbox", scope: "app", label: "Mailbox", intents: ["view"], match: { form: "x" } }],
     });
     expect(withMatch.errors.join(" ")).toMatch(/must not declare match/);
+    // What it stores reads back the same (Haven re-checks stored registrations).
+    const again = validateMindooDBAppDefinition({ ...base, components: ok.definition?.components });
+    expect(again.errors).toEqual([]);
+    expect(again.definition?.components?.[0]).toEqual(ok.definition?.components?.[0]);
     const edit = validateMindooDBAppDefinition({
       ...base,
       components: [{ id: "mailbox", scope: "app", label: "Mailbox", intents: ["edit"] }],
