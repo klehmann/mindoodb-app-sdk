@@ -61,6 +61,7 @@ import type {
   MindooDBAppComponentFieldValue,
   MindooDBAppComponentReference,
   MindooDBAppComponentIntent,
+  MindooDBAppComponentScope,
   MindooDBAppDefinitionRegistrationPermission,
 } from "./appDefinition";
 import type {
@@ -76,6 +77,8 @@ import type {
   MindooDBAppEmbedExportRequest,
   MindooDBAppEmbedTemplate,
   MindooDBAppEmbedVariable,
+  MindooDBAppEmbedMessage,
+  MindooDBAppEmbedMessagePayload,
 } from "./embedExchange";
 
 /** Launch target used by the Haven when opening an app. */
@@ -376,10 +379,17 @@ export interface MindooDBAppEmbedContext {
   embedId: string;
   /** `id` of the component in this app's haven-app.json. */
   componentId: string;
+  /**
+   * `document` (also when missing): the sandbox with the host's document is this
+   * launch's only database. `app` (`scope: "app"` components): the app runs with its
+   * own databases as usual; `databaseId` and `docId` are empty. Show the part the
+   * component stands for, without the app's own navigation around it.
+   */
+  scope?: MindooDBAppComponentScope;
   intent: "edit" | "view";
-  /** The sandbox database; also the only entry of `databases`. */
+  /** The sandbox database; also the only entry of `databases`. Empty for `scope: "app"`. */
   databaseId: string;
-  /** The root document to open. */
+  /** The root document to open. Empty for `scope: "app"`. */
   docId: string;
   /** Name of the app that embeds this one, e.g. "CRM". */
   hostAppLabel: string;
@@ -2267,6 +2277,12 @@ export interface MindooDBAppComponentInfo {
   /** Name of the app that provides the component, e.g. "TeamGrid". */
   appLabel: string;
   componentId: string;
+  /**
+   * `document` (also when missing, from older Havens): opened on a document of this
+   * app's database. `app`: shows the providing app with its own data; open it
+   * without `databaseId` and `docId`.
+   */
+  scope?: MindooDBAppComponentScope;
   /** Label in the user's language. */
   label: string;
   description?: string;
@@ -2307,10 +2323,10 @@ export type MindooDBAppEmbedRect = MindooDBAppMenuRect;
 /** Input of `session.embeds.open`. */
 export interface MindooDBAppEmbedOpenInput {
   componentKey: string;
-  /** Host database that holds the root document. */
-  databaseId: string;
-  /** Root document; it must match the component's `match` fields. */
-  docId: string;
+  /** Host database that holds the root document. Not for components with `scope: "app"`. */
+  databaseId?: string;
+  /** Root document; it must match the component's `match` fields. Not for `scope: "app"`. */
+  docId?: string;
   /** Default `edit`. `view` gives the component read access only. */
   intent?: "edit" | "view";
   /**
@@ -2397,8 +2413,23 @@ export interface MindooDBAppEmbedClosedEvent {
 export interface MindooDBAppEmbed {
   readonly embedId: string;
   readonly componentKey: string;
+  /** Empty for a component with `scope: "app"`. */
   readonly databaseId: string;
+  /** Empty for a component with `scope: "app"`. */
   readonly docId: string;
+  /**
+   * Sends the component a message and resolves with its answer (plain JSON), e.g.
+   * `{ type: "mindoo.mail.compose@1", data, files }` to a mail app's mailbox.
+   * Rejects with `unsupported` when the component takes no messages, `timeout` after
+   * `timeoutMs` (default 10 minutes), or the component's error.
+   */
+  request(message: MindooDBAppEmbedMessage, options?: { timeoutMs?: number }): Promise<unknown>;
+  /**
+   * Answers the component's messages (`session.embedding.request`), e.g. "file this
+   * mail". Return plain JSON; throw to reject. One handler at a time; returns the
+   * unregister function. Without one, the component's requests fail with `unsupported`.
+   */
+  onRequest(handler: (message: MindooDBAppEmbedMessage) => unknown): () => void;
   /**
    * `frame`: the component is a frame in `container` and stacks like any element
    * of this page. `overlay`: Haven lays it over this page, above everything in it,
@@ -2649,6 +2680,18 @@ export interface MindooDBAppEmbeddingApi {
   provideExport(
     provider: (request: MindooDBAppEmbedExportRequest) => MindooDBAppEmbeddingExport | Promise<MindooDBAppEmbeddingExport>,
   ): () => void;
+  /**
+   * Sends the host a message and resolves with its answer (plain JSON), e.g.
+   * `{ type: "mindoo.file.document@1", data, files }` when the user files a mail.
+   * The host may show a dialog first, so the default timeout is 10 minutes. Rejects
+   * with `unsupported` when not embedded or the host takes no messages.
+   */
+  request(message: MindooDBAppEmbedMessage, options?: { timeoutMs?: number }): Promise<unknown>;
+  /**
+   * Answers the host's messages (`embed.request`). Return plain JSON; throw to reject.
+   * One handler at a time; returns the unregister function.
+   */
+  onRequest(handler: (message: MindooDBAppEmbedMessage) => unknown): () => void;
 }
 
 /** What `session.embedding.save` hands to `flush`. */
@@ -2683,10 +2726,11 @@ export interface MindooDBAppBridgeEmbeddingRequestMessage {
   protocol: "mindoodb-app-bridge";
   kind: "embedding-request";
   requestId: string;
-  request: "save" | "inspect" | "showIssues" | "reveal" | "variables" | "export";
+  request: "save" | "inspect" | "showIssues" | "reveal" | "variables" | "export" | "message";
   /**
    * `inspect`: `{ request }`, `showIssues`: `{ issues }`, `reveal`: `{ anchor }`,
-   * `variables`: `{ variables }`, `export`: `{ request }`.
+   * `variables`: `{ variables }`, `export`: `{ request }`, `message`: `{ message }`
+   * (a {@link MindooDBAppEmbedMessagePayload}).
    */
   params?: Record<string, unknown>;
 }
@@ -2697,8 +2741,13 @@ export interface MindooDBAppBridgeEmbedRequestMessage {
   kind: "embed-request";
   requestId: string;
   embedId: string;
-  request: "beforeSave";
-  params: { inspection: MindooDBAppInspectionBase | null; root: Record<string, unknown> | null };
+  request: "beforeSave" | "message";
+  /** `beforeSave`: inspection and root; `message`: `{ message }` from the component. */
+  params: {
+    inspection?: MindooDBAppInspectionBase | null;
+    root?: Record<string, unknown> | null;
+    message?: MindooDBAppEmbedMessagePayload;
+  };
 }
 
 /** The component reported whether it has unsaved changes. */
