@@ -2481,7 +2481,7 @@ if (isLaunchedByHaven()) {
 }
 ```
 
-Haven puts `mindoodbAppLaunchId` into every launch URL, so the check is synchronous. `renderHavenAppLandingPage()` reads `haven-app.json` from the same origin and shows the app's name, summary, description and screenshots, plus a button to `https://haven.mindoodb.com/?app=<your app URL>` (pass `havenUrl` for another Haven instance). Haven then walks a new user through setup with your app installed at the end, or offers an existing user to add it. The page speaks Haven's languages (en, de, es, fr, it, nb, nl, pl) by `navigator.language` — `no`/`nn` read Bokmål, others English — and takes the listing texts for the same locale; pass `locale` to override.
+Haven puts `mindoodbAppLaunchId` into every launch URL, so the check is synchronous. `renderHavenAppLandingPage()` reads `haven-app.json` from the same origin and shows the app's name, summary, description and screenshots (a click opens a full-screen gallery with captions: arrow keys or swipe to step through, Escape to close), plus a button to `https://haven.mindoodb.com/?app=<your app URL>` (pass `havenUrl` for another Haven instance). Haven then walks a new user through setup with your app installed at the end, or offers an existing user to add it. The page speaks Haven's languages (en, de, es, fr, it, nb, nl, pl) by `navigator.language` — `no`/`nn` read Bokmål, others English — and takes the listing texts for the same locale; pass `locale` to override.
 
 What the page shows comes from the optional `listing` in `haven-app.json`. Haven's setup wizard shows the same fields:
 

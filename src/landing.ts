@@ -64,6 +64,10 @@ const EN = {
   from: "from {origin}",
   by: "by {publisher}",
   screenshots: "Screenshots",
+  enlargeShot: "Show screenshot {number} larger",
+  previousShot: "Previous screenshot",
+  nextShot: "Next screenshot",
+  closeShot: "Close",
   footer:
     "{label} runs inside MindooDB Haven, which keeps its data end-to-end encrypted and local-first. Opening this address on its own shows only this page.",
   learnMore: "What is MindooDB?",
@@ -86,6 +90,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "von {origin}",
     by: "von {publisher}",
     screenshots: "Screenshots",
+    enlargeShot: "Screenshot {number} groß anzeigen",
+    previousShot: "Vorheriger Screenshot",
+    nextShot: "Nächster Screenshot",
+    closeShot: "Schließen",
     footer:
       "{label} läuft in MindooDB Haven, das ihre Daten Ende-zu-Ende-verschlüsselt und lokal hält. Direkt aufgerufen zeigt diese Adresse nur diese Seite.",
     learnMore: "Was ist MindooDB?",
@@ -99,6 +107,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "desde {origin}",
     by: "de {publisher}",
     screenshots: "Capturas de pantalla",
+    enlargeShot: "Ver la captura {number} en grande",
+    previousShot: "Captura anterior",
+    nextShot: "Captura siguiente",
+    closeShot: "Cerrar",
     footer:
       "{label} funciona dentro de MindooDB Haven, que cifra sus datos de extremo a extremo y los guarda primero en local. Abierta directamente, esta dirección solo muestra esta página.",
     learnMore: "¿Qué es MindooDB?",
@@ -112,6 +124,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "sur {origin}",
     by: "par {publisher}",
     screenshots: "Captures d'écran",
+    enlargeShot: "Agrandir la capture {number}",
+    previousShot: "Capture précédente",
+    nextShot: "Capture suivante",
+    closeShot: "Fermer",
     footer:
       "{label} fonctionne dans MindooDB Haven, qui chiffre ses données de bout en bout et les conserve d'abord en local. Ouverte directement, cette adresse n'affiche que cette page.",
     learnMore: "Qu'est-ce que MindooDB\u00a0?",
@@ -125,6 +141,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "da {origin}",
     by: "di {publisher}",
     screenshots: "Screenshot",
+    enlargeShot: "Mostra lo screenshot {number} in grande",
+    previousShot: "Screenshot precedente",
+    nextShot: "Screenshot successivo",
+    closeShot: "Chiudi",
     footer:
       "{label} funziona in MindooDB Haven, che cifra i suoi dati end-to-end e li tiene prima di tutto in locale. Aperto direttamente, questo indirizzo mostra solo questa pagina.",
     learnMore: "Che cos'è MindooDB?",
@@ -138,6 +158,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "fra {origin}",
     by: "fra {publisher}",
     screenshots: "Skjermbilder",
+    enlargeShot: "Vis skjermbilde {number} større",
+    previousShot: "Forrige skjermbilde",
+    nextShot: "Neste skjermbilde",
+    closeShot: "Lukk",
     footer:
       "{label} kjører i MindooDB Haven, som krypterer dataene ende-til-ende og holder dem lokalt først. Åpnet direkte viser denne adressen bare denne siden.",
     learnMore: "Hva er MindooDB?",
@@ -151,6 +175,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "van {origin}",
     by: "van {publisher}",
     screenshots: "Schermafbeeldingen",
+    enlargeShot: "Schermafbeelding {number} groot tonen",
+    previousShot: "Vorige schermafbeelding",
+    nextShot: "Volgende schermafbeelding",
+    closeShot: "Sluiten",
     footer:
       "{label} draait in MindooDB Haven, dat de gegevens end-to-end versleutelt en eerst lokaal bewaart. Rechtstreeks geopend toont dit adres alleen deze pagina.",
     learnMore: "Wat is MindooDB?",
@@ -164,6 +192,10 @@ export const HAVEN_APP_LANDING_STRINGS = {
     from: "z {origin}",
     by: "od {publisher}",
     screenshots: "Zrzuty ekranu",
+    enlargeShot: "Pokaż zrzut ekranu {number} w powiększeniu",
+    previousShot: "Poprzedni zrzut ekranu",
+    nextShot: "Następny zrzut ekranu",
+    closeShot: "Zamknij",
     footer:
       "{label} działa w MindooDB Haven, który szyfruje dane end-to-end i przechowuje je najpierw lokalnie. Otwarty bezpośrednio ten adres pokazuje tylko tę stronę.",
     learnMore: "Czym jest MindooDB?",
@@ -268,6 +300,171 @@ function renderMarkdownDescription(block: HTMLElement, markdown: string): void {
   }
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** A stroked 24×24 icon; `path` is fixed markup from this file, never publisher input. */
+function icon(path: string): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const shape = document.createElementNS(SVG_NS, "path");
+  shape.setAttribute("d", path);
+  svg.append(shape);
+  return svg;
+}
+
+function iconButton(className: string, label: string, path: string): HTMLButtonElement {
+  const button = el("button", className);
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.append(icon(path));
+  return button;
+}
+
+/** Horizontal distance a swipe has to cover before it changes the screenshot. */
+const SWIPE_THRESHOLD_PX = 48;
+
+interface ScreenshotLightbox {
+  element: HTMLElement;
+  open(index: number, opener?: HTMLElement): void;
+}
+
+/**
+ * The large view behind the screenshot strip: one screenshot at a time with its caption,
+ * previous/next by button, arrow keys and swipe (wrapping around at the ends), closed by
+ * Escape, the close button or a click beside the image. Focus stays inside while it is
+ * open and returns to the thumbnail that opened it.
+ */
+function createScreenshotLightbox(
+  shots: { url: string; caption: string }[],
+  strings: LandingStrings,
+): ScreenshotLightbox {
+  const element = el("div", "mdb-landing__lightbox");
+  element.hidden = true;
+  element.setAttribute("role", "dialog");
+  element.setAttribute("aria-modal", "true");
+  element.setAttribute("aria-label", strings.screenshots);
+  element.dataset.testid = "haven-app-landing-lightbox";
+
+  const bar = el("div", "mdb-landing__lightbox-bar");
+  const count = el("span", "mdb-landing__lightbox-count");
+  count.setAttribute("aria-live", "polite");
+  const close = iconButton("mdb-landing__lightbox-close", strings.closeShot, "M6 6l12 12M18 6L6 18");
+  bar.append(count, close);
+
+  const stage = el("div", "mdb-landing__lightbox-stage");
+  const image = el("img");
+  image.draggable = false;
+  const previous = iconButton("mdb-landing__lightbox-prev", strings.previousShot, "M15 5l-7 7 7 7");
+  const next = iconButton("mdb-landing__lightbox-next", strings.nextShot, "M9 5l7 7-7 7");
+  stage.append(image);
+  if (shots.length > 1) stage.append(previous, next);
+
+  const caption = el("p", "mdb-landing__lightbox-caption");
+  element.append(bar, stage, caption);
+
+  let current = 0;
+  let opener: HTMLElement | undefined;
+  let previousOverflow = "";
+
+  const show = (index: number) => {
+    current = (index + shots.length) % shots.length;
+    const shot = shots[current]!;
+    image.src = shot.url;
+    image.alt = shot.caption;
+    caption.textContent = shot.caption;
+    count.textContent = `${current + 1} / ${shots.length}`;
+    // Warm the neighbours so stepping through does not wait on the network.
+    for (const offset of [-1, 1]) {
+      const neighbour = shots[(current + offset + shots.length) % shots.length];
+      if (neighbour && shots.length > 1) new Image().src = neighbour.url;
+    }
+  };
+
+  const hide = () => {
+    if (element.hidden) return;
+    element.hidden = true;
+    document.documentElement.style.overflow = previousOverflow;
+    document.removeEventListener("keydown", onKey, true);
+    opener?.focus();
+  };
+
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      hide();
+    } else if (event.key === "ArrowLeft" && shots.length > 1) {
+      show(current - 1);
+    } else if (event.key === "ArrowRight" && shots.length > 1) {
+      show(current + 1);
+    } else if (event.key === "Home") {
+      show(0);
+    } else if (event.key === "End") {
+      show(shots.length - 1);
+    } else if (event.key === "Tab") {
+      // Keep focus on the dialog's own buttons.
+      const focusable = [close, ...(shots.length > 1 ? [previous, next] : [])];
+      const position = focusable.indexOf(document.activeElement as HTMLButtonElement);
+      const target = event.shiftKey
+        ? focusable[position <= 0 ? focusable.length - 1 : position - 1]
+        : focusable[position < 0 || position === focusable.length - 1 ? 0 : position + 1];
+      target?.focus();
+    } else {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  close.addEventListener("click", hide);
+  previous.addEventListener("click", () => show(current - 1));
+  next.addEventListener("click", () => show(current + 1));
+  // A click on the dark area around the screenshot closes, like most image viewers. It has
+  // to start there too: a swipe that begins on the image and ends beside it is no click.
+  const isBackdrop = (target: EventTarget | null) => target === stage || target === element || target === bar;
+  let pressedOnBackdrop = false;
+  element.addEventListener("pointerdown", (event) => {
+    pressedOnBackdrop = isBackdrop(event.target);
+  });
+  element.addEventListener("click", (event) => {
+    if (pressedOnBackdrop && isBackdrop(event.target)) hide();
+    pressedOnBackdrop = false;
+  });
+
+  let swipe: { id: number; x: number; y: number } | undefined;
+  stage.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target !== image) return;
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  });
+  stage.addEventListener("pointerup", (event) => {
+    if (!swipe || swipe.id !== event.pointerId) return;
+    const dx = event.clientX - swipe.x;
+    const dy = event.clientY - swipe.y;
+    swipe = undefined;
+    if (shots.length > 1 && Math.abs(dx) >= SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      show(current + (dx < 0 ? 1 : -1));
+    }
+  });
+  stage.addEventListener("pointercancel", () => {
+    swipe = undefined;
+  });
+
+  return {
+    element,
+    open(index, from) {
+      opener = from;
+      show(index);
+      if (element.hidden) {
+        element.hidden = false;
+        previousOverflow = document.documentElement.style.overflow;
+        document.documentElement.style.overflow = "hidden";
+        document.addEventListener("keydown", onKey, true);
+      }
+      close.focus();
+    },
+  };
+}
+
 const STYLE_ID = "mdb-landing-style";
 
 const STYLE = `
@@ -297,8 +494,29 @@ const STYLE = `
 .mdb-landing__shots-title{margin:32px 0 12px;font-size:15px;color:var(--muted);font-weight:600}
 .mdb-landing__shots{display:grid;grid-auto-flow:column;grid-auto-columns:min(78%,420px);gap:16px;overflow-x:auto;padding-bottom:8px;scroll-snap-type:x mandatory}
 .mdb-landing__shot{margin:0;scroll-snap-align:start}
-.mdb-landing__shot img{width:100%;border-radius:14px;border:1px solid var(--line);display:block}
+.mdb-landing__shot-open{display:block;width:100%;padding:0;border:0;background:none;border-radius:14px;cursor:zoom-in}
+.mdb-landing__shot-open:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.mdb-landing__shot img{width:100%;border-radius:14px;border:1px solid var(--line);display:block;transition:transform .2s ease,box-shadow .2s ease}
+@media (hover:hover){.mdb-landing__shot-open:hover img{transform:translateY(-2px);box-shadow:0 12px 28px rgba(15,23,42,.16)}}
 .mdb-landing__shot figcaption{margin-top:8px;font-size:13px;color:var(--muted)}
+.mdb-landing__lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;background:rgba(8,11,20,.96);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:#f2f4f9;
+  font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;animation:mdb-landing-fade .18s ease}
+.mdb-landing__lightbox[hidden]{display:none}
+@keyframes mdb-landing-fade{from{opacity:0}}
+.mdb-landing__lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top))}
+.mdb-landing__lightbox-count{font-size:14px;color:#aab2c5;font-variant-numeric:tabular-nums}
+.mdb-landing__lightbox-stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:0 72px;touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-select:none}
+.mdb-landing__lightbox-stage img{max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;box-shadow:0 24px 80px rgba(0,0,0,.5);transition:transform .2s ease,opacity .2s ease;-webkit-user-drag:none}
+.mdb-landing__lightbox-caption{margin:0 auto;max-width:880px;padding:16px 24px;padding-bottom:max(20px,env(safe-area-inset-bottom));text-align:center;font-size:15px;color:#dfe3ec;min-height:1.5em}
+.mdb-landing__lightbox button{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.1);color:#fff;cursor:pointer;transition:background .15s ease}
+.mdb-landing__lightbox button:hover{background:rgba(255,255,255,.2)}
+.mdb-landing__lightbox button:focus-visible{outline:3px solid #8fb0ff;outline-offset:2px}
+.mdb-landing__lightbox button svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.mdb-landing__lightbox-prev,.mdb-landing__lightbox-next{position:absolute;top:50%;transform:translateY(-50%)}
+.mdb-landing__lightbox-prev{left:12px}
+.mdb-landing__lightbox-next{right:12px}
+@media (max-width:560px){.mdb-landing__lightbox-stage{padding:0 8px}.mdb-landing__lightbox-prev,.mdb-landing__lightbox-next{top:auto;bottom:-56px;transform:none}.mdb-landing__lightbox-prev{left:16px}.mdb-landing__lightbox-next{right:16px}.mdb-landing__lightbox-caption{padding-left:72px;padding-right:72px;font-size:14px}}
+@media (prefers-reduced-motion:reduce){.mdb-landing__lightbox,.mdb-landing__lightbox-stage img,.mdb-landing__shot img{animation:none;transition:none}}
 .mdb-landing__footer{margin:36px 0 0;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
 .mdb-landing__footer a{color:inherit}
 @media (max-width:560px){.mdb-landing{padding:16px}.mdb-landing__card{padding:24px;border-radius:18px}.mdb-landing__head{flex-direction:column;align-items:flex-start}.mdb-landing__icon{width:72px;height:72px}}
@@ -408,17 +626,25 @@ export async function renderHavenAppLandingPage(
   if (screenshots.length) {
     card.append(el("h2", "mdb-landing__shots-title", strings.screenshots));
     const strip = el("div", "mdb-landing__shots");
-    for (const shot of screenshots) {
+    const lightbox = createScreenshotLightbox(screenshots, strings);
+    screenshots.forEach((shot, index) => {
       const figure = el("figure", "mdb-landing__shot");
+      const open = el("button", "mdb-landing__shot-open");
+      open.type = "button";
+      open.setAttribute("aria-label", format(strings.enlargeShot, { number: String(index + 1) }));
+      open.setAttribute("aria-haspopup", "dialog");
+      open.addEventListener("click", () => lightbox.open(index, open));
       const image = el("img");
       image.src = shot.url;
       image.alt = shot.caption;
       image.loading = "lazy";
-      figure.append(image);
+      open.append(image);
+      figure.append(open);
       if (shot.caption) figure.append(el("figcaption", undefined, shot.caption));
       strip.append(figure);
-    }
+    });
     card.append(strip);
+    root.append(lightbox.element);
   }
 
   const footer = el("footer", "mdb-landing__footer");
