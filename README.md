@@ -487,6 +487,30 @@ const unbind = session.drag.bindSource(cardEl, {
 
 `bindSource` starts after an 8px mouse/pen move, or a 400ms long-press on touch (so lists can still scroll). After start, the source frame keeps the pressed pointer (browsers do not retarget mouse-capture into Haven) and forwards `pointermove` / `pointerup` to the host. You can also call `session.drag.start` yourself with a PNG `ArrayBuffer` preview, then `reportPointer` / `release`. v1 is **copy-only** and **iframe-only**. Well-known types: `text/plain`, `text/markdown`, `application/json`, `application/x-mindoo-document`.
 
+**Files.** A drag can also offer files (an invoice PDF, an XRechnung). Nothing is produced when the drag starts: `read()` runs only when a target asks for the file after the drop, so a drag that ends on a text field never builds the PDF. Targets name the file types they take with `acceptsFiles` (MIME types or patterns such as `image/*`) and read the files they want from the drop event:
+
+```ts
+// Source
+session.drag.bindSource(rowEl, {
+  offers: () => [{ type: "text/markdown", data: "**Invoice RE-2026-0012** · 1,234.50 €" }],
+  files: () => [{ type: "application/pdf", name: "RE-2026-0012.pdf", read: () => renderPdf(docId) }],
+});
+
+// Target
+await session.drag.setProfile({
+  accepts: ["text/plain"],
+  acceptsFiles: ["application/pdf", "image/*"],
+  onOver: (event) => ({ accept: event.files.length > 0 || event.types.length > 0 }),
+  onDrop: async (event) => {
+    for (const file of event.files) await attach(file.name, await file.read());
+  },
+});
+```
+
+A drag offers at most 8 files of up to 50 MB each; `read()` works for two minutes after the drop. Havens without file drags leave `files` empty.
+
+**Testing.** The fake host and the browser test host (`/__haven-test/`) play Haven's side: `host.drag.drop({ x, y, items, files })` drops on the app as another app would, `host.drag.over(...)` returns its hover answer, `host.drag.started()` lists the drags the app started and `host.drag.readFile(id)` asks it for an offered file. The test host panel has a "Drag & drop" section for the same by hand: point at the app to see whether it accepts, click to drop, and save the files the app's own drags offer.
+
 ### Receiving files and content
 
 Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:
