@@ -2487,12 +2487,14 @@ What the page shows comes from the optional `listing` in `haven-app.json`. Haven
 
 ```json
 {
+  "publicUrl": "https://trips.example.com/",
   "listing": {
     "summary": { "en": "Plan trips together.", "de": "Reisen gemeinsam planen." },
     "description": { "en": "First paragraph.\n\nSecond paragraph." },
     "descriptionMarkdown": { "en": "**Plan** together.\n\n- Shared board\n- [Website](https://trips.example.com)" },
-    "icon": "icon.svg",
-    "screenshots": [{ "file": "screenshots/board.webp", "caption": { "en": "The trip board" } }],
+    "icon": "listing/icon.png",
+    "screenshots": [{ "file": "listing/01-board.webp", "caption": { "en": "The trip board" } }],
+    "shareImage": "listing/share.png",
     "publisher": { "name": "Mindoo GmbH", "url": "https://mindoo.de" }
   }
 }
