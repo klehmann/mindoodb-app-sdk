@@ -511,6 +511,24 @@ A drag offers at most 8 files of up to 50 MB each; `read()` works for two minute
 
 **Testing.** The fake host and the browser test host (`/__haven-test/`) play Haven's side: `host.drag.drop({ x, y, items, files })` drops on the app as another app would, `host.drag.over(...)` returns its hover answer, `host.drag.started()` lists the drags the app started and `host.drag.readFile(id)` asks it for an offered file. The test host panel has a "Drag & drop" section for the same by hand: point at the app to see whether it accepts, click to drop, and save the files the app's own drags offer.
 
+### Links to documents
+
+`session.links` makes links to the app's documents that colleagues in the same tenant can open, in a mail, a chat or another app:
+
+```ts
+const { url, markdown } = await session.links.create({
+  databaseId: "invoices",          // logical id from haven-app.json
+  docId,
+  target: `line=${lineId}`,        // optional place in the document, after "#"
+  title: "Invoice RE-2026-0012",   // only for the Markdown form
+});
+// https://haven.mindoodb.com/open/<tenantId>/<appId>/invoices/<docId>#line=l_4
+
+session.links.onOpened(({ databaseId, docId, target }) => openDocument(docId, target));
+```
+
+Haven opens such a link through the recipient's own installation of the app (same `appId`, a mapping of that database in that tenant): it starts or focuses the app and hands the document to `onOpened`. A link that started the app is held until the handler is registered. Links carry ids only, never titles or contents, and `target` (max. 500 characters) sits after `#`, so servers never log it. The mocks answer with `https://haven.mindoodb.com/open/…` links and let tests open one (`mock.links.open(...)`, `host.links.open(...)`); the browser test host lists the links the app created with an "Open" button.
+
 ### Receiving files and content
 
 Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:

@@ -158,6 +158,7 @@ import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
 import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
+import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 
@@ -3958,6 +3959,7 @@ type MockSessionState = {
   getAccountRequests: () => MindooDBAppAccountRequestInput[];
   getAccountGrants: () => Record<string, MindooDBAppAccountScope[]>;
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
+  links: ReturnType<typeof createMockLinks>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
   getShareRequests: () => MockShareRequest[];
@@ -4011,6 +4013,11 @@ function createMockSessionState(
   const themeListeners = new Set<(theme: MindooDBAppHostTheme) => void>();
   let incomingHandler: MindooDBAppIncomingContentHandler | null = null;
   const mockReminders = new Map<string, MindooDBAppReminder>();
+  const mockLinks = createMockLinks({
+    appId: () => launchContext.appId,
+    tenantId: () => launchContext.tenantId,
+    hasDatabase: (databaseId) => databaseInfos.some((info) => info.id === databaseId),
+  });
   const mockLocalFiles = createMockLocalFiles(options.localFiles);
   const mockDevice: MindooDBAppDeviceInfo = options.device ?? {
     id: "mock-device",
@@ -4520,6 +4527,7 @@ function createMockSessionState(
       },
     },
     localFiles: mockLocalFiles.api,
+    links: mockLinks.api,
     reminders: {
       async schedule(request) {
         const at = request.at instanceof Date ? request.at.getTime() : request.at;
@@ -4699,6 +4707,7 @@ function createMockSessionState(
     listReminders() {
       return [...mockReminders.values()].map((reminder) => ({ ...reminder }));
     },
+    links: mockLinks,
     setLocalFilesState(state) {
       mockLocalFiles.setState(state);
     },
@@ -5083,6 +5092,8 @@ export interface MockMindooDBAppSessionController {
    * to `session.reminders.onOpened` (held until registered).
    */
   emitReminderOpened(id: string, action?: "open" | "done"): Promise<void>;
+  /** `session.links`: open a link to the app as the user would, and the links it created. */
+  readonly links: MockLinksController;
   /** Every `session.pdf.sign` request so far, oldest first. */
   getPdfSignRequests(): MindooDBAppPdfSignInput[];
   /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
@@ -5337,6 +5348,7 @@ export function createMockMindooDBAppSession(
     getAccountRequests: state.getAccountRequests,
     getAccountGrants: state.getAccountGrants,
     emitReminderOpened: state.emitReminderOpened,
+    links: state.links.controller,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
     getShareRequests: state.getShareRequests,
@@ -5538,6 +5550,8 @@ export interface FakeBridgeHostController {
    * and see (and read the files of) the drags the app starts.
    */
   readonly drag: MockDragHostController;
+  /** `session.links`: open a link to the app as the user would, and the links it created. */
+  readonly links: MockLinksController;
 }
 
 /** What the fake host's built-in dispatch returns for a method it does not know. */
@@ -5664,6 +5678,7 @@ export function createFakeBridgeHost(
     // a new connection is a (re)launched app: its tools and context start over
     if (connectedPorts.size > 0) {
       agentHost.reset("The app was reloaded.");
+      state.links.reset();
       dragHost.reset();
     }
     connectedPorts.add(port);
@@ -6940,6 +6955,14 @@ export function createFakeBridgeHost(
           succeed(dragResult.result);
           return;
         }
+        const linksResult = await state.links.dispatch(message.method, message.params, (pushed) => {
+          port.postMessage(pushed);
+          return true;
+        });
+        if (linksResult) {
+          succeed(linksResult.result);
+          return;
+        }
         const agentResult = await agentHost.dispatch(message.method, message.params);
         if (agentResult) {
           succeed(agentResult.result);
@@ -6992,6 +7015,7 @@ export function createFakeBridgeHost(
     bridge: state.bridge,
     session: state.session,
     agent: agentHost.controller,
+    links: state.links.controller,
     drag: dragHost.controller,
     get launchId() {
       return state.getLaunchContext().launchId;
@@ -7191,6 +7215,7 @@ export {
   type AgentManifestCheckResult,
 } from "./agentManifest";
 export { createMemoryAttachments } from "./memoryAttachments";
+export { MOCK_HAVEN_LINK_ORIGIN, MOCK_LINK_TENANT_ID, type MockCreatedLink, type MockLinksController } from "./mockLinks";
 export type { MockDragFile, MockDragHostController, MockDragProfile, MockStartedDrag } from "./mockDragHost";
 export {
   DEFAULT_TEST_HOST_USERS,

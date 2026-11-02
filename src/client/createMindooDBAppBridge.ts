@@ -45,6 +45,7 @@ import { MindooDBAppFilesApiImpl } from "./files";
 import { MindooDBAppPdfApiImpl } from "./pdf";
 import { MindooDBAppAccountsApiImpl } from "./accounts";
 import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
+import { MindooDBAppLinksApiImpl } from "./links";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
 import { PortRpcClient } from "./portRpcClient";
 import type {
@@ -1732,6 +1733,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
   public readonly reminders: MindooDBAppRemindersApiImpl;
+  public readonly links: MindooDBAppLinksApiImpl;
   public readonly localFiles: MindooDBAppLocalFilesApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
   public readonly pdf: MindooDBAppPdfApiImpl;
@@ -1764,6 +1766,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
     this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
+    this.links = new MindooDBAppLinksApiImpl(this.rpc);
     this.localFiles = new MindooDBAppLocalFilesApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
     this.pdf = new MindooDBAppPdfApiImpl(this.rpc);
@@ -2128,6 +2131,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent.dispose();
     this.incoming.dispose();
     this.reminders.dispose();
+    this.links.dispose();
     this.embedsClient.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
