@@ -158,6 +158,7 @@ import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
 import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
+import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 
 const PROTOCOL = "mindoodb-app-bridge";
@@ -5532,6 +5533,11 @@ export interface FakeBridgeHostController {
    * exchange, and `call()` to run a tool as an agent would.
    */
   readonly agent: MockAgentHostController;
+  /**
+   * Haven's host-owned drag: drop text or files on the app as another app would,
+   * and see (and read the files of) the drags the app starts.
+   */
+  readonly drag: MockDragHostController;
 }
 
 /** What the fake host's built-in dispatch returns for a method it does not know. */
@@ -5569,6 +5575,12 @@ export function createFakeBridgeHost(
       return true;
     },
     onChange: () => options.onAgentChange?.(),
+  });
+  const dragHost = createMockDragHost((message, transfer) => {
+    const port = [...connectedPorts].pop();
+    if (!port) return false;
+    port.postMessage(message, transfer ?? []);
+    return true;
   });
   state.embedHost.onClosed((event) => {
     connectedPorts.forEach((port) =>
@@ -5650,7 +5662,10 @@ export function createFakeBridgeHost(
       );
     }
     // a new connection is a (re)launched app: its tools and context start over
-    if (connectedPorts.size > 0) agentHost.reset("The app was reloaded.");
+    if (connectedPorts.size > 0) {
+      agentHost.reset("The app was reloaded.");
+      dragHost.reset();
+    }
     connectedPorts.add(port);
     port.addEventListener("message", (event: MessageEvent<unknown>) => {
       void handlePortMessage(port, event.data);
@@ -6876,6 +6891,9 @@ export function createFakeBridgeHost(
       agentHost.handleResult(message);
       return;
     }
+    if (dragHost.handleMessage(message)) {
+      return;
+    }
     if (message.kind === "workspace-focus-requested") {
       state.setHostFocused(true);
       const payload: MindooDBAppBridgeHostFocusChangedMessage = {
@@ -6915,6 +6933,11 @@ export function createFakeBridgeHost(
             port,
           });
           succeed(result);
+          return;
+        }
+        const dragResult = await dragHost.dispatch(message.method, message.params);
+        if (dragResult) {
+          succeed(dragResult.result);
           return;
         }
         const agentResult = await agentHost.dispatch(message.method, message.params);
@@ -6969,6 +6992,7 @@ export function createFakeBridgeHost(
     bridge: state.bridge,
     session: state.session,
     agent: agentHost.controller,
+    drag: dragHost.controller,
     get launchId() {
       return state.getLaunchContext().launchId;
     },
@@ -7167,6 +7191,7 @@ export {
   type AgentManifestCheckResult,
 } from "./agentManifest";
 export { createMemoryAttachments } from "./memoryAttachments";
+export type { MockDragFile, MockDragHostController, MockDragProfile, MockStartedDrag } from "./mockDragHost";
 export {
   DEFAULT_TEST_HOST_USERS,
   mountTwoUserTestHost,

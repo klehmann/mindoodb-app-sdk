@@ -2787,6 +2787,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage
+  | MindooDBAppBridgeDragFileRequestMessage
+  | MindooDBAppBridgeDragFileResultMessage
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
@@ -2934,9 +2936,45 @@ export interface MindooDBAppDragPointer {
   y: number;
 }
 
+/**
+ * A file a drag can hand over, such as an invoice PDF. Nothing is read when the drag
+ * starts: `read()` runs only when a target asks for the file after the drop, so a
+ * drag that ends on text only never produces it.
+ */
+export interface MindooDBAppDragFileOffer {
+  /** MIME type, e.g. `application/pdf`. */
+  type: string;
+  /** File name with extension, shown to the user and kept by the target. */
+  name: string;
+  /** Size in bytes when known in advance. */
+  size?: number;
+  /** Produces the file. Called once per target that asks; at most {@link MINDOODB_APP_MAX_DRAG_FILE_BYTES}. */
+  read: () => Promise<Blob | ArrayBuffer | Uint8Array>;
+}
+
+/** What a target learns about an offered file before it asks for it. */
+export interface MindooDBAppDragFileInfo {
+  type: string;
+  name: string;
+  size?: number;
+}
+
+/** A file in a drop: `read()` fetches it from the source app through Haven. */
+export interface MindooDBAppDroppedFile extends MindooDBAppDragFileInfo {
+  read: () => Promise<Blob>;
+}
+
+/** A file offer as it crosses the bridge: `read` stays in the source app. */
+export interface MindooDBAppDragFileDescriptor extends MindooDBAppDragFileInfo {
+  id: string;
+}
+
 /** Input for a host-owned drag gesture. Iframe-only, copy-only. */
 export interface MindooDBAppDragStartInput {
+  /** Text payloads; may be empty when `files` offers something. */
   offers: MindooDBAppDragOffer[];
+  /** Files produced on demand after the drop. */
+  files?: MindooDBAppDragFileOffer[];
   preview: MindooDBAppDragPreview;
   pointer: MindooDBAppDragPointer;
   allowedEffects?: Array<"copy">;
@@ -2961,6 +2999,8 @@ export interface MindooDBAppDragOverEvent {
   x: number;
   y: number;
   types: string[];
+  /** Offered files this launch accepts (`acceptsFiles`); empty otherwise. */
+  files: MindooDBAppDragFileInfo[];
 }
 
 /** Target answer after hit-testing a `drag-over`. */
@@ -2974,6 +3014,8 @@ export interface MindooDBAppDragDropEvent {
   x: number;
   y: number;
   items: Record<string, string>;
+  /** Offered files this launch accepts; read the ones it wants with `read()`. */
+  files: MindooDBAppDroppedFile[];
 }
 
 /**
@@ -2981,7 +3023,10 @@ export interface MindooDBAppDragDropEvent {
  * Haven; the callbacks stay in the SDK and run from host push events.
  */
 export interface MindooDBAppDragProfile {
+  /** Text types (`text/plain`, …). May be empty when `acceptsFiles` is set. */
   accepts: string[];
+  /** File types this launch takes, as MIME patterns: `application/pdf`, `image/*`, `*\/*`. */
+  acceptsFiles?: string[];
   onOver?: (event: MindooDBAppDragOverEvent) => MindooDBAppDragHoverResult | void;
   onLeave?: () => void;
   onDrop?: (event: MindooDBAppDragDropEvent) => void;
@@ -2990,6 +3035,8 @@ export interface MindooDBAppDragProfile {
 /** Options for `session.drag.bindSource`. */
 export interface MindooDBAppDragBindSourceOptions {
   offers: MindooDBAppDragOffer[] | (() => MindooDBAppDragOffer[]);
+  /** Files the drag offers; see {@link MindooDBAppDragFileOffer}. */
+  files?: MindooDBAppDragFileOffer[] | (() => MindooDBAppDragFileOffer[]);
   /** Touch only: hold this long before Haven takes over. Default 400. */
   longPressMs?: number;
   /** Mouse/pen move, or the scroll-cancel slop on touch. Default 8. */
@@ -3035,6 +3082,8 @@ export interface MindooDBAppBridgeDragOverMessage {
   x: number;
   y: number;
   types: string[];
+  /** Missing from Havens without file drags. */
+  files?: MindooDBAppDragFileInfo[];
 }
 
 /** Host → previous target: pointer left this iframe. */
@@ -3050,6 +3099,28 @@ export interface MindooDBAppBridgeDragDropMessage {
   x: number;
   y: number;
   items: Record<string, string>;
+  /** Names this drop for `drag.readFile`; missing from Havens without file drags. */
+  dropId?: string;
+  files?: MindooDBAppDragFileDescriptor[];
+}
+
+/** Host → source: a target asked for one of the files the drag offered. */
+export interface MindooDBAppBridgeDragFileRequestMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-file-request";
+  requestId: string;
+  fileId: string;
+}
+
+/** Source → host: the file's bytes (transferred), or why it could not be made. */
+export interface MindooDBAppBridgeDragFileResultMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-file-result";
+  requestId: string;
+  ok: boolean;
+  bytes?: ArrayBuffer;
+  type?: string;
+  error?: string;
 }
 
 export interface MindooDBAppMenuApi {
