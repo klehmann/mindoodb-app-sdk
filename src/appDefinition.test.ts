@@ -176,6 +176,7 @@ describe("app definition listing", () => {
           summary: { en: " Plans trips. ", de: "Plant Reisen." },
           description: "First paragraph.\n\nSecond paragraph.",
           icon: "icon.svg",
+          shareImage: "listing/share.png",
           screenshots: ["shots/1.webp", { file: "https://cdn.example.com/2.webp", caption: "Board" }],
           publisher: { name: " Mindoo ", url: "https://mindoo.de" },
         },
@@ -186,6 +187,7 @@ describe("app definition listing", () => {
       summary: { en: "Plans trips.", de: "Plant Reisen." },
       description: "First paragraph.\n\nSecond paragraph.",
       icon: "icon.svg",
+      shareImage: "listing/share.png",
       screenshots: [{ file: "shots/1.webp" }, { file: "https://cdn.example.com/2.webp", caption: "Board" }],
       publisher: { name: "Mindoo", url: "https://mindoo.de" },
     });
@@ -197,13 +199,14 @@ describe("app definition listing", () => {
         listing: {
           summary: { de: "Nur Deutsch" },
           icon: "javascript:alert(1)",
+          shareImage: "javascript:alert(2)",
           screenshots: [{ file: "//evil.example.com/x.png" }, { file: "data:image/png;base64,AA" }],
           publisher: { name: "X", url: "http://insecure.example.com" },
         },
       }),
     );
     expect(definition).toBeNull();
-    expect(errors).toHaveLength(5);
+    expect(errors).toHaveLength(6);
   });
 
   it("caps the number of screenshots", () => {

@@ -2500,7 +2500,14 @@ What the page shows comes from the optional `listing` in `haven-app.json`. Haven
 
 Texts are a string or a per-locale map with an `en` fallback. Image paths are relative to the app origin or absolute `https:` URLs. The listing is display-only and grants nothing.
 
-Opening the app URL directly also puts share tags into `index.html` (`twitter:card` = `summary`, plus the Open Graph tags other apps read), with the app icon as the image. A production build takes the absolute URL from `publicUrl` in `haven-app.json`. `vite dev` uses the dev server's own origin instead, so `http://127.0.0.1:<port>/` previews against itself. Crawlers do not run the landing page's JavaScript, which is why the tags are in the HTML file.
+Opening the app URL directly also puts share tags into `index.html` (Open Graph tags plus `twitter:card`), so Messages, Slack, X and others show a preview when the address is shared. With `listing.shareImage` (a 1200×630 PNG or JPEG) the preview is a large card with that image; without it a small `summary` card with the app icon. The SDK draws the share image for you from the icon, the app name and the first listing screenshot, and records it in `haven-app.json`:
+
+```bash
+npx -p playwright@1 -p mindoodb-app-sdk mindoodb-share-image          # in the app folder
+npx -p playwright@1 -p mindoodb-app-sdk mindoodb-share-image --screenshot 2   # another screenshot, 0 = none
+```
+
+It writes `public/listing/share.png` and sets `"shareImage": "listing/share.png"`. The image holds only the app name and "MindooDB Haven", so one image fits every language; run it again when the icon or the screenshots change. A production build takes the absolute URL from `publicUrl` in `haven-app.json`. `vite dev` uses the dev server's own origin instead, so `http://127.0.0.1:<port>/` previews against itself. Crawlers do not run the landing page's JavaScript, which is why the tags are in the HTML file.
 
 `description` is plain text. `descriptionMarkdown` is the same text with formatting, in a small Markdown subset: paragraphs, headings, bullet and numbered lists, `**bold**`, `_italic_`, `` `code` ``, `[text](https://…)`, `[text](mailto:…)` and bare `https://…` links. Links to any other scheme render as plain text. Readers that know `descriptionMarkdown` show it instead of `description`; older Haven versions ignore it, so set both if they matter. `listingMarkdownToPlainText()` derives the plain version. A publisher `url` (`https:` only) turns the publisher name into a link.
 
