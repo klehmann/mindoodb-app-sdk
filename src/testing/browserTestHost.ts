@@ -20,6 +20,7 @@ import { createMemoryAttachments } from "./memoryAttachments";
 import { mountTwoUserTestHost, type TestHostUser } from "./twoUserTestHost";
 import type { MockAgentCall, MockAgentHostController } from "./mockAgentTools";
 import type { MockDragHostController } from "./mockDragHost";
+import type { MockLinksController } from "./mockLinks";
 
 /**
  * A stand-in Haven for a real browser: the app runs in an iframe, exactly as Haven frames
@@ -94,6 +95,11 @@ export interface BrowserTestHost {
    * `readFile`).
    */
   drag: MockDragHostController;
+  /**
+   * `session.links` (same as `host.links`): the links the app created, and `open()`
+   * to hand it one as if the user opened it in Haven.
+   */
+  links: MockLinksController;
   /**
    * Decides the outcome of the app's next `attachments.scan()`: a file to "scan", or
    * `null` to act as if the user cancelled. Later scans follow {@link setScanMode}.
@@ -465,6 +471,7 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
     log,
     agent: host.agent,
     drag: host.drag,
+    links: host.links,
     setNextScan(scan) {
       nextScan = scan;
     },
@@ -931,6 +938,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     frame,
     onChange: () => {
       render();
+      if (agentReady) renderLinks();
       // the agent section is built after the host exists
       if (agentReady) renderAgent();
     },
@@ -1462,6 +1470,55 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     dragStarted,
   );
   renderDrag();
+
+  // Links: what the app created with session.links.create, opened as Haven would
+  const linkList = document.createElement("ul");
+  linkList.dataset.testid = "haven-test-links";
+  const linkTarget = document.createElement("input");
+  linkTarget.setAttribute("aria-label", "Link to open (paste a link the app made)");
+  linkTarget.placeholder = "https://haven.mindoodb.com/open/…";
+  linkTarget.style.width = "100%";
+  function openUrl(url: string) {
+    const match = /\/open\/([^/]+)\/([^/]+)\/([^/]+)\/([^/#?]+)(?:#(.*))?$/.exec(url.trim());
+    if (!match) {
+      linkTarget.setCustomValidity("Not a Haven content link.");
+      linkTarget.reportValidity();
+      return;
+    }
+    linkTarget.setCustomValidity("");
+    testHost.links.open({
+      databaseId: decodeURIComponent(match[3]!),
+      docId: decodeURIComponent(match[4]!),
+      ...(match[5] ? { target: decodeURI(match[5]) } : {}),
+    });
+  }
+  linkTarget.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") openUrl(linkTarget.value);
+  });
+  function renderLinks() {
+    const links = testHost.links.created().slice(-8).reverse();
+    linkList.replaceChildren(
+      ...(links.length ? [] : [hint("The app has not created a link yet.")]),
+      ...links.map((link) => {
+        const li = document.createElement("li");
+        const row = document.createElement("div");
+        row.className = "htest__row";
+        const text = document.createElement("span");
+        text.textContent = link.input.title ? `${link.input.title} · ${link.url}` : link.url;
+        text.style.flex = "1";
+        row.append(text, button("Open", () => openUrl(link.url)));
+        li.append(row);
+        return li;
+      }),
+    );
+  }
+  section(
+    "Links",
+    linkTarget,
+    hint("Links the app created (session.links.create). “Open” hands one to the app as Haven does when someone opens it; paste any link and press Enter to do the same."),
+    linkList,
+  );
+  renderLinks();
 
   section("Notifications", lists.notifications);
   section("Previews", lists.previews);

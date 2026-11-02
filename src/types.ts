@@ -1985,6 +1985,61 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
   reminder: MindooDBAppReminderOpened;
 }
 
+/** Host → app: the user opened a link to a document of this app. */
+export interface MindooDBAppBridgeLinkOpenedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "link-opened";
+  link: MindooDBAppLinkOpened;
+}
+
+/** What a link points at: a document of this app, and optionally a place in it. */
+export interface MindooDBAppLinkInput {
+  /** The app's logical database id (as in haven-app.json), e.g. `invoices`. */
+  databaseId: string;
+  docId: string;
+  /**
+   * A place in the document, in the app's own words (`line=l_4`, `slide=3`).
+   * Max. 500 characters. It travels after `#`, so servers never log it; do not
+   * put secrets or contents here.
+   */
+  target?: string;
+  /** Link text for the Markdown form, e.g. "Invoice RE-2026-0012". Not part of the URL. */
+  title?: string;
+}
+
+/** A shareable link: `https://haven.mindoodb.com/open/<tenant>/<app>/<database>/<doc>#<target>`. */
+export interface MindooDBAppLink {
+  url: string;
+  /** `[title](url)`, or the URL alone without a title. */
+  markdown: string;
+}
+
+/** A link the user opened, as handed to {@link MindooDBAppLinksApi.onOpened}. */
+export interface MindooDBAppLinkOpened {
+  databaseId: string;
+  docId: string;
+  target?: string;
+}
+
+export type MindooDBAppLinkOpenedHandler = (opened: MindooDBAppLinkOpened) => void | Promise<void>;
+
+/**
+ * `session.links`: links to this app's documents that anyone in the tenant can open.
+ * The link names the tenant, the app, the database and the document, never their
+ * contents. Haven opens it for the recipient through their own installation of the
+ * app: it starts or focuses the app and hands the document to `onOpened`.
+ */
+export interface MindooDBAppLinksApi {
+  /** A link to one of this app's documents. Fails for a database the app does not map. */
+  create(input: MindooDBAppLinkInput): Promise<MindooDBAppLink>;
+  /**
+   * Called when the user opens a link to this app. Links opened before the app
+   * was running are held by Haven and delivered once a handler is registered.
+   * Returns an unsubscribe function.
+   */
+  onOpened(handler: MindooDBAppLinkOpenedHandler): () => void;
+}
+
 /**
  * Kind of a mail account the user connected in Haven. `jmap`: a JMAP server
  * (Fastmail, Stalwart, a MindooMail bridge). `microsoft`: Microsoft 365 or
@@ -2791,6 +2846,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragFileResultMessage
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
+  | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
   | MindooDBAppBridgeEmbeddingRequestMessage;
@@ -4801,6 +4857,8 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /** Links to the app's documents that open in Haven. See {@link MindooDBAppLinksApi}. */
+  links: MindooDBAppLinksApi;
   /**
    * Mail, calendar and contacts accounts the user connected in Haven, reached
    * through JMAP. See {@link MindooDBAppAccountsApi}.
