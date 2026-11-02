@@ -11,6 +11,8 @@
  */
 import type {
   MindooDBAppDragBindSourceOptions,
+  MindooDBAppDragFileDescriptor,
+  MindooDBAppDragFileOffer,
   MindooDBAppDragOffer,
   MindooDBAppDragPreview,
   MindooDBAppDragStartInput,
@@ -21,6 +23,14 @@ import type {
 export const MINDOODB_APP_MAX_DRAG_TYPES = 8;
 /** Maximum UTF-8 size of one offer string. */
 export const MINDOODB_APP_MAX_DRAG_PAYLOAD_BYTES = 32 * 1024;
+/** Maximum number of files one drag offers. */
+export const MINDOODB_APP_MAX_DRAG_FILES = 8;
+/** Largest file a drag hands over. */
+export const MINDOODB_APP_MAX_DRAG_FILE_BYTES = 50 * 1024 * 1024;
+/** Longest file name a drag offers. */
+export const MINDOODB_APP_MAX_DRAG_FILE_NAME = 255;
+/** How long after a drop a target can still read the dropped files. */
+export const MINDOODB_APP_DRAG_FILE_TTL_MS = 2 * 60 * 1000;
 /** Maximum encoded PNG size for the host ghost. */
 export const MINDOODB_APP_MAX_DRAG_PREVIEW_BYTES = 256 * 1024;
 /** Longest CSS-pixel edge Haven will display for a ghost. */
@@ -67,8 +77,9 @@ function requireFiniteNumber(value: unknown, fieldPath: string) {
 }
 
 function toPreviewArrayBuffer(value: unknown): ArrayBuffer | null {
-  if (value instanceof ArrayBuffer) {
-    return value.slice(0);
+  // `instanceof` fails for a buffer that crossed a realm (a port in tests, another frame).
+  if (value instanceof ArrayBuffer || Object.prototype.toString.call(value) === "[object ArrayBuffer]") {
+    return (value as ArrayBuffer).slice(0);
   }
   if (ArrayBuffer.isView(value)) {
     return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
@@ -83,8 +94,8 @@ function normalizeDragType(value: unknown, fieldPath: string) {
   return value;
 }
 
-function normalizeOffers(value: unknown): MindooDBAppDragOffer[] {
-  if (!Array.isArray(value) || value.length === 0) {
+function normalizeOffers(value: unknown, allowEmpty = false): MindooDBAppDragOffer[] {
+  if (!Array.isArray(value) || (value.length === 0 && !allowEmpty)) {
     throw new MindooDBAppDragInputError("A drag must offer at least one type.");
   }
   if (value.length > MINDOODB_APP_MAX_DRAG_TYPES) {
@@ -115,9 +126,69 @@ function normalizeOffers(value: unknown): MindooDBAppDragOffer[] {
   });
 }
 
+const FILE_PATTERN = /^(\*\/\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,126}))$/i;
+
+/** Whether a file of `type` matches an `acceptsFiles` pattern (`application/pdf`, `image/*`, `*\/*`). */
+export function mindooDBAppDragFileMatches(pattern: string, type: string): boolean {
+  const wanted = pattern.toLowerCase();
+  const actual = type.toLowerCase();
+  if (wanted === "*/*" || wanted === actual) return true;
+  return wanted.endsWith("/*") && actual.startsWith(wanted.slice(0, -1));
+}
+
+/** Project and validate the `acceptsFiles` patterns sent with `drag.setProfile`. */
+export function normalizeDragFileAccepts(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MINDOODB_APP_MAX_DRAG_TYPES) {
+    throw new MindooDBAppDragInputError(`acceptsFiles takes at most ${MINDOODB_APP_MAX_DRAG_TYPES} patterns.`);
+  }
+  return [...new Set(value.map((entry, index) => {
+    if (typeof entry !== "string" || !FILE_PATTERN.test(entry)) {
+      throw new MindooDBAppDragInputError(`Expected acceptsFiles[${index}] to be a MIME type or pattern such as image/*.`);
+    }
+    return entry.toLowerCase();
+  }))];
+}
+
+/**
+ * Validate the files of a drag: type, name and size of each. Keeps `id` (as sent
+ * over the bridge) and `read` (in the source app) as they are.
+ */
+export function normalizeDragFiles<T extends MindooDBAppDragFileOffer | MindooDBAppDragFileDescriptor>(value: unknown): T[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MINDOODB_APP_MAX_DRAG_FILES) {
+    throw new MindooDBAppDragInputError(`A drag offers at most ${MINDOODB_APP_MAX_DRAG_FILES} files.`);
+  }
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new MindooDBAppDragInputError(`Expected files[${index}] to be an object.`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const type = normalizeDragType(candidate.type, `files[${index}].type`).toLowerCase();
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    if (!name || name.length > MINDOODB_APP_MAX_DRAG_FILE_NAME || /[\\/\u0000-\u001f]/.test(name)) {
+      throw new MindooDBAppDragInputError(`files[${index}].name must be a file name without slashes.`);
+    }
+    let size: number | undefined;
+    if (candidate.size !== undefined) {
+      size = requireFiniteNumber(candidate.size, `files[${index}].size`);
+      if (size < 0 || size > MINDOODB_APP_MAX_DRAG_FILE_BYTES) {
+        throw new MindooDBAppDragInputError(`files[${index}] is larger than ${MINDOODB_APP_MAX_DRAG_FILE_BYTES} bytes.`);
+      }
+    }
+    const result: Record<string, unknown> = { type, name, ...(size !== undefined ? { size } : {}) };
+    if (typeof candidate.id === "string") result.id = candidate.id;
+    if (typeof candidate.read === "function") result.read = candidate.read;
+    if (candidate.id === undefined && typeof candidate.read !== "function") {
+      throw new MindooDBAppDragInputError(`files[${index}].read must be a function.`);
+    }
+    return result as unknown as T;
+  });
+}
+
 /** Project and validate the `accepts` list sent with `drag.setProfile`. */
-export function normalizeDragAccepts(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
+export function normalizeDragAccepts(value: unknown, allowEmpty = false): string[] {
+  if (!Array.isArray(value) || (value.length === 0 && !allowEmpty)) {
     throw new MindooDBAppDragInputError("A drag profile must accept at least one type.");
   }
   if (value.length > MINDOODB_APP_MAX_DRAG_TYPES) {
@@ -192,6 +263,7 @@ export function normalizeDragStartInput(value: unknown): MindooDBAppDragStartInp
   }
   const candidate = value as {
     offers?: unknown;
+    files?: unknown;
     preview?: unknown;
     pointer?: unknown;
     allowedEffects?: unknown;
@@ -208,8 +280,10 @@ export function normalizeDragStartInput(value: unknown): MindooDBAppDragStartInp
     }
     allowedEffects = ["copy"];
   }
+  const files = normalizeDragFiles<MindooDBAppDragFileOffer>(candidate.files);
   return {
-    offers: normalizeOffers(candidate.offers),
+    offers: normalizeOffers(candidate.offers, files.length > 0),
+    ...(files.length ? { files } : {}),
     preview: normalizePreview(candidate.preview),
     pointer,
     allowedEffects,
@@ -311,6 +385,11 @@ function readOffers(options: MindooDBAppDragBindSourceOptions): MindooDBAppDragO
   return typeof options.offers === "function" ? options.offers() : options.offers;
 }
 
+function readFiles(options: MindooDBAppDragBindSourceOptions): MindooDBAppDragFileOffer[] {
+  if (!options.files) return [];
+  return typeof options.files === "function" ? options.files() : options.files;
+}
+
 function readPreviewElement(source: HTMLElement, options: MindooDBAppDragBindSourceOptions) {
   if (!options.preview) {
     return source;
@@ -364,7 +443,8 @@ export function bindDragSource(
       active.timer = null;
     }
     const offers = readOffers(options);
-    if (offers.length === 0) {
+    const files = readFiles(options);
+    if (offers.length === 0 && files.length === 0) {
       reset();
       return;
     }
@@ -380,6 +460,7 @@ export function bindDragSource(
       }
       const session = start({
         offers,
+        ...(files.length ? { files } : {}),
         preview: {
           ...preview,
           hotspotX: hotX,

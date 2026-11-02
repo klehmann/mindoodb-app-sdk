@@ -19,6 +19,8 @@ import {
 import { createMemoryAttachments } from "./memoryAttachments";
 import { mountTwoUserTestHost, type TestHostUser } from "./twoUserTestHost";
 import type { MockAgentCall, MockAgentHostController } from "./mockAgentTools";
+import type { MockDragHostController } from "./mockDragHost";
+import type { MockLinksController } from "./mockLinks";
 
 /**
  * A stand-in Haven for a real browser: the app runs in an iframe, exactly as Haven frames
@@ -87,6 +89,17 @@ export interface BrowserTestHost {
    * file for `takeFile`, and `getFile()` for what it handed over with `provideFile`.
    */
   agent: MockAgentHostController;
+  /**
+   * Haven's host-owned drag (same as `host.drag`): drop text or files on the app as
+   * another app would (`over`, `drop`), and the drags the app started (`started`,
+   * `readFile`).
+   */
+  drag: MockDragHostController;
+  /**
+   * `session.links` (same as `host.links`): the links the app created, and `open()`
+   * to hand it one as if the user opened it in Haven.
+   */
+  links: MockLinksController;
   /**
    * Decides the outcome of the app's next `attachments.scan()`: a file to "scan", or
    * `null` to act as if the user cancelled. Later scans follow {@link setScanMode}.
@@ -457,6 +470,8 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
     host,
     log,
     agent: host.agent,
+    drag: host.drag,
+    links: host.links,
     setNextScan(scan) {
       nextScan = scan;
     },
@@ -590,6 +605,11 @@ const STYLE = `
 .htest textarea{width:100%;min-height:70px;font:11px/1.4 ui-monospace,monospace;border:1px solid #c9d0e0;border-radius:6px;padding:6px}
 .htest__tag{display:inline-block;padding:0 6px;border-radius:999px;background:#e4e8f1;color:#334155;font-size:10px;margin-left:4px}
 .htest__tag--warn{background:#fee4e2;color:#912018}
+.htest__picking{position:absolute;inset:0;cursor:crosshair;background:rgba(99,102,241,.06);outline:3px dashed #6366f1;outline-offset:-3px;z-index:5}
+.htest__picking[data-accept="yes"]{outline-color:#16a34a;background:rgba(22,163,74,.08)}
+.htest__picking[data-accept="no"]{outline-color:#dc2626;background:rgba(220,38,38,.06);cursor:not-allowed}
+.htest__picking span{position:absolute;left:8px;top:8px;padding:3px 8px;border-radius:6px;background:#312e81;color:#fff;font-size:12px}
+.htest__drag{border:1px solid #e4e8f1;border-radius:6px;background:#fff;padding:6px 8px;margin:4px 0}
 .htest__shot{max-width:100%;border:1px solid #e4e8f1;border-radius:6px;margin-top:4px;background:#fff}
 @media (max-width:720px){.htest{grid-template-columns:1fr;grid-template-rows:65vh auto}.htest__panel{border-left:0;border-top:1px solid #d7dce8}}
 `;
@@ -918,6 +938,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     frame,
     onChange: () => {
       render();
+      if (agentReady) renderLinks();
       // the agent section is built after the host exists
       if (agentReady) renderAgent();
     },
@@ -1297,6 +1318,207 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
   );
   section("Agent context", agentContext);
   section("Agent calls (latest first)", agentCalls);
+
+  // Drag & drop: drop as another app would (click where), and what the app's drags offer
+  const dragProfile = document.createElement("div");
+  dragProfile.className = "htest__muted";
+  dragProfile.dataset.testid = "haven-test-drag-profile";
+  const dragType = document.createElement("select");
+  dragType.setAttribute("aria-label", "Dropped type");
+  for (const type of ["text/plain", "text/markdown", "application/json", "application/x-mindoo-document"]) dragType.add(new Option(type, type));
+  const dragText = document.createElement("textarea");
+  dragText.dataset.testid = "haven-test-drag-text";
+  dragText.setAttribute("aria-label", "Dropped text");
+  dragText.value = "Workshop\t3,5\t120,00\nKonzept\t2\t120,00";
+  const dragFile = document.createElement("input");
+  dragFile.type = "file";
+  dragFile.multiple = true;
+  dragFile.setAttribute("aria-label", "Dropped files");
+  const dragResult = document.createElement("div");
+  dragResult.className = "htest__muted";
+  const dragStarted = document.createElement("div");
+  dragStarted.dataset.testid = "haven-test-drag-started";
+  let picking: HTMLDivElement | null = null;
+
+  function stopPicking() {
+    picking?.remove();
+    picking = null;
+    testHost.drag.leave();
+  }
+
+  /** Point at the app: hover answers live, a click drops there, Escape cancels. */
+  function startPicking() {
+    stopPicking();
+    const types = dragText.value ? [dragType.value] : [];
+    const files = [...(dragFile.files ?? [])];
+    const fileInfos = files.map((file) => ({ type: file.type || "application/octet-stream", name: file.name, size: file.size }));
+    const overlay = document.createElement("div");
+    overlay.className = "htest__picking";
+    overlay.dataset.testid = "haven-test-drag-overlay";
+    const label = document.createElement("span");
+    label.textContent = "Click where to drop · Esc cancels";
+    overlay.append(label);
+    picking = overlay;
+    stage.append(overlay);
+    let pending = false;
+    const local = (event: MouseEvent) => {
+      const box = frame.getBoundingClientRect();
+      return { x: event.clientX - box.left, y: event.clientY - box.top };
+    };
+    overlay.addEventListener("mousemove", (event) => {
+      if (pending) return;
+      pending = true;
+      void testHost.drag.over({ ...local(event), types, files: fileInfos }).then((answer) => {
+        pending = false;
+        if (picking === overlay) overlay.dataset.accept = answer.accept ? "yes" : "no";
+      });
+    });
+    overlay.addEventListener("click", (event) => {
+      const point = local(event);
+      void testHost.drag
+        .over({ ...point, types, files: fileInfos })
+        .then(() =>
+          testHost.drag.drop({
+            ...point,
+            items: dragText.value ? { [dragType.value]: dragText.value } : {},
+            files: files.map((file) => ({ type: file.type || "application/octet-stream", name: file.name, data: file })),
+          }),
+        )
+        .then((delivered) => {
+          dragResult.textContent = delivered.types.length || delivered.files.length
+            ? `Dropped at ${Math.round(point.x)},${Math.round(point.y)}: ${[...delivered.types, ...delivered.files].join(", ")}`
+            : "The app accepts none of these types.";
+        });
+      picking?.remove();
+      picking = null;
+    });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      window.removeEventListener("keydown", onKey);
+      stopPicking();
+    };
+    window.addEventListener("keydown", onKey);
+  }
+
+  function saveBlob(blob: Blob, name: string) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  function renderDrag() {
+    const profile = testHost.drag.profile();
+    dragProfile.textContent = profile
+      ? `Accepts ${profile.accepts.join(", ") || "no text"}${profile.acceptsFiles.length ? ` · files ${profile.acceptsFiles.join(", ")}` : ""}`
+      : "The app has not called drag.setProfile (it takes no drops).";
+    const drags = testHost.drag.started().slice(-5).reverse();
+    dragStarted.replaceChildren(
+      ...(drags.length ? [] : [hint("The app has not started a drag yet.")]),
+      ...drags.map((drag) => {
+        const box = document.createElement("div");
+        box.className = "htest__drag";
+        const status = document.createElement("div");
+        status.className = "htest__muted";
+        status.textContent = drag.result ? `ended: ${drag.result.action}${"reason" in drag.result ? ` (${drag.result.reason})` : ""}` : "dragging…";
+        box.append(status);
+        for (const offer of drag.offers) {
+          const details = document.createElement("details");
+          const summary = document.createElement("summary");
+          summary.textContent = `${offer.type} · ${offer.data.length} chars`;
+          const pre = document.createElement("pre");
+          pre.textContent = offer.data;
+          details.append(summary, pre);
+          box.append(details);
+        }
+        for (const file of drag.files) {
+          const row = document.createElement("div");
+          row.className = "htest__row";
+          row.append(
+            `📄 ${file.name} (${file.type})`,
+            button("Save", () => {
+              void testHost.drag.readFile(file.id).then(
+                (blob) => saveBlob(blob, file.name),
+                (error: unknown) => {
+                  status.textContent = error instanceof Error ? error.message : String(error);
+                },
+              );
+            }),
+          );
+          box.append(row);
+        }
+        return box;
+      }),
+    );
+  }
+  testHost.drag.onChange(renderDrag);
+
+  const dragRow = document.createElement("div");
+  dragRow.className = "htest__row";
+  const dropButton = button("Drop on app…", startPicking);
+  dropButton.dataset.testid = "haven-test-drag-drop";
+  dragRow.append(dragType, dropButton);
+  section(
+    "Drag & drop",
+    dragProfile,
+    dragRow,
+    dragText,
+    dragFile,
+    dragResult,
+    hint("Drops the text (and files) as another app would: point at the app to see whether it accepts, click to drop. Drags the app starts show below; “Save” asks it for an offered file."),
+    dragStarted,
+  );
+  renderDrag();
+
+  // Links: what the app created with session.links.create, opened as Haven would
+  const linkList = document.createElement("ul");
+  linkList.dataset.testid = "haven-test-links";
+  const linkTarget = document.createElement("input");
+  linkTarget.setAttribute("aria-label", "Link to open (paste a link the app made)");
+  linkTarget.placeholder = "https://haven.mindoodb.com/open/…";
+  linkTarget.style.width = "100%";
+  function openUrl(url: string) {
+    const match = /\/open\/([^/]+)\/([^/]+)\/([^/]+)\/([^/#?]+)(?:#(.*))?$/.exec(url.trim());
+    if (!match) {
+      linkTarget.setCustomValidity("Not a Haven content link.");
+      linkTarget.reportValidity();
+      return;
+    }
+    linkTarget.setCustomValidity("");
+    testHost.links.open({
+      databaseId: decodeURIComponent(match[3]!),
+      docId: decodeURIComponent(match[4]!),
+      ...(match[5] ? { target: decodeURI(match[5]) } : {}),
+    });
+  }
+  linkTarget.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") openUrl(linkTarget.value);
+  });
+  function renderLinks() {
+    const links = testHost.links.created().slice(-8).reverse();
+    linkList.replaceChildren(
+      ...(links.length ? [] : [hint("The app has not created a link yet.")]),
+      ...links.map((link) => {
+        const li = document.createElement("li");
+        const row = document.createElement("div");
+        row.className = "htest__row";
+        const text = document.createElement("span");
+        text.textContent = link.input.title ? `${link.input.title} · ${link.url}` : link.url;
+        text.style.flex = "1";
+        row.append(text, button("Open", () => openUrl(link.url)));
+        li.append(row);
+        return li;
+      }),
+    );
+  }
+  section(
+    "Links",
+    linkTarget,
+    hint("Links the app created (session.links.create). “Open” hands one to the app as Haven does when someone opens it; paste any link and press Enter to do the same."),
+    linkList,
+  );
+  renderLinks();
 
   section("Notifications", lists.notifications);
   section("Previews", lists.previews);

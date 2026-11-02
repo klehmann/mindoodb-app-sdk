@@ -434,6 +434,19 @@ const file = await page.evaluate((ref) => agent().getFile(ref)?.name, (exported 
 
 `call()` takes the tool's own name or the prefixed one and never throws: failures come back as `{ ok: false, error: { code, message, requiredAction } }`, the codes an agent sees. The mock follows Haven: tool declarations are validated (name, at most 64 tools, 2000-character descriptions, an object `inputSchema`), the prefix is the definition's `agentToolPrefix` (pass it as the `agentToolPrefix` option) or derived from the app id, an app can only `takeFile()` what was imported for it, and file refs expire after ten minutes. `setConsent("allow" | "deny" | fn)` answers the consent step in scripts, `setEnabled(false)` switches access off, and `calls()` lists every call with its outcome.
 
+Host-owned drag is scriptable through `window.__havenTestHost.drag` (`createFakeBridgeHost().drag` in Vitest). `drop()` delivers only the types and files the app's `drag.setProfile` accepts, like Haven:
+
+```ts
+const drag = () => window.__havenTestHost!.drag;
+// another app drops a spreadsheet range and a PDF on the app, at frame-local x/y
+expect(await page.evaluate(() => drag().over({ x: 400, y: 300, types: ["text/plain"] }))).toEqual({ accept: true, effect: "copy" });
+await page.evaluate(() => drag().drop({ x: 400, y: 300, items: { "text/plain": "Workshop\t3\t120" }, files: [{ type: "application/pdf", name: "a.pdf", data: "%PDF-1.7" }] }));
+
+// the app as the source: real pointer moves start bindSource, then read what it offered
+const [started] = await page.evaluate(() => drag().started());
+const pdfSize = await page.evaluate((id) => drag().readFile(id).then((blob) => blob.size), started.files[0].id);
+```
+
 `setNextScan()` decides only the next scan (pass `bytes` to attach real content); `setScanMode()` decides the ones after it. `setDirectoryUsers()` and `setEnforceCapabilities()` apply to the next call.
 
 The Level 1 and 2 helpers take the same options: `createMockMindooDBAppSession({ enforceCapabilities: true, directoryUsers: generateDirectoryUsers(120) })`, with `setCapabilities()`, `setEnforceCapabilities()` and `setDirectoryUsers()` on the controller, and `createMemoryAttachments()` for a database's `methods.attachments`. `createFakeBridgeHost({ onResponse })` reports every answer with its duration. `session.localFiles` keeps files in memory: `createMockMindooDBAppSession({ localFiles: { state: "locked", available: 1_000_000 } })` sets the start, `setLocalFilesState()`, `setLocalFilesAvailable()` and `listLocalFiles()` on the controller change and inspect it.

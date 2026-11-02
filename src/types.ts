@@ -1985,6 +1985,61 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
   reminder: MindooDBAppReminderOpened;
 }
 
+/** Host → app: the user opened a link to a document of this app. */
+export interface MindooDBAppBridgeLinkOpenedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "link-opened";
+  link: MindooDBAppLinkOpened;
+}
+
+/** What a link points at: a document of this app, and optionally a place in it. */
+export interface MindooDBAppLinkInput {
+  /** The app's logical database id (as in haven-app.json), e.g. `invoices`. */
+  databaseId: string;
+  docId: string;
+  /**
+   * A place in the document, in the app's own words (`line=l_4`, `slide=3`).
+   * Max. 500 characters. It travels after `#`, so servers never log it; do not
+   * put secrets or contents here.
+   */
+  target?: string;
+  /** Link text for the Markdown form, e.g. "Invoice RE-2026-0012". Not part of the URL. */
+  title?: string;
+}
+
+/** A shareable link: `https://haven.mindoodb.com/open/<tenant>/<app>/<database>/<doc>#<target>`. */
+export interface MindooDBAppLink {
+  url: string;
+  /** `[title](url)`, or the URL alone without a title. */
+  markdown: string;
+}
+
+/** A link the user opened, as handed to {@link MindooDBAppLinksApi.onOpened}. */
+export interface MindooDBAppLinkOpened {
+  databaseId: string;
+  docId: string;
+  target?: string;
+}
+
+export type MindooDBAppLinkOpenedHandler = (opened: MindooDBAppLinkOpened) => void | Promise<void>;
+
+/**
+ * `session.links`: links to this app's documents that anyone in the tenant can open.
+ * The link names the tenant, the app, the database and the document, never their
+ * contents. Haven opens it for the recipient through their own installation of the
+ * app: it starts or focuses the app and hands the document to `onOpened`.
+ */
+export interface MindooDBAppLinksApi {
+  /** A link to one of this app's documents. Fails for a database the app does not map. */
+  create(input: MindooDBAppLinkInput): Promise<MindooDBAppLink>;
+  /**
+   * Called when the user opens a link to this app. Links opened before the app
+   * was running are held by Haven and delivered once a handler is registered.
+   * Returns an unsubscribe function.
+   */
+  onOpened(handler: MindooDBAppLinkOpenedHandler): () => void;
+}
+
 /**
  * Kind of a mail account the user connected in Haven. `jmap`: a JMAP server
  * (Fastmail, Stalwart, a MindooMail bridge). `microsoft`: Microsoft 365 or
@@ -2787,8 +2842,11 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragOverMessage
   | MindooDBAppBridgeDragLeaveMessage
   | MindooDBAppBridgeDragDropMessage
+  | MindooDBAppBridgeDragFileRequestMessage
+  | MindooDBAppBridgeDragFileResultMessage
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
+  | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
   | MindooDBAppBridgeEmbeddingRequestMessage;
@@ -2934,9 +2992,45 @@ export interface MindooDBAppDragPointer {
   y: number;
 }
 
+/**
+ * A file a drag can hand over, such as an invoice PDF. Nothing is read when the drag
+ * starts: `read()` runs only when a target asks for the file after the drop, so a
+ * drag that ends on text only never produces it.
+ */
+export interface MindooDBAppDragFileOffer {
+  /** MIME type, e.g. `application/pdf`. */
+  type: string;
+  /** File name with extension, shown to the user and kept by the target. */
+  name: string;
+  /** Size in bytes when known in advance. */
+  size?: number;
+  /** Produces the file. Called once per target that asks; at most {@link MINDOODB_APP_MAX_DRAG_FILE_BYTES}. */
+  read: () => Promise<Blob | ArrayBuffer | Uint8Array>;
+}
+
+/** What a target learns about an offered file before it asks for it. */
+export interface MindooDBAppDragFileInfo {
+  type: string;
+  name: string;
+  size?: number;
+}
+
+/** A file in a drop: `read()` fetches it from the source app through Haven. */
+export interface MindooDBAppDroppedFile extends MindooDBAppDragFileInfo {
+  read: () => Promise<Blob>;
+}
+
+/** A file offer as it crosses the bridge: `read` stays in the source app. */
+export interface MindooDBAppDragFileDescriptor extends MindooDBAppDragFileInfo {
+  id: string;
+}
+
 /** Input for a host-owned drag gesture. Iframe-only, copy-only. */
 export interface MindooDBAppDragStartInput {
+  /** Text payloads; may be empty when `files` offers something. */
   offers: MindooDBAppDragOffer[];
+  /** Files produced on demand after the drop. */
+  files?: MindooDBAppDragFileOffer[];
   preview: MindooDBAppDragPreview;
   pointer: MindooDBAppDragPointer;
   allowedEffects?: Array<"copy">;
@@ -2961,6 +3055,8 @@ export interface MindooDBAppDragOverEvent {
   x: number;
   y: number;
   types: string[];
+  /** Offered files this launch accepts (`acceptsFiles`); empty otherwise. */
+  files: MindooDBAppDragFileInfo[];
 }
 
 /** Target answer after hit-testing a `drag-over`. */
@@ -2974,6 +3070,8 @@ export interface MindooDBAppDragDropEvent {
   x: number;
   y: number;
   items: Record<string, string>;
+  /** Offered files this launch accepts; read the ones it wants with `read()`. */
+  files: MindooDBAppDroppedFile[];
 }
 
 /**
@@ -2981,7 +3079,10 @@ export interface MindooDBAppDragDropEvent {
  * Haven; the callbacks stay in the SDK and run from host push events.
  */
 export interface MindooDBAppDragProfile {
+  /** Text types (`text/plain`, …). May be empty when `acceptsFiles` is set. */
   accepts: string[];
+  /** File types this launch takes, as MIME patterns: `application/pdf`, `image/*`, `*\/*`. */
+  acceptsFiles?: string[];
   onOver?: (event: MindooDBAppDragOverEvent) => MindooDBAppDragHoverResult | void;
   onLeave?: () => void;
   onDrop?: (event: MindooDBAppDragDropEvent) => void;
@@ -2990,6 +3091,8 @@ export interface MindooDBAppDragProfile {
 /** Options for `session.drag.bindSource`. */
 export interface MindooDBAppDragBindSourceOptions {
   offers: MindooDBAppDragOffer[] | (() => MindooDBAppDragOffer[]);
+  /** Files the drag offers; see {@link MindooDBAppDragFileOffer}. */
+  files?: MindooDBAppDragFileOffer[] | (() => MindooDBAppDragFileOffer[]);
   /** Touch only: hold this long before Haven takes over. Default 400. */
   longPressMs?: number;
   /** Mouse/pen move, or the scroll-cancel slop on touch. Default 8. */
@@ -3035,6 +3138,8 @@ export interface MindooDBAppBridgeDragOverMessage {
   x: number;
   y: number;
   types: string[];
+  /** Missing from Havens without file drags. */
+  files?: MindooDBAppDragFileInfo[];
 }
 
 /** Host → previous target: pointer left this iframe. */
@@ -3050,6 +3155,28 @@ export interface MindooDBAppBridgeDragDropMessage {
   x: number;
   y: number;
   items: Record<string, string>;
+  /** Names this drop for `drag.readFile`; missing from Havens without file drags. */
+  dropId?: string;
+  files?: MindooDBAppDragFileDescriptor[];
+}
+
+/** Host → source: a target asked for one of the files the drag offered. */
+export interface MindooDBAppBridgeDragFileRequestMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-file-request";
+  requestId: string;
+  fileId: string;
+}
+
+/** Source → host: the file's bytes (transferred), or why it could not be made. */
+export interface MindooDBAppBridgeDragFileResultMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "drag-file-result";
+  requestId: string;
+  ok: boolean;
+  bytes?: ArrayBuffer;
+  type?: string;
+  error?: string;
 }
 
 export interface MindooDBAppMenuApi {
@@ -4730,6 +4857,8 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /** Links to the app's documents that open in Haven. See {@link MindooDBAppLinksApi}. */
+  links: MindooDBAppLinksApi;
   /**
    * Mail, calendar and contacts accounts the user connected in Haven, reached
    * through JMAP. See {@link MindooDBAppAccountsApi}.

@@ -87,6 +87,10 @@ export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames
 export {
   DEFAULT_DRAG_LONG_PRESS_MS,
   DEFAULT_DRAG_POINTER_THRESHOLD_PX,
+  MINDOODB_APP_DRAG_FILE_TTL_MS,
+  MINDOODB_APP_MAX_DRAG_FILE_BYTES,
+  MINDOODB_APP_MAX_DRAG_FILE_NAME,
+  MINDOODB_APP_MAX_DRAG_FILES,
   MINDOODB_APP_MAX_DRAG_PAYLOAD_BYTES,
   MINDOODB_APP_MAX_DRAG_PREVIEW_BYTES,
   MINDOODB_APP_MAX_DRAG_PREVIEW_EDGE,
@@ -95,12 +99,16 @@ export {
   MindooDBAppDragInputError,
   bindDragSource,
   isMindooDBAppDragType,
+  mindooDBAppDragFileMatches,
   normalizeDragAccepts,
+  normalizeDragFileAccepts,
+  normalizeDragFiles,
   normalizeDragPointerInput,
   normalizeDragStartInput,
   snapshotElementToPng,
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
+export { MINDOODB_APP_LINK_TARGET_MAX } from "./client/links";
 export { isMindooDBAppAgentImage, MindooDBAppAgentToolError } from "./client/agentTools";
 export { normalizeAgentToolInput } from "./client/agentInput";
 export {

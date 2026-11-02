@@ -45,6 +45,7 @@ import { MindooDBAppFilesApiImpl } from "./files";
 import { MindooDBAppPdfApiImpl } from "./pdf";
 import { MindooDBAppAccountsApiImpl } from "./accounts";
 import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
+import { MindooDBAppLinksApiImpl } from "./links";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
 import { PortRpcClient } from "./portRpcClient";
 import type {
@@ -93,6 +94,7 @@ import type {
   MindooDBAppLiveQuerySubscription,
   MindooDBAppDragApi,
   MindooDBAppDragBindSourceOptions,
+  MindooDBAppDragFileOffer,
   MindooDBAppDragProfile,
   MindooDBAppDragStartInput,
   MindooDBAppDragStartResult,
@@ -140,7 +142,10 @@ import {
 } from "../hostShortcuts";
 import {
   bindDragSource,
+  MINDOODB_APP_DRAG_FILE_TTL_MS,
+  MINDOODB_APP_MAX_DRAG_FILE_BYTES,
   normalizeDragAccepts,
+  normalizeDragFileAccepts,
   normalizeDragPointerInput,
   normalizeDragStartInput,
 } from "../drag";
@@ -1552,14 +1557,23 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
 class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
   private profile: MindooDBAppDragProfile | null = null;
   private readonly unbindSources = new Set<() => void>();
+  /** Files of this app's latest drag, by id, until they expire after the drop. */
+  private offeredFiles = new Map<string, MindooDBAppDragFileOffer>();
+  private offeredFilesTimer: ReturnType<typeof setTimeout> | null = null;
+  private dragCounter = 0;
 
   constructor(private readonly rpc: PortRpcClient) {
     this.rpc.addMessageListener((message) => {
+      if (message.kind === "drag-file-request") {
+        void this.answerFileRequest(message.requestId, message.fileId);
+        return;
+      }
       if (isDragOverMessage(message)) {
         const result = this.profile?.onOver?.({
           x: message.x,
           y: message.y,
           types: message.types,
+          files: message.files ?? [],
         });
         const accept = result?.accept ?? true;
         void this.rpc.call("drag.reportHover", {
@@ -1575,10 +1589,20 @@ class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
         return;
       }
       if (isDragDropMessage(message)) {
+        const dropId = message.dropId;
         this.profile?.onDrop?.({
           x: message.x,
           y: message.y,
           items: message.items,
+          files: (message.files ?? []).map((file) => ({
+            type: file.type,
+            name: file.name,
+            ...(file.size !== undefined ? { size: file.size } : {}),
+            read: async () => {
+              const result = await this.rpc.call<{ bytes: ArrayBuffer; type?: string }>("drag.readFile", { dropId, fileId: file.id });
+              return new Blob([result.bytes], { type: result.type || file.type });
+            },
+          })),
         });
       }
     });
@@ -1586,16 +1610,75 @@ class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
 
   async setProfile(profile: MindooDBAppDragProfile): Promise<void> {
     this.profile = profile;
+    const acceptsFiles = normalizeDragFileAccepts(profile.acceptsFiles);
     await this.rpc.call("drag.setProfile", {
-      accepts: normalizeDragAccepts(profile.accepts),
+      accepts: normalizeDragAccepts(profile.accepts, acceptsFiles.length > 0),
+      ...(acceptsFiles.length ? { acceptsFiles } : {}),
     });
   }
 
   async start(input: MindooDBAppDragStartInput): Promise<MindooDBAppDragStartResult> {
-    return await this.rpc.call<MindooDBAppDragStartResult>(
-      "drag.start",
-      normalizeDragStartInput(input),
-    );
+    const normalized = normalizeDragStartInput(input);
+    this.clearOfferedFiles();
+    this.dragCounter += 1;
+    const files = (normalized.files ?? []).map((file, index) => {
+      const id = `f${this.dragCounter}-${index}`;
+      this.offeredFiles.set(id, file);
+      return { id, type: file.type, name: file.name, ...(file.size !== undefined ? { size: file.size } : {}) };
+    });
+    try {
+      return await this.rpc.call<MindooDBAppDragStartResult>("drag.start", {
+        ...normalized,
+        ...(files.length ? { files } : {}),
+      });
+    } finally {
+      // Targets read files after the drop; keep them for a while, then let go.
+      if (this.offeredFiles.size) {
+        this.offeredFilesTimer = setTimeout(() => this.clearOfferedFiles(), MINDOODB_APP_DRAG_FILE_TTL_MS);
+      }
+    }
+  }
+
+  private clearOfferedFiles() {
+    if (this.offeredFilesTimer) clearTimeout(this.offeredFilesTimer);
+    this.offeredFilesTimer = null;
+    this.offeredFiles = new Map();
+  }
+
+  private async answerFileRequest(requestId: string, fileId: string) {
+    const offer = this.offeredFiles.get(fileId);
+    try {
+      if (!offer) throw new Error("The drag's files are no longer available.");
+      const produced = await offer.read();
+      const bytes =
+        produced instanceof Blob
+          ? await produced.arrayBuffer()
+          : produced instanceof ArrayBuffer
+            ? produced.slice(0)
+            : produced.buffer.slice(produced.byteOffset, produced.byteOffset + produced.byteLength) as ArrayBuffer;
+      if (bytes.byteLength > MINDOODB_APP_MAX_DRAG_FILE_BYTES) {
+        throw new Error(`The file is larger than ${MINDOODB_APP_MAX_DRAG_FILE_BYTES} bytes.`);
+      }
+      this.rpc.postMessage(
+        {
+          protocol: PROTOCOL,
+          kind: "drag-file-result",
+          requestId,
+          ok: true,
+          bytes,
+          type: (produced instanceof Blob && produced.type) || offer.type,
+        },
+        [bytes],
+      );
+    } catch (error) {
+      this.rpc.postMessage({
+        protocol: PROTOCOL,
+        kind: "drag-file-result",
+        requestId,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async cancel(): Promise<void> {
@@ -1638,6 +1721,7 @@ class MindooDBAppDragApiImpl implements MindooDBAppDragApi {
   dispose() {
     this.unbindSources.forEach((unbind) => unbind());
     this.unbindSources.clear();
+    this.clearOfferedFiles();
     this.profile = null;
   }
 }
@@ -1649,6 +1733,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
   public readonly reminders: MindooDBAppRemindersApiImpl;
+  public readonly links: MindooDBAppLinksApiImpl;
   public readonly localFiles: MindooDBAppLocalFilesApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
   public readonly pdf: MindooDBAppPdfApiImpl;
@@ -1681,6 +1766,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
     this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
+    this.links = new MindooDBAppLinksApiImpl(this.rpc);
     this.localFiles = new MindooDBAppLocalFilesApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
     this.pdf = new MindooDBAppPdfApiImpl(this.rpc);
@@ -2045,6 +2131,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent.dispose();
     this.incoming.dispose();
     this.reminders.dispose();
+    this.links.dispose();
     this.embedsClient.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
