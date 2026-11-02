@@ -147,4 +147,82 @@ describe("haven app landing page", () => {
     expect(root.querySelector(".mdb-landing__meta")?.textContent).toBe("fra Mindoo · fra trips.example.com");
     expect(root.querySelector(".mdb-landing__shots-title")?.textContent).toBe("Skjermbilder");
   });
+  it("opens screenshots in a gallery with caption, arrows, swipe and Escape", async () => {
+    const gallery = {
+      ...definition,
+      listing: {
+        ...definition.listing,
+        screenshots: [
+          { file: "shots/1.png", caption: { en: "Board" } },
+          { file: "shots/2.png", caption: { en: "Calendar" } },
+          { file: "shots/3.png" },
+        ],
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(gallery), { status: 200 })));
+    await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/", locale: "en" });
+
+    const lightbox = document.querySelector<HTMLElement>('[data-testid="haven-app-landing-lightbox"]')!;
+    const image = lightbox.querySelector<HTMLImageElement>("img")!;
+    const caption = lightbox.querySelector(".mdb-landing__lightbox-caption")!;
+    const count = lightbox.querySelector(".mdb-landing__lightbox-count")!;
+    const press = (key: string) => document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const pointer = (type: string, target: Element, clientX: number) =>
+      target.dispatchEvent(
+        Object.assign(new MouseEvent(type, { bubbles: true, clientX, clientY: 100, button: 0 }), { pointerId: 1 }),
+      );
+    expect(lightbox.hidden).toBe(true);
+
+    const thumbs = [...document.querySelectorAll<HTMLButtonElement>(".mdb-landing__shot-open")];
+    expect(thumbs.map((thumb) => thumb.getAttribute("aria-label"))).toEqual([
+      "Show screenshot 1 larger",
+      "Show screenshot 2 larger",
+      "Show screenshot 3 larger",
+    ]);
+    thumbs[1]!.click();
+    expect(lightbox.hidden).toBe(false);
+    expect(image.src).toBe("https://trips.example.com/shots/2.png");
+    expect(caption.textContent).toBe("Calendar");
+    expect(count.textContent).toBe("2 / 3");
+    expect(document.activeElement).toBe(lightbox.querySelector(".mdb-landing__lightbox-close"));
+    expect(document.documentElement.style.overflow).toBe("hidden");
+
+    press("ArrowRight");
+    expect(image.src).toBe("https://trips.example.com/shots/3.png");
+    expect(caption.textContent).toBe("");
+    press("ArrowRight");
+    expect(count.textContent).toBe("1 / 3");
+    press("ArrowLeft");
+    expect(count.textContent).toBe("3 / 3");
+    lightbox.querySelector<HTMLButtonElement>(".mdb-landing__lightbox-next")!.click();
+    expect(caption.textContent).toBe("Board");
+
+    // A swipe to the left shows the next screenshot and does not close on the way.
+    pointer("pointerdown", image, 300);
+    pointer("pointerup", image, 120);
+    image.click();
+    expect(count.textContent).toBe("2 / 3");
+    expect(lightbox.hidden).toBe(false);
+
+    press("Escape");
+    expect(lightbox.hidden).toBe(true);
+    expect(document.documentElement.style.overflow).toBe("");
+    expect(document.activeElement).toBe(thumbs[1]);
+
+    thumbs[0]!.click();
+    const stage = lightbox.querySelector(".mdb-landing__lightbox-stage")!;
+    pointer("pointerdown", stage, 10);
+    stage.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(lightbox.hidden).toBe(true);
+  });
+
+  it("shows no previous/next for a single screenshot", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(definition), { status: 200 })));
+    await renderHavenAppLandingPage({ appUrl: "https://trips.example.com/", locale: "de" });
+    document.querySelector<HTMLButtonElement>(".mdb-landing__shot-open")!.click();
+    const lightbox = document.querySelector<HTMLElement>('[data-testid="haven-app-landing-lightbox"]')!;
+    expect(lightbox.querySelector(".mdb-landing__lightbox-next")).toBeNull();
+    expect(lightbox.querySelector(".mdb-landing__lightbox-close")?.getAttribute("aria-label")).toBe("Schließen");
+    expect(lightbox.querySelector(".mdb-landing__lightbox-caption")?.textContent).toBe("Tafel");
+  });
 });
