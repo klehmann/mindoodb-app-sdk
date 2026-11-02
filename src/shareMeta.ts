@@ -7,6 +7,14 @@
  */
 
 const SUMMARY_CARD = "summary";
+const LARGE_CARD = "summary_large_image";
+
+/** The size `listing.shareImage` is drawn at, and what Open Graph clients expect. */
+export const HAVEN_APP_SHARE_IMAGE_WIDTH = 1200;
+export const HAVEN_APP_SHARE_IMAGE_HEIGHT = 630;
+
+/** Shown as the site name next to the title, for example in Messages and Slack. */
+const SITE_NAME = "MindooDB Haven";
 
 export interface HavenAppShareMeta {
   title: string;
@@ -15,6 +23,11 @@ export interface HavenAppShareMeta {
   pageUrl: string;
   /** Absolute `http(s)` URL of a raster icon. SVG is left out: X does not show it. */
   imageUrl?: string;
+  /**
+   * `wide` when `imageUrl` is `listing.shareImage` (1200×630): previews show it large.
+   * Otherwise the image is the square icon and previews show it small.
+   */
+  imageKind?: "icon" | "wide";
 }
 
 function escapeText(value: string): string {
@@ -113,30 +126,45 @@ export function havenAppShareMeta(raw: unknown, pageUrl: string): HavenAppShareM
     summary ||
     descriptionText.split(/\n\s*\n/)[0]?.trim() ||
     (typeof raw.description === "string" ? raw.description.trim() : "");
+  const shareImage = typeof listing?.shareImage === "string" ? listing.shareImage.trim() : "";
+  const wideUrl = shareImage ? absoluteRasterUrl(shareImage, page) : undefined;
+  if (wideUrl) {
+    return { title, description, pageUrl: page, imageUrl: wideUrl, imageKind: "wide" };
+  }
   const icon = typeof listing?.icon === "string" ? listing.icon.trim() : "";
   const imageUrl = icon ? absoluteRasterUrl(icon, page) : undefined;
-  return { title, description, pageUrl: page, ...(imageUrl ? { imageUrl } : {}) };
+  return { title, description, pageUrl: page, ...(imageUrl ? { imageUrl, imageKind: "icon" as const } : {}) };
 }
 
 /**
- * The elements to place before `</head>`. A `summary` card, because the image is the
- * square app icon; a large card would crop it. Open Graph tags are what clients other
- * than X read, and X falls back to them too.
+ * The elements to place before `</head>`. With a `listing.shareImage` a large card, so
+ * Messages, Slack and X show the image across the full width. With only the square icon
+ * a `summary` card, because a large card would crop it. Open Graph tags are what clients
+ * other than X read, and X falls back to them too.
  */
 export function renderHavenAppShareMeta(metaData: HavenAppShareMeta): string {
   const lines = [
     "<!-- mindoodb-share -->",
     meta("name", "description", metaData.description),
     meta("property", "og:type", "website"),
+    meta("property", "og:site_name", SITE_NAME),
     meta("property", "og:title", metaData.title),
     meta("property", "og:description", metaData.description),
     meta("property", "og:url", metaData.pageUrl),
   ];
+  const wide = Boolean(metaData.imageUrl) && metaData.imageKind === "wide";
   if (metaData.imageUrl) {
-    lines.push(meta("property", "og:image", metaData.imageUrl), meta("property", "og:image:alt", metaData.title));
+    lines.push(meta("property", "og:image", metaData.imageUrl));
+    if (wide) {
+      lines.push(
+        meta("property", "og:image:width", String(HAVEN_APP_SHARE_IMAGE_WIDTH)),
+        meta("property", "og:image:height", String(HAVEN_APP_SHARE_IMAGE_HEIGHT)),
+      );
+    }
+    lines.push(meta("property", "og:image:alt", metaData.title));
   }
   lines.push(
-    meta("name", "twitter:card", SUMMARY_CARD),
+    meta("name", "twitter:card", wide ? LARGE_CARD : SUMMARY_CARD),
     meta("name", "twitter:title", metaData.title),
     meta("name", "twitter:description", metaData.description),
   );

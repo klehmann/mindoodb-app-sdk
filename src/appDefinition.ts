@@ -390,6 +390,13 @@ export interface MindooDBAppDefinitionListing {
   descriptionMarkdown?: MindooDBAppLocalizedText;
   /** Square icon, path relative to the app origin or an absolute `https:` URL. */
   icon?: string;
+  /**
+   * Link preview image, 1200×630 PNG or JPEG, path relative to the app origin or an
+   * absolute `https:` URL. Messages, Slack, X and other link previews show it when the
+   * app's address is shared. `mindoodb-share-image` in this SDK draws one from the icon,
+   * the name and the first screenshot.
+   */
+  shareImage?: string;
   screenshots?: MindooDBAppDefinitionScreenshot[];
   /** Who publishes the app. Shown next to the app's origin, never instead of it. */
   publisher?: { name: string; url?: string };
@@ -1253,6 +1260,8 @@ function readListing(value: unknown, errors: string[]): MindooDBAppDefinitionLis
   if (descriptionMarkdown) listing.descriptionMarkdown = descriptionMarkdown;
   const icon = readListingAssetPath(value.icon, "App definition listing.icon", errors);
   if (icon) listing.icon = icon;
+  const shareImage = readListingAssetPath(value.shareImage, "App definition listing.shareImage", errors);
+  if (shareImage) listing.shareImage = shareImage;
 
   if (value.screenshots !== undefined && value.screenshots !== null) {
     if (!Array.isArray(value.screenshots)) {

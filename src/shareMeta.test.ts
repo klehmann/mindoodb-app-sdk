@@ -19,7 +19,25 @@ describe("havenAppShareMeta", () => {
       description: "Plan trips together.",
       pageUrl: "https://app-vega.mindoodb.com/",
       imageUrl: "https://app-vega.mindoodb.com/listing/icon.webp",
+      imageKind: "icon",
     });
+  });
+
+  it("prefers listing.shareImage over the icon", () => {
+    const meta = havenAppShareMeta(
+      { ...definition, listing: { ...definition.listing, shareImage: "listing/share.png" } },
+      "https://app-vega.mindoodb.com",
+    );
+    expect(meta?.imageUrl).toBe("https://app-vega.mindoodb.com/listing/share.png");
+    expect(meta?.imageKind).toBe("wide");
+  });
+
+  it("falls back to the icon when the share image is an SVG", () => {
+    const meta = havenAppShareMeta(
+      { ...definition, listing: { ...definition.listing, shareImage: "listing/share.svg" } },
+      "https://app-vega.mindoodb.com",
+    );
+    expect(meta?.imageKind).toBe("icon");
   });
 
   it("keeps an icon that is already an absolute URL and drops SVG", () => {
@@ -51,6 +69,22 @@ describe("renderHavenAppShareMeta", () => {
     expect(html).toContain('<meta property="og:title" content="Vega &quot;trips&quot;">');
     expect(html).toContain('<meta name="twitter:image" content="https://app-vega.mindoodb.com/listing/icon.webp">');
     expect(html).not.toContain("summary_large_image");
+    expect(html).not.toContain("og:image:width");
+    expect(html).toContain('<meta property="og:site_name" content="MindooDB Haven">');
+  });
+
+  it("writes a large card with the image size for a share image", () => {
+    const html = renderHavenAppShareMeta({
+      title: "Invoice",
+      description: "Write invoices.",
+      pageUrl: "https://app-invoice.mindoodb.com/",
+      imageUrl: "https://app-invoice.mindoodb.com/listing/share.png",
+      imageKind: "wide",
+    });
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(html).toContain('<meta property="og:image:width" content="1200">');
+    expect(html).toContain('<meta property="og:image:height" content="630">');
+    expect(html).toContain('<meta name="twitter:image" content="https://app-invoice.mindoodb.com/listing/share.png">');
   });
 });
 

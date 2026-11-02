@@ -20,9 +20,14 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "bin",
+    "share-image",
     "README.md",
     "TESTING.md"
   ],
+  "bin": {
+    "mindoodb-share-image": "./bin/share-image.mjs"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
