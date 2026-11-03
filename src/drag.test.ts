@@ -178,6 +178,22 @@ describe("bindDragSource", () => {
     element.remove();
   });
 
+  it("captures the pointer only once the drag starts, so a plain click reaches the element under it", async () => {
+    const element = mountSource();
+    const capture = vi.fn();
+    Object.defineProperty(element, "setPointerCapture", { value: capture });
+    const start = vi.fn(async () => ({ action: "cancelled" as const, reason: "gap" as const }));
+    const unbind = bindDragSource(element, { offers: [{ type: "text/plain", data: "hi" }] }, start);
+    element.dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerId: 3, pointerType: "mouse", clientX: 12, clientY: 22, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointermove", { pointerId: 3, pointerType: "mouse", clientX: 14, clientY: 22, bubbles: true }));
+    expect(capture).not.toHaveBeenCalled();
+    window.dispatchEvent(new PointerEvent("pointermove", { pointerId: 3, pointerType: "mouse", clientX: 30, clientY: 22, bubbles: true }));
+    expect(capture).toHaveBeenCalledWith(3);
+    await vi.waitFor(() => expect(start).toHaveBeenCalled());
+    unbind();
+    element.remove();
+  });
+
   it("forwards pointer moves and the button-up after the host drag starts", async () => {
     const element = mountSource();
     const move = vi.fn();

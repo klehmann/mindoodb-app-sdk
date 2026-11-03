@@ -438,6 +438,11 @@ export function bindDragSource(
       return;
     }
     active.started = true;
+    try {
+      element.setPointerCapture(active.pointerId);
+    } catch {
+      // Capture is best-effort; the window listeners still get the moves of this frame.
+    }
     if (active.timer != null) {
       clearTimeout(active.timer);
       active.timer = null;
@@ -491,11 +496,9 @@ export function bindDragSource(
     reset();
     pendingRelease = null;
     hostListening = false;
-    try {
-      element.setPointerCapture(event.pointerId);
-    } catch {
-      // Capture is best-effort; mouse-down still delivers moves to this frame.
-    }
+    // No pointer capture yet: it would send the click that follows a plain press to
+    // this element instead of the checkbox or button under the pointer. Moves reach the
+    // window listeners anyway; the capture is taken once the drag starts.
     const previewElement = readPreviewElement(element, options);
     active = {
       pointerId: event.pointerId,
