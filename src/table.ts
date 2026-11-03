@@ -1,6 +1,6 @@
 /**
  * The shared table format `mindoo.table@1`, so TimeRecords, TeamGrid and other apps
- * exchange tables without knowing each other . A table source offers
+ * exchange tables without knowing each other. A table source offers
  * three versions at once:
  *
  * - `application/json`: `{ "$type": "mindoo.table@1", columns: [{ key, label, type }], rows }`
