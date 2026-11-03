@@ -147,6 +147,21 @@ export {
 export type { HavenAppLandingPage, RenderHavenAppLandingPageOptions } from "./landing";
 export { applySafeAreaVariables, MINDOODB_SAFE_AREA_CSS_VARIABLES } from "./safeArea";
 export { listingMarkdownToPlainText, parseListingMarkdown, sanitizeListingHref } from "./listingMarkdown";
+export {
+  createMindooTable,
+  formatMindooTableCell,
+  isMindooTable,
+  MINDOO_TABLE_COLUMN_TYPES,
+  MINDOO_TABLE_TYPE,
+  mindooTableCells,
+  mindooTableOffers,
+  mindooTableToMarkdown,
+  mindooTableToTsv,
+  parseDelimitedText,
+  parseMarkdownTable,
+  readMindooTable,
+} from "./table";
+export type { MindooTable, MindooTableCell, MindooTableCells, MindooTableColumn, MindooTableColumnType } from "./table";
 export type { ListingBlock, ListingInline } from "./listingMarkdown";
 export { installHavenStorageShim } from "./client/havenStorageShim";
 export type {

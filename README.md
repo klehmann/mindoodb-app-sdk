@@ -511,6 +511,56 @@ A drag offers at most 8 files of up to 50 MB each; `read()` works for two minute
 
 **Testing.** The fake host and the browser test host (`/__haven-test/`) play Haven's side: `host.drag.drop({ x, y, items, files })` drops on the app as another app would, `host.drag.over(...)` returns its hover answer, `host.drag.started()` lists the drags the app started and `host.drag.readFile(id)` asks it for an offered file. The test host panel has a "Drag & drop" section for the same by hand: point at the app to see whether it accepts, click to drop, and save the files the app's own drags offer.
 
+#### Tables between apps: `mindoo.table@1`
+
+Apps that show rows (time entries, invoice lines, spreadsheet cells) exchange them in one
+small contract, so a source and a target need not know each other. A source offers a
+table three ways at once; a target reads the best one it understands:
+
+| Type | Content | For |
+| --- | --- | --- |
+| `application/json` | `{ "$type": "mindoo.table@1", "columns": [{ "key", "label", "type" }], "rows": [[…]], "currency"?, "title"? }` | apps that understand the contract |
+| `text/plain` | tab-separated with a header row, as copied from a spreadsheet | spreadsheets, text fields |
+| `text/markdown` | a Markdown table | text apps, mail |
+
+Column `type` is `date` (`"2026-11-02"`), `duration` (minutes as a number), `money` (a
+decimal string such as `"640.00"`, currency in `currency`), `number` or `text`; empty
+cells are `null`.
+
+```ts
+import { createMindooTable, mindooTableOffers, readMindooTable } from "mindoodb-app-sdk";
+
+// Source: a row (or a selection) dragged to another app.
+session.drag.bindSource(handleEl, {
+  offers: () =>
+    mindooTableOffers(
+      createMindooTable(
+        [
+          { key: "date", label: "Date", type: "date" },
+          { key: "title", label: "Title", type: "text" },
+          { key: "hours", label: "Hours", type: "duration" },
+        ],
+        rows.map((row) => [row.date, row.title, row.minutes]),
+      ),
+    ),
+});
+
+// Target: JSON first, then a Markdown table, then tab/semicolon/comma separated text.
+await session.drag.setProfile({
+  accepts: ["application/json", "text/plain", "text/markdown"],
+  onDrop: (event) => {
+    const table = readMindooTable(event.items); // { headers, rows, typed } or null
+    if (table?.typed) insertTyped(table.typed); // normalized values
+    else if (table) insertText(table.headers, table.rows); // cells as text
+  },
+});
+```
+
+`mindooTableOffers(table, format)` takes an optional `format(value, column)` for the text
+and Markdown versions (e.g. dates and money in the user's locale); keep the default for
+`text/plain` when spreadsheets should read the values. `parseDelimitedText` and
+`parseMarkdownTable` are the readers on their own, for pasted text and CSV files.
+
 ### Links to documents
 
 `session.links` makes links to the app's documents that colleagues in the same tenant can open, in a mail, a chat or another app:
