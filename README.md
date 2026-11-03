@@ -2224,6 +2224,42 @@ const historicalReader = await db.attachments.openReadStream(
 
 Use `revisionId` instead of `timestamp` whenever possible. Attachment blobs can grow over time by appending chunks and changing the attachment's `lastChunkId` in newer document revisions; `revisionId` ensures Haven reads from the historical attachment reference and does not accidentally include chunks added later.
 
+### Attachments on the device (pins)
+
+A database can keep attachments on the device or leave them on the server. `db.info()` reports which, in `attachmentStorage`:
+
+| Value | Meaning |
+| --- | --- |
+| `"local"` (or absent) | The local replica syncs all attachments; files are on the device after a sync. |
+| `"onDemand"` | The user set the database to load attachments when needed: only their own and pinned files are on the device, others are fetched from the server when opened. |
+| `"remote"` | The database is opened directly on the server; nothing is stored on the device. |
+
+Pin what must open without a connection, e.g. the presentation for a meeting in a dead zone. Pins belong to your app and this device. Leave out the attachment name to pin every attachment of a document, including ones added later:
+
+```ts
+const { state } = await db.attachments.pin(deckId);            // "local" or "queued"
+const sub = await db.attachments.onAvailabilityChange((row) => {
+  // state: "queued" | "downloading" | "local" | "error" | "remote"
+  updateRow(row.docId, row.attachmentId, row.state, row.bytesLocal / row.size);
+});
+await db.attachments.unpin(deckId);  // Haven frees the copy once the server has the whole file
+```
+
+`pin()` answers at once; Haven downloads in the background and retries a failed download on the next sync. For an attachment list, read all rows at once and let the SDK pick icon, tooltip and menu action (in all languages Haven speaks):
+
+```ts
+import { describeAttachmentAvailability } from "mindoodb-app-sdk";
+
+const { attachmentStorage } = await db.info();
+const rows = await db.attachments.availability([{ docId }]); // all attachments of the document
+for (const row of rows) {
+  const view = describeAttachmentAvailability(row, attachmentStorage, session.launchContext.locale);
+  // view.icon: "cloud" | "pin" | "download" | "error" | null, view.label, view.progress, view.action
+}
+```
+
+Hosts that predate pins report every attachment as `"local"`, return no pins and reject `pin()` with `unsupported`. The mock in `mindoodb-app-sdk/testing` follows `info.attachmentStorage`: with `"onDemand"` files start as `"remote"` and a pin reports a short download.
+
 ### Attachment previews
 
 Haven includes a **built-in file viewer** that your app can open for common attachment formats. This is one of the most powerful SDK features -- it works with both online and offline data, and media formats support streaming playback with skip/seek.
@@ -2740,6 +2776,11 @@ interface MindooDBAppUpdateDocumentInput {
 | `scan(docId, options?)`                                  | `Promise<MindooDBAppScanAttachmentResult>`     |
 | `preparePreviewSession(docId, attachmentName, options?)` | `Promise<MindooDBAppAttachmentPreviewSession>` |
 | `openPreview(docId, attachmentName, options?)`           | `Promise<{ ok: true }>`                        |
+| `pin(docId, attachmentName?)`                            | `Promise<MindooDBAppAttachmentPinResult>`      |
+| `unpin(docId, attachmentName?)`                          | `Promise<{ ok: true }>`                        |
+| `availability(refs)`                                     | `Promise<MindooDBAppAttachmentAvailability[]>` |
+| `listPins()`                                             | `Promise<MindooDBAppAttachmentPin[]>`          |
+| `onAvailabilityChange(listener)`                         | `Promise<{ dispose(): Promise<void> }>`        |
 
 `options` accepts `{ timestamp?: number; revisionId?: string }` for read-only historical attachment access. Mutation methods (`openWriteStream`, `remove`) always target the current document.
 
@@ -2794,6 +2835,7 @@ interface MindooDBAppUpdateDocumentInput {
 | `createMindooDBTextBuffer(options)`        | Create an editor-friendly buffer for granular collaborative text edits on a document field  |
 | `createMindooDBRichTextHandle(options)`    | Create an editor-friendly handle for collaborative rich-text span snapshots on a document field |
 | `canPreviewAttachment(fileName, mimeType)` | Check if Haven can preview a file (returns mode or `null`)                                  |
+| `describeAttachmentAvailability(row, storage, locale)` | Icon, tooltip, progress and pin action for an attachment-list row, in Haven's languages |
 | `createViewLanguage<T>()`                  | Create a typed expression builder for view definitions                                      |
 | `abbreviateCanonicalName(value)`           | Convert a canonical Notes-style name like `cn=Jane/ou=Dev/o=Mindoo` to `Jane/Dev/Mindoo`    |
 | `expandAbbreviatedName(value)`             | Convert an abbreviated Notes-style name like `Jane/Dev/Mindoo` to `cn=Jane/ou=Dev/o=Mindoo` |
