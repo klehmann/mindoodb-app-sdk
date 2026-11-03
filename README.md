@@ -2250,10 +2250,10 @@ await db.attachments.unpin(deckId);  // Haven frees the copy once the server has
 ```ts
 import { describeAttachmentAvailability } from "mindoodb-app-sdk";
 
-const { attachmentStorage } = await db.info();
+const { attachmentStorage } = await db.info(); // ctx = await session.getLaunchContext()
 const rows = await db.attachments.availability([{ docId }]); // all attachments of the document
 for (const row of rows) {
-  const view = describeAttachmentAvailability(row, attachmentStorage, session.launchContext.locale);
+  const view = describeAttachmentAvailability(row, attachmentStorage, ctx.locale);
   // view.icon: "cloud" | "pin" | "download" | "error" | null, view.label, view.progress, view.action
 }
 ```
