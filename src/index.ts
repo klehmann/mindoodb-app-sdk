@@ -235,3 +235,8 @@ export type {
   MindooDBAppEmbedTemplate,
   MindooDBAppEmbedVariable,
 } from "./embedExchange";
+export { describeAttachmentAvailability, formatAttachmentBytes } from "./attachmentAvailability";
+export type {
+  MindooDBAppAttachmentAvailabilityDisplay,
+  MindooDBAppAttachmentAvailabilityIcon,
+} from "./attachmentAvailability";

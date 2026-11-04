@@ -472,6 +472,90 @@ export interface MindooDBAppDatabaseInfo {
    * a time-travel launch): the epoch-millisecond cutoff the handle shows.
    */
   timeTravelDate?: number;
+  /**
+   * Where this database keeps attachment bytes on this device. Absent on
+   * hosts that predate the field; treat that as `"local"`.
+   * See {@link MindooDBAppAttachmentStorage}.
+   */
+  attachmentStorage?: MindooDBAppAttachmentStorage;
+}
+
+/**
+ * Where a database keeps attachment bytes on this device:
+ *
+ * - `"local"`: a local replica that syncs all attachments (or does not sync).
+ *   Files are on the device once a sync has finished.
+ * - `"onDemand"`: a local replica that only keeps the user's own and pinned
+ *   attachments; others stay on the server and are fetched when opened. Use
+ *   {@link MindooDBAppAttachmentApi.pin} to keep a file available offline.
+ * - `"remote"`: the database is opened directly on the server; nothing is
+ *   stored on the device and attachments cannot be pinned.
+ */
+export type MindooDBAppAttachmentStorage = "local" | "onDemand" | "remote";
+
+/**
+ * Whether an attachment is on this device:
+ *
+ * - `"local"`: the whole file is stored on the device.
+ * - `"remote"`: only on the server; opening it needs a connection.
+ * - `"queued"`: pinned, the download waits for its turn or a connection.
+ * - `"downloading"`: pinned, the download is running (see `bytesLocal`).
+ * - `"error"`: the last download attempt failed (see `error`); Haven tries
+ *   again on the next sync.
+ */
+export type MindooDBAppAttachmentAvailabilityState =
+  | "local"
+  | "remote"
+  | "queued"
+  | "downloading"
+  | "error";
+
+/** Availability of one attachment on this device. */
+export interface MindooDBAppAttachmentAvailability {
+  docId: string;
+  attachmentId: string;
+  state: MindooDBAppAttachmentAvailabilityState;
+  /** Bytes of the file already on the device (equals `size` when `"local"`). */
+  bytesLocal: number;
+  /** Size of the whole file. */
+  size: number;
+  /** Pinned by this or another app on this device. */
+  pinned: boolean;
+  /** Reason of the last failed download when `state` is `"error"`. */
+  error?: string;
+}
+
+/** Selects attachments for {@link MindooDBAppAttachmentApi.availability}. */
+export interface MindooDBAppAttachmentRef {
+  docId: string;
+  /** Attachment id or file name; omit for every attachment of the document. */
+  attachmentName?: string;
+}
+
+/** One pin this app holds, from {@link MindooDBAppAttachmentApi.listPins}. */
+export interface MindooDBAppAttachmentPin {
+  docId: string;
+  /** Absent for a document pin, which covers all its attachments, also later ones. */
+  attachmentId?: string;
+  /** ISO timestamp of the `pin()` call. */
+  pinnedAt: string;
+}
+
+/** Result of {@link MindooDBAppAttachmentApi.pin}. */
+export interface MindooDBAppAttachmentPinResult {
+  /**
+   * `"local"` when everything the pin covers is already on the device,
+   * `"queued"` when Haven downloads it in the background; follow the progress
+   * with {@link MindooDBAppAttachmentApi.onAvailabilityChange}.
+   */
+  state: "local" | "queued";
+  /** Total size of the attachments the pin covers. */
+  bytes: number;
+}
+
+/** Handle returned by {@link MindooDBAppAttachmentApi.onAvailabilityChange}. */
+export interface MindooDBAppAttachmentAvailabilitySubscription {
+  dispose(): Promise<void>;
 }
 
 /** Options for {@link MindooDBAppSession.openDatabase}. */
@@ -1405,6 +1489,17 @@ export interface MindooDBAppBridgeLocaleChangedMessage {
  * (or after an explicit `refresh()`), so bursts of writes produce at most
  * one coalesced push per re-evaluation.
  */
+/**
+ * Host-pushed change of an attachment's availability on this device (a
+ * pinned download progressed, finished or failed, or a pin was released).
+ */
+export interface MindooDBAppBridgeAttachmentAvailabilityMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "attachment-availability";
+  subscriptionId: string;
+  availability: MindooDBAppAttachmentAvailability;
+}
+
 export interface MindooDBAppBridgeQueryResultMessage {
   protocol: "mindoodb-app-bridge";
   kind: "query-result";
@@ -2830,6 +2925,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeUiPreferencesChangedMessage
   | MindooDBAppBridgeLocaleChangedMessage
   | MindooDBAppBridgeQueryResultMessage
+  | MindooDBAppBridgeAttachmentAvailabilityMessage
   | MindooDBAppBridgeViewChangedMessage
   | MindooDBAppBridgeBeforeCloseMessage
   | MindooDBAppBridgeBeforeCloseAck
@@ -4490,6 +4586,46 @@ export interface MindooDBAppAttachmentApi {
     attachmentName: string,
     options?: MindooDBAppAttachmentPreviewOptions,
   ): Promise<{ ok: true }>;
+  /**
+   * Keep attachments on this device so they open without a connection, e.g.
+   * a presentation for a meeting in a dead zone. Matters for databases with
+   * `attachmentStorage: "onDemand"`; elsewhere files are local anyway and the
+   * pin only takes effect if the database switches to on-demand later.
+   *
+   * Omit `attachmentName` to pin every attachment of the document, including
+   * ones added later. Resolves at once: `"local"` when nothing is missing,
+   * `"queued"` while Haven downloads in the background (progress via
+   * {@link onAvailabilityChange}; a failed download is retried on the next
+   * sync). Pins belong to this app and this device. Rejects with
+   * `unsupported` for `attachmentStorage: "remote"` and on hosts without pins.
+   */
+  pin(docId: string, attachmentName?: string): Promise<MindooDBAppAttachmentPinResult>;
+  /**
+   * Release this app's pin (the same `attachmentName` as for {@link pin}, or
+   * none for a document pin). A running download stops. Haven frees the local
+   * copy once no pin covers it, but only if the server holds the whole file,
+   * so a file not uploaded yet is never lost. Releasing a pin that does not
+   * exist is not an error.
+   */
+  unpin(docId: string, attachmentName?: string): Promise<{ ok: true }>;
+  /**
+   * Whether attachments are on this device, for marking rows of an attachment
+   * list ("only on the server", "pinned", download progress). A ref without
+   * `attachmentName` stands for all attachments of the document. Hosts that
+   * predate pins report every attachment as `"local"`.
+   */
+  availability(refs: MindooDBAppAttachmentRef[]): Promise<MindooDBAppAttachmentAvailability[]>;
+  /** The pins this app holds in this database. Empty on hosts without pins. */
+  listPins(): Promise<MindooDBAppAttachmentPin[]>;
+  /**
+   * Called whenever an attachment's availability changes in this database:
+   * a download is queued, progresses (at most about four calls per second
+   * per file), finishes, fails, or a pin is released. On hosts without pins
+   * the listener is never called.
+   */
+  onAvailabilityChange(
+    listener: (availability: MindooDBAppAttachmentAvailability) => void,
+  ): Promise<MindooDBAppAttachmentAvailabilitySubscription>;
   /**
    * Extract searchable / displayable text from document bytes the app already
    * holds (e.g. after {@link openReadStream}). Haven runs anydoc for Office/PDF

@@ -151,6 +151,9 @@ import type {
   MindooDBAppUpdateDocumentInput,
   MindooDBAppWritableAttachmentStream,
   MindooDBAppTextCursorPosition,
+  MindooDBAppAttachmentRef,
+  MindooDBAppAttachmentAvailabilitySubscription,
+  MindooDBAppBridgeAttachmentAvailabilityMessage,
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
 import { toShareFilePayloads, type MindooDBAppShareFilePayload } from "../client/files";
@@ -161,6 +164,7 @@ import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOp
 import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
+import { createMockAttachmentPins } from "./mockAttachmentPins";
 
 const PROTOCOL = "mindoodb-app-bridge";
 
@@ -3730,6 +3734,11 @@ function createDatabaseHandle(
   };
 
   const defaultAttachments: MindooDBAppAttachmentApi = {
+    // Pins see the attachments the database really lists (memory store or app override).
+    ...createMockAttachmentPins({
+      storage: () => definition.info.attachmentStorage,
+      list: (docId) => databaseHandle.attachments.list(docId),
+    }),
     async list(
       _docId: string,
       _options?: { timestamp?: number; revisionId?: string },
@@ -5639,6 +5648,7 @@ export function createFakeBridgeHost(
   const readStreams = new Map<string, MindooDBAppReadableAttachmentStream>();
   const writeStreams = new Map<string, MindooDBAppWritableAttachmentStream>();
   const liveQueries = new Map<string, MindooDBAppLiveQuerySubscription>();
+  const availabilitySubscriptions = new Map<string, MindooDBAppAttachmentAvailabilitySubscription>();
   let viewCounter = 0;
   let streamCounter = 0;
   let liveQueryCounter = 0;
@@ -6560,6 +6570,48 @@ export function createFakeBridgeHost(
                 ? { timestamp: params.timestamp }
                 : undefined,
           );
+      case "attachments.pin":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.pin(
+            String(params.docId),
+            typeof params.attachmentName === "string" ? params.attachmentName : undefined,
+          );
+      case "attachments.unpin":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.unpin(
+            String(params.docId),
+            typeof params.attachmentName === "string" ? params.attachmentName : undefined,
+          );
+      case "attachments.availability":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .attachments.availability(Array.isArray(params.refs) ? (params.refs as MindooDBAppAttachmentRef[]) : []);
+      case "attachments.listPins":
+        return await state.getDatabase(String(params.databaseId)).attachments.listPins();
+      case "attachments.availability.subscribe": {
+        const subscriptionId = `attachment-availability-${(liveQueryCounter += 1)}`;
+        const handle = await state
+          .getDatabase(String(params.databaseId))
+          .attachments.onAvailabilityChange((availability) => {
+            const payload: MindooDBAppBridgeAttachmentAvailabilityMessage = {
+              protocol: PROTOCOL,
+              kind: "attachment-availability",
+              subscriptionId,
+              availability,
+            };
+            connectedPorts.forEach((port) => port.postMessage(payload));
+          });
+        availabilitySubscriptions.set(subscriptionId, handle);
+        return { subscriptionId };
+      }
+      case "attachments.availability.unsubscribe": {
+        const subscriptionId = String(params.subscriptionId);
+        await availabilitySubscriptions.get(subscriptionId)?.dispose();
+        availabilitySubscriptions.delete(subscriptionId);
+        return { ok: true };
+      }
       case "attachments.extractText":
         return await state.getDatabase(String(params.databaseId)).attachments.extractText({
           bytes:

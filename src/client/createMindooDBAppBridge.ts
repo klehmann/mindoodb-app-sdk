@@ -55,6 +55,9 @@ import type {
   MindooDBAppIncomingContentHandler,
   MindooDBAppAutomergePatchResult,
   MindooDBAppAttachmentApi,
+  MindooDBAppAttachmentAvailability,
+  MindooDBAppAttachmentPin,
+  MindooDBAppAttachmentPinResult,
   MindooDBAppAttachmentChunk,
   MindooDBAppBridge,
   MindooDBAppBridgeConnectMessage,
@@ -64,6 +67,7 @@ import type {
   MindooDBAppBridgeLocaleChangedMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppBridgeQueryResultMessage,
+  MindooDBAppBridgeAttachmentAvailabilityMessage,
   MindooDBAppBridgeThemeChangedMessage,
   MindooDBAppBridgeUiPreferencesChangedMessage,
   MindooDBAppBridgeViewChangedMessage,
@@ -194,6 +198,27 @@ function isStreamErrorFor(
   message: MindooDBAppBridgePortMessage,
 ): message is MindooDBAppBridgeStreamError {
   return message.kind === "stream-error" && message.streamId === streamId;
+}
+
+/** Narrows a port message to an attachment-availability push for one subscription. */
+function isAttachmentAvailabilityFor(
+  subscriptionId: string,
+  message: MindooDBAppBridgePortMessage,
+): message is MindooDBAppBridgeAttachmentAvailabilityMessage {
+  return (
+    message.kind === "attachment-availability" &&
+    message.subscriptionId === subscriptionId
+  );
+}
+
+/** A host that predates pins answers `unsupported`, so callers see one error for both cases. */
+function asUnsupportedPinError(error: unknown): unknown {
+  if (!isMethodNotFoundError(error)) {
+    return error;
+  }
+  const unsupported = new Error("This Haven version cannot keep attachments on the device.");
+  unsupported.name = "unsupported";
+  return unsupported;
 }
 
 /** Narrows a port message to a live-query result push for one subscription. */
@@ -1466,6 +1491,100 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           timestamp: options?.timestamp,
           revisionId: options?.revisionId,
         });
+      },
+      pin: async (docId, attachmentName) => {
+        try {
+          return await this.rpc.call<MindooDBAppAttachmentPinResult>("attachments.pin", {
+            databaseId: this.databaseId,
+            docId,
+            attachmentName,
+          });
+        } catch (error) {
+          throw asUnsupportedPinError(error);
+        }
+      },
+      unpin: async (docId, attachmentName) => {
+        try {
+          return await this.rpc.call<{ ok: true }>("attachments.unpin", {
+            databaseId: this.databaseId,
+            docId,
+            attachmentName,
+          });
+        } catch (error) {
+          // Nothing can be pinned on such a host, so nothing needs releasing.
+          if (isMethodNotFoundError(error)) return { ok: true as const };
+          throw error;
+        }
+      },
+      availability: async (refs) => {
+        try {
+          return await this.rpc.call<MindooDBAppAttachmentAvailability[]>(
+            "attachments.availability",
+            { databaseId: this.databaseId, refs },
+          );
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) throw error;
+          // Hosts without pins keep every attachment of a local replica.
+          const rows: MindooDBAppAttachmentAvailability[] = [];
+          for (const ref of refs) {
+            const files = await this.attachments.list(ref.docId);
+            for (const file of files) {
+              if (
+                ref.attachmentName !== undefined &&
+                ref.attachmentName !== file.attachmentId &&
+                ref.attachmentName !== file.fileName
+              ) {
+                continue;
+              }
+              rows.push({
+                docId: ref.docId,
+                attachmentId: file.attachmentId,
+                state: "local",
+                bytesLocal: file.size,
+                size: file.size,
+                pinned: false,
+              });
+            }
+          }
+          return rows;
+        }
+      },
+      listPins: async () => {
+        try {
+          return await this.rpc.call<MindooDBAppAttachmentPin[]>("attachments.listPins", {
+            databaseId: this.databaseId,
+          });
+        } catch (error) {
+          if (isMethodNotFoundError(error)) return [];
+          throw error;
+        }
+      },
+      onAvailabilityChange: async (listener) => {
+        let subscriptionId: string;
+        try {
+          ({ subscriptionId } = await this.rpc.call<{ subscriptionId: string }>(
+            "attachments.availability.subscribe",
+            { databaseId: this.databaseId },
+          ));
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) throw error;
+          // Nothing ever changes on a host without pins.
+          return { dispose: async () => {} };
+        }
+        let disposed = false;
+        const unsubscribe = this.rpc.addMessageListener((message) => {
+          if (!disposed && isAttachmentAvailabilityFor(subscriptionId, message)) {
+            listener(message.availability);
+          }
+        });
+        return {
+          dispose: async () => {
+            if (disposed) return;
+            disposed = true;
+            unsubscribe();
+            await this.rpc.call("attachments.availability.unsubscribe", { subscriptionId });
+          },
+        };
       },
       extractText: async (input) => {
         return await this.rpc.call("attachments.extractText", {
