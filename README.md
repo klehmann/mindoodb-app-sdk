@@ -915,7 +915,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `history`     | Access document revision history and historical snapshots    |
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
-| `directory`   | List the tenant's users (`directory.listUsers()`), their names (`directory.lookupUsers()`), resolve signing keys |
+| `directory`   | List the tenant's users (`directory.listUsers()`), their names (`directory.lookupUsers()`), search them by name (`directory.searchUsers()`), MindooMail gateways and members' addresses there (`directory.mailGateways()`, `directory.mailAddressesFor()`), resolve signing keys |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -955,6 +955,38 @@ const firstName = person?.firstName ?? abbreviateCanonicalName(me).split("/")[0]
 ```
 
 Older Haven versions do not know the call; the SDK then returns the usernames alone, so the fallback covers them too. At most 200 usernames per call.
+
+For a recipient typeahead, `db.directory.searchUsers({ query, limit })` finds people by username **and** by first, last or display name in one call, names included. Every word typed must occur (case-insensitive); word starts rank first, so "kar leh" finds `CN=kl/O=Mindoo` when the admin entered Karsten Lehmann. At most `limit` results (default 20, at most 100), active users only; an empty query finds nobody:
+
+```ts
+const people = await db.directory.searchUsers({ query: "kar leh", limit: 8 });
+// [{ username: "CN=kl/O=Mindoo", firstName: "Karsten", lastName: "Lehmann" }]
+```
+
+Older Haven versions search usernames only: the SDK then combines `listUsers({ query })` and `lookupUsers` and ranks the result the same way.
+
+`db.directory.mailGateways()` lists the tenant's MindooMail gateways, from the configuration documents a tenant admin keeps in the directory (`mmailgw_<gatewayGrantDocId>`, see mindoomail-gateway `docs/config-and-outbox.md`):
+
+```ts
+const gateways = await db.directory.mailGateways();
+// [{
+//   gatewayUsername: "cn=mail-gateway/o=acme",   // seal outgoing internet mail to it
+//   domains: ["mail.acme.example"],
+//   ownAddresses: ["alice@mail.acme.example"],   // the current user's, first = primary
+//   isDefault: true,                             // sends the user's internet mail
+// }]
+```
+
+Addresses and domains come back lower-cased; addresses outside the gateway's domains and addresses listed for two people are left out, as the gateway does. Exactly one gateway is `isDefault`: the first that gives the user an address, else the first. Empty without a gateway and on hosts that do not know the call.
+
+Other members' addresses are not listed in bulk. Ask for the people the app already knows (picked recipients, typeahead hits), like `lookupUsers`: one entry per username, in that order, at most 200 per call:
+
+```ts
+const [entry] = await db.directory.mailAddressesFor(["CN=Karsten Lehmann/O=Mindoo"]);
+// { username: "CN=Karsten Lehmann/O=Mindoo", addresses: ["karsten@mail.mindoo.example"] }
+```
+
+`addresses` is empty for someone no gateway lists, and for everyone on hosts that do not know the call. All three calls need the `directory` capability. In tests, `createMockMindooDBAppSession({ directoryPeople, mailGateways })` (and `setDirectoryPeople` / `setMailGateways`) play the directory; `mailGateways` takes the configuration documents (`{ gatewayUsername, domains, users }`).
 
 ### Sealed channels
 

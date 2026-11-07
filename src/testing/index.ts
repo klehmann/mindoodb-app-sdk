@@ -85,6 +85,10 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppOpenDatabaseOptions,
   MindooDBAppDirectoryApi,
+  MindooDBAppDirectoryPerson,
+  MindooDBAppMailAddresses,
+  MindooDBAppMailGateway,
+  MindooDBAppMailGatewayConfig,
   MindooDBAppRichTextMaterializeValue,
   MindooDBAppRichTextSpan,
   MindooDBAppListUsersOptions,
@@ -164,6 +168,7 @@ import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOp
 import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
+import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
 
 const PROTOCOL = "mindoodb-app-bridge";
@@ -2838,10 +2843,26 @@ function mockRevisionIndex(docId: string, revisionId: string): number {
   return revisionId.startsWith(prefix) ? Number(revisionId.slice(prefix.length)) : -1;
 }
 
+/** The tenant directory the mock databases answer `directory.*` from. */
+interface MockDirectorySource {
+  users: () => readonly string[];
+  /** Names by lower-cased username. */
+  names: () => ReadonlyMap<string, MindooDBAppDirectoryPerson>;
+  gateways: () => MindooDBAppMailGateway[];
+  addresses: (usernames: readonly string[]) => MindooDBAppMailAddresses[];
+}
+
+const EMPTY_DIRECTORY: MockDirectorySource = {
+  users: () => [],
+  names: () => new Map(),
+  gateways: () => [],
+  addresses: (usernames) => usernames.map((username) => ({ username, addresses: [] })),
+};
+
 function createDatabaseHandle(
   definition: MockMindooDBAppDatabaseDefinition,
   peers: MockDatabasePeers,
-  directoryUsers: () => readonly string[] = () => [],
+  directorySource: MockDirectorySource = EMPTY_DIRECTORY,
   localActor: string = MOCK_AUTOMERGE_LOCAL_ACTOR,
 ): {
   handle: MindooDBAppDatabase;
@@ -3717,10 +3738,26 @@ function createDatabaseHandle(
       }));
     },
     listUsers: (async (options?: MindooDBAppListUsersOptions) =>
-      options ? pageUsers(directoryUsers(), options) : [...directoryUsers()]) as MindooDBAppDirectoryApi["listUsers"],
-    // Like a host whose directory has no names entered: usernames only.
+      options
+        ? pageUsers(directorySource.users(), options)
+        : [...directorySource.users()]) as MindooDBAppDirectoryApi["listUsers"],
+    // Names from `directoryPeople`; without them like a host whose directory has no names entered.
     async lookupUsers(usernames) {
-      return usernames.map((username) => ({ username }));
+      const names = directorySource.names();
+      return usernames.map((username) => ({ ...names.get(username.toLowerCase()), username }));
+    },
+    async searchUsers(options) {
+      const names = directorySource.names();
+      const people = directorySource
+        .users()
+        .map((username) => ({ ...names.get(username.toLowerCase()), username }));
+      return searchDirectoryPeople(people, options);
+    },
+    async mailGateways() {
+      return directorySource.gateways();
+    },
+    async mailAddressesFor(usernames) {
+      return directorySource.addresses(usernames);
     },
   };
 
@@ -3928,6 +3965,8 @@ type MockSessionState = {
   getEnforceCapabilities: () => boolean;
   setDirectoryUsers: (users: readonly string[]) => void;
   getDirectoryUsers: () => string[];
+  setDirectoryPeople: (people: readonly MindooDBAppDirectoryPerson[]) => void;
+  setMailGateways: (configs: readonly MindooDBAppMailGatewayConfig[]) => void;
   /** Document stores by database id, for `syncMockReplicas`. */
   replicaStores: () => Map<string, Map<string, MockStoredDocument>>;
   /** After a sync wrote into a store: live queries refresh as after any write. */
@@ -4094,7 +4133,7 @@ function createMockSessionState(
     const created = createDatabaseHandle(
       { ...definition, info: snapshotInfo, documents: databaseSeedsAt.get(databaseId)!(cutoff) },
       databasePeers,
-      () => directoryUsers,
+      directorySource,
       options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
     );
     // Attachment bytes are not versioned in the mock: reads go to the live database.
@@ -4211,7 +4250,7 @@ function createMockSessionState(
       const created = createDatabaseHandle(
         definition,
         databasePeers,
-        () => directoryUsers,
+        directorySource,
         options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
       );
       const databaseId = definition.info.id;
@@ -4285,6 +4324,20 @@ function createMockSessionState(
 
   let enforceCapabilities = options.enforceCapabilities ?? false;
   let directoryUsers: string[] = [...(options.directoryUsers ?? [])];
+  let directoryNames = new Map<string, MindooDBAppDirectoryPerson>();
+  const setDirectoryPeople = (people: readonly MindooDBAppDirectoryPerson[]) => {
+    directoryNames = new Map(people.map((person) => [person.username.toLowerCase(), { ...person }]));
+    const known = new Set(directoryUsers.map((user) => user.toLowerCase()));
+    directoryUsers = [...directoryUsers, ...people.map((person) => person.username).filter((user) => !known.has(user.toLowerCase()))];
+  };
+  setDirectoryPeople(options.directoryPeople ?? []);
+  let mailGatewayConfigs: MindooDBAppMailGatewayConfig[] = [...(options.mailGateways ?? [])];
+  const directorySource: MockDirectorySource = {
+    users: () => directoryUsers,
+    names: () => directoryNames,
+    gateways: () => mailGatewaysFromConfigs(mailGatewayConfigs, launchContext.user.username),
+    addresses: (usernames) => mailAddressesFromConfigs(mailGatewayConfigs, usernames),
+  };
   const setCapabilities = (databaseId: string, capabilities: MindooDBAppCapability[]) => {
     const entry = databaseInfos.find((info) => info.id === databaseId);
     if (!entry) {
@@ -4667,6 +4720,10 @@ function createMockSessionState(
       directoryUsers = [...users];
     },
     getDirectoryUsers: () => [...directoryUsers],
+    setDirectoryPeople,
+    setMailGateways(configs) {
+      mailGatewayConfigs = [...configs];
+    },
     replicaStores: () => databaseDocumentStores,
     notifyReplicaChange: (databaseId) => databaseLiveQueryRefreshers.get(databaseId)?.(),
     embedHost,
@@ -4957,6 +5014,18 @@ export interface CreateMockMindooDBAppSessionOptions {
    */
   directoryUsers?: readonly string[];
   /**
+   * First, last and display names for `directory.lookupUsers` and
+   * `directory.searchUsers`, as an admin entered them in Haven. Their usernames
+   * join `directoryUsers`.
+   */
+  directoryPeople?: readonly MindooDBAppDirectoryPerson[];
+  /**
+   * MindooMail gateway configuration documents of the tenant. `directory.mailGateways()`
+   * and `directory.mailAddressesFor()` answer them as Haven does, with `ownAddresses`
+   * and `isDefault` for the launch context's `user.username`.
+   */
+  mailGateways?: readonly MindooDBAppMailGatewayConfig[];
+  /**
    * Automerge actor (hex) of the app's writes in `automerge: true` databases. Mocks
    * that are synced with each other (`syncMockReplicas`, the test host's two-user
    * mode) need distinct actors, like two devices.
@@ -5052,6 +5121,10 @@ export interface MockMindooDBAppSessionController {
   setEnforceCapabilities(enforce: boolean): void;
   /** Replaces the directory's usernames (see `directoryUsers`). */
   setDirectoryUsers(users: readonly string[]): void;
+  /** Replaces the directory's names (see `directoryPeople`). */
+  setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
+  /** Replaces the gateway configuration documents (see `mailGateways`). */
+  setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
   /**
    * Writes `input` to a document as another device would, then syncs it in:
    * live queries update like after any write. With `automerge: true` on the
@@ -5337,6 +5410,8 @@ export function createMockMindooDBAppSession(
     setCapabilities: state.setCapabilities,
     setEnforceCapabilities: state.setEnforceCapabilities,
     setDirectoryUsers: state.setDirectoryUsers,
+    setDirectoryPeople: state.setDirectoryPeople,
+    setMailGateways: state.setMailGateways,
     applyRemoteUpdate: state.applyRemoteUpdate,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
@@ -5478,6 +5553,10 @@ export interface FakeBridgeHostController {
   /** See {@link CreateMockMindooDBAppSessionOptions.directoryUsers}. */
   setDirectoryUsers(users: readonly string[]): void;
   getDirectoryUsers(): string[];
+  /** See {@link CreateMockMindooDBAppSessionOptions.directoryPeople}. */
+  setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
+  /** See {@link CreateMockMindooDBAppSessionOptions.mailGateways}. */
+  setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
   /** See {@link MockMindooDBAppSessionController.applyRemoteUpdate}. */
   applyRemoteUpdate(
     databaseId: string,
@@ -6480,6 +6559,19 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .directory.lookupUsers(Array.isArray(params.usernames) ? params.usernames.map(String) : []);
+      case "directory.searchUsers":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.searchUsers({
+            query: typeof params.query === "string" ? params.query : "",
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          });
+      case "directory.mailGateways":
+        return await state.getDatabase(String(params.databaseId)).directory.mailGateways();
+      case "directory.mailAddressesFor":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.mailAddressesFor(Array.isArray(params.usernames) ? params.usernames.map(String) : []);
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =
@@ -7086,6 +7178,8 @@ export function createFakeBridgeHost(
     getEnforceCapabilities: state.getEnforceCapabilities,
     setDirectoryUsers: state.setDirectoryUsers,
     getDirectoryUsers: state.getDirectoryUsers,
+    setDirectoryPeople: state.setDirectoryPeople,
+    setMailGateways: state.setMailGateways,
     applyRemoteUpdate: state.applyRemoteUpdate,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,

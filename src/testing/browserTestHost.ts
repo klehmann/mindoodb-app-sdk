@@ -1,5 +1,7 @@
 import type { MindooDBAppDefinition } from "../appDefinition";
 import type {
+  MindooDBAppDirectoryPerson,
+  MindooDBAppMailGatewayConfig,
   MindooDBAppBridgeRpcRequest,
   MindooDBAppCapability,
   MindooDBAppDocument,
@@ -121,6 +123,10 @@ export interface BrowserTestHost {
   setEnforceCapabilities(enforce: boolean): void;
   /** Replaces the usernames of the tenant directory (`directory.listUsers()`). */
   setDirectoryUsers(users: readonly string[]): void;
+  /** Replaces the names of directory users (`directory.lookupUsers()` / `searchUsers()`). */
+  setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
+  /** Replaces the MindooMail gateway configuration documents (`directory.mailGateways()`). */
+  setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
   /**
    * Another device edits a document and the change syncs in: the app's live queries
    * update. With Automerge-backed databases (`automerge=1` / `automerge: true`) the
@@ -502,6 +508,14 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
     },
     setDirectoryUsers(users) {
       host.setDirectoryUsers(users);
+      onChange?.();
+    },
+    setDirectoryPeople(people) {
+      host.setDirectoryPeople(people);
+      onChange?.();
+    },
+    setMailGateways(configs) {
+      host.setMailGateways(configs);
       onChange?.();
     },
     async applyRemoteUpdate(databaseId, docId, input, updateOptions) {
