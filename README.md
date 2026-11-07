@@ -1010,10 +1010,11 @@ const result = await db.calendar.freeBusy({
 - One entry per username, in request order; `busy` is sorted, merged and clipped to `[from, to]`. `status` is `"busy"`, `"tentative"` or `"oof"` (out of office).
 - `state: "ok"` means free wherever `busy` has nothing. `"unpublished"`: the person switched publishing off. `"unknown"`: never published, not a member, or the policy does not let you read it. Show the last two differently from "free" (e.g. hatched).
 - `computedAt` is when the person's device last computed the times. A device that has been off for days leaves old times behind, so show the age when it is more than a day.
+- Haven publishes one week back and the tenant's weeks ahead (default 12). When the request reaches past them, the entry carries `publishedUntil` (ISO): from there on the times are not known, so draw them like `"unknown"`, not as free. A request entirely outside the published weeks answers `"unknown"`. Older hosts leave the field out.
 - At most 50 people and 14 weeks per call; the SDK throws a `RangeError` before asking. Hosts that do not know the call (older Haven) answer `"unknown"` for everyone.
 - Needs the `freebusy` permission on the database (`"permissions": ["freebusy"]` in `haven-app.json`). It is separate from `directory`: an app can pick recipients without seeing anyone's calendar.
 
-`mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
+`mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, publishedUntil?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
 
 ### Sealed channels
 

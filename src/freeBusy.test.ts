@@ -103,6 +103,30 @@ describe("answerFreeBusyFromMock", () => {
     ]);
   });
 
+  it("marks the end of the published weeks and knows nothing after it", () => {
+    const ben = {
+      username: "CN=Ben/O=Acme",
+      busy: [
+        { start: at("10:00"), end: at("11:00"), status: "busy" as const },
+        { start: "2026-11-20T10:00:00Z", end: "2026-11-20T11:00:00Z", status: "busy" as const },
+      ],
+      computedAt: "2026-11-01T08:00:00.000Z",
+      publishedUntil: "2026-11-16T00:00:00Z",
+    };
+    const [partly] = answerFreeBusyFromMock([ben], { usernames: ["ben/acme"], from: at("00:00"), to: "2026-11-23T00:00:00Z" });
+    expect(partly).toEqual({
+      username: "ben/acme",
+      state: "ok",
+      busy: [{ start: at("10:00"), end: at("11:00"), status: "busy" }],
+      computedAt: "2026-11-01T08:00:00.000Z",
+      publishedUntil: "2026-11-16T00:00:00.000Z",
+    });
+    const [after] = answerFreeBusyFromMock([ben], { usernames: ["ben/acme"], from: "2026-11-16T00:00:00Z", to: "2026-11-23T00:00:00Z" });
+    expect(after).toEqual({ username: "ben/acme", state: "unknown", busy: [] });
+    const [inside] = answerFreeBusyFromMock([ben], { usernames: ["ben/acme"], from: at("00:00"), to: "2026-11-10T00:00:00Z" });
+    expect(inside).not.toHaveProperty("publishedUntil");
+  });
+
   it("unknownFreeBusy is everyone unknown", () => {
     expect(unknownFreeBusy(["a", "b"])).toEqual([
       { username: "a", state: "unknown", busy: [] },

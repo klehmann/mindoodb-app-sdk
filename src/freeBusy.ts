@@ -117,6 +117,11 @@ export interface MockFreeBusyPerson {
   busy?: MindooDBAppFreeBusyInterval[];
   /** When the person's device last computed the times; defaults to "now" of the call. */
   computedAt?: string;
+  /**
+   * End of the published weeks (ISO): a request past it gets `publishedUntil`
+   * and no times after it, one entirely after it answers "unknown". Default: no end.
+   */
+  publishedUntil?: string;
 }
 
 function personKey(username: string): string {
@@ -140,11 +145,15 @@ export function answerFreeBusyFromMock(
     if (!person) return { username, state: "unknown" as const, busy: [] };
     const computedAt = person.computedAt ?? now().toISOString();
     if (person.state === "unpublished") return { username, state: "unpublished" as const, busy: [], computedAt };
+    const until = person.publishedUntil ? Date.parse(person.publishedUntil) : NaN;
+    if (Number.isFinite(until) && fromMs >= until) return { username, state: "unknown" as const, busy: [] };
+    const past = Number.isFinite(until) && toMs > until;
     return {
       username,
       state: "ok" as const,
-      busy: mergeFreeBusyIntervals(person.busy ?? [], fromMs, toMs),
+      busy: mergeFreeBusyIntervals(person.busy ?? [], fromMs, past ? until : toMs),
       computedAt,
+      ...(past ? { publishedUntil: new Date(until).toISOString() } : {}),
     };
   });
 }

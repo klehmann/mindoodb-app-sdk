@@ -4121,6 +4121,13 @@ export interface MindooDBAppFreeBusyResult {
   busy: MindooDBAppFreeBusyInterval[];
   /** When the person's device last computed the times (ISO), when known. */
   computedAt?: string;
+  /**
+   * End of the weeks the person published (ISO), set when the request reaches
+   * past them: times from here on are not known, so do not show them as free.
+   * Haven publishes one week back and the tenant's weeks ahead (default 12);
+   * a request entirely outside them answers `"unknown"`. Older hosts leave it out.
+   */
+  publishedUntil?: string;
 }
 
 /** Options of {@link MindooDBAppDirectoryApi.searchUsers}. */
