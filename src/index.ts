@@ -33,6 +33,7 @@ export {
   MINDOODB_APP_LISTING_DESCRIPTION_MAX,
   MINDOODB_APP_LISTING_MAX_SCREENSHOTS,
   MINDOODB_APP_ACCEPTS_MAX,
+  MINDOODB_APP_ACTIONS_MAX,
   MINDOODB_APP_COMPONENTS_MAX,
   MINDOODB_APP_COMPONENT_CONTRACT_PATTERN,
   mindooDBAppComponentFieldsMatch,
@@ -55,10 +56,12 @@ export {
   resolveMindooDBAppListingAssetUrl,
   resolveMindooDBAppLocalizedText,
   validateMindooDBAppAccepts,
+  validateMindooDBAppActions,
   validateMindooDBAppDefinition,
 } from "./appDefinition";
 export type {
   MindooDBAppAcceptSpec,
+  MindooDBAppActionSpec,
   MindooDBAppAgentCapability,
   MindooDBAppAgentProfile,
   MindooDBAppLocaleMap,

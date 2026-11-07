@@ -1955,6 +1955,31 @@ export interface MindooDBAppReminderOpened {
 
 export type MindooDBAppReminderOpenedHandler = (opened: MindooDBAppReminderOpened) => void | Promise<void>;
 
+/** The user ran one of this app's `actions` (iOS Shortcuts, Siri, the Action Button). */
+export interface MindooDBAppActionInvoked {
+  /** The `actions` entry's `id`. */
+  id: string;
+  /** Text passed to an action that declares `text`, trimmed; absent when none was given. */
+  text?: string;
+  /** Where it came from; `"shortcut"` for iOS Shortcuts, Siri and the Action Button. */
+  source: "shortcut" | (string & {});
+  /** When the user ran it (epoch milliseconds); Haven drops runs older than ten minutes. */
+  invokedAt: number;
+}
+
+export type MindooDBAppActionInvokedHandler = (invoked: MindooDBAppActionInvoked) => void | Promise<void>;
+
+/** `session.actions`: the quick actions the app declares in `actions`. */
+export interface MindooDBAppActionsApi {
+  /**
+   * Called when the user runs one of this app's actions. Haven starts or
+   * focuses the app and delivers once a handler is registered, so register
+   * early; a run from before the app was ready is held until then. Returns an
+   * unsubscribe function. Hosts without actions never call it.
+   */
+  onInvoked(handler: MindooDBAppActionInvokedHandler): () => void;
+}
+
 /** `session.reminders`: notifications at a time the app chooses (Haven's native app). */
 export interface MindooDBAppRemindersApi {
   /**
@@ -2071,6 +2096,13 @@ export interface MindooDBAppLocalFilesApi {
   list(prefix?: string): Promise<MindooDBAppLocalFileInfo[]>;
   /** Deletes the file; unknown names are ignored. */
   remove(name: string): Promise<void>;
+}
+
+/** Push message: the user ran one of this app's actions. */
+export interface MindooDBAppBridgeActionInvokedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "action-invoked";
+  action: MindooDBAppActionInvoked;
 }
 
 /** Push message: a reminder of this app was tapped. */
@@ -2942,6 +2974,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragFileResultMessage
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
+  | MindooDBAppBridgeActionInvokedMessage
   | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
@@ -5073,6 +5106,8 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /** Quick actions from `actions` (iOS Shortcuts, Action Button). See {@link MindooDBAppActionsApi}. */
+  actions: MindooDBAppActionsApi;
   /** Links to the app's documents that open in Haven. See {@link MindooDBAppLinksApi}. */
   links: MindooDBAppLinksApi;
   /**
