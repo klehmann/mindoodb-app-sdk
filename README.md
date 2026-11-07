@@ -916,6 +916,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `attachments` | List, upload, download, remove, and preview file attachments |
 | `views`       | Create app-defined virtual views for this database           |
 | `directory`   | List the tenant's users (`directory.listUsers()`), their names (`directory.lookupUsers()`), search them by name (`directory.searchUsers()`), MindooMail gateways and members' addresses there (`directory.mailGateways()`, `directory.mailAddressesFor()`), resolve signing keys |
+| `freebusy`    | See when colleagues are busy (`calendar.freeBusy()`): times only, no details |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -987,6 +988,32 @@ const [entry] = await db.directory.mailAddressesFor(["CN=Karsten Lehmann/O=Mindo
 ```
 
 `addresses` is empty for someone no gateway lists, and for everyone on hosts that do not know the call. All three calls need the `directory` capability. In tests, `createMockMindooDBAppSession({ directoryPeople, mailGateways })` (and `setDirectoryPeople` / `setMailGateways`) play the directory; `mailGateways` takes the configuration documents (`{ gatewayUsername, domains, users }`).
+
+### Free/busy
+
+For a scheduling assistant, `db.calendar.freeBusy({ usernames, from, to })` tells when members are busy, **times only**: no subject, place, attendees or event ids. Each member's Haven publishes them from their own calendar into a small personal database (`mbusy_<grantDocId>`) that the other members may read; the tenant policy decides who may read it, and every member can switch publishing off.
+
+```ts
+const result = await db.calendar.freeBusy({
+  usernames: ["CN=Ben/O=Acme", "CN=Carla/O=Acme"],
+  from: "2026-11-09T00:00:00Z",
+  to: "2026-11-16T00:00:00Z",
+});
+// [
+//   { username: "CN=Ben/O=Acme", state: "ok", computedAt: "2026-11-08T21:14:00Z",
+//     busy: [{ start: "2026-11-09T09:00:00Z", end: "2026-11-09T10:00:00Z", status: "busy" },
+//            { start: "2026-11-09T13:00:00Z", end: "2026-11-09T14:00:00Z", status: "tentative" }] },
+//   { username: "CN=Carla/O=Acme", state: "unpublished", busy: [] },
+// ]
+```
+
+- One entry per username, in request order; `busy` is sorted, merged and clipped to `[from, to]`. `status` is `"busy"`, `"tentative"` or `"oof"` (out of office).
+- `state: "ok"` means free wherever `busy` has nothing. `"unpublished"`: the person switched publishing off. `"unknown"`: never published, not a member, or the policy does not let you read it. Show the last two differently from "free" (e.g. hatched).
+- `computedAt` is when the person's device last computed the times. A device that has been off for days leaves old times behind, so show the age when it is more than a day.
+- At most 50 people and 14 weeks per call; the SDK throws a `RangeError` before asking. Hosts that do not know the call (older Haven) answer `"unknown"` for everyone.
+- Needs the `freebusy` permission on the database (`"permissions": ["freebusy"]` in `haven-app.json`). It is separate from `directory`: an app can pick recipients without seeing anyone's calendar.
+
+`mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
 
 ### Sealed channels
 

@@ -155,5 +155,6 @@ export function guardDatabase(
     identity: guardApi(database.identity, () => ["sign"], check("identity.")),
     timestamps: guardApi(database.timestamps, () => ["timestamps"], check("timestamps.")),
     directory: guardApi(database.directory, () => ["directory"], check("directory.")),
+    calendar: guardApi(database.calendar, () => ["freebusy"], check("calendar.")),
   };
 }
