@@ -85,6 +85,14 @@ export { canPreviewAttachment } from "./attachmentPreview";
 export { LOCAL_FILE_NAME_MAX, localFileNameProblem, localFilesError } from "./localFiles";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 export {
+  SEARCH_USERS_DEFAULT_LIMIT,
+  SEARCH_USERS_MAX_LIMIT,
+  directoryPersonMatchScore,
+  mailAddressesFromConfigs,
+  mailGatewaysFromConfigs,
+  searchDirectoryPeople,
+} from "./directorySearch";
+export {
   DEFAULT_DRAG_LONG_PRESS_MS,
   DEFAULT_DRAG_POINTER_THRESHOLD_PX,
   MINDOODB_APP_DRAG_FILE_TTL_MS,
