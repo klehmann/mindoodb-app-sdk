@@ -86,6 +86,7 @@ import type {
   MindooDBAppListUsersOptions,
   MindooDBAppListUsersPage,
   MindooDBAppDirectoryPerson,
+  MindooDBAppMailGateway,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -134,6 +135,7 @@ import type {
   MindooDBAppDeviceInfo,
 } from "../types";
 import { pageUsers } from "../directoryPaging";
+import { searchDirectoryPeople, SEARCH_USERS_DEFAULT_LIMIT, SEARCH_USERS_MAX_LIMIT } from "../directorySearch";
 import { installDownloadCapture } from "../downloadCapture";
 import { installHostFocusCapture } from "../hostFocus";
 import { applySafeAreaVariables } from "../safeArea";
@@ -1360,6 +1362,49 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           }
           // Hosts without name lookups: usernames only, callers fall back to the common name.
           return usernames.map((username) => ({ username }));
+        }
+      },
+      searchUsers: async (options) => {
+        const query = typeof options?.query === "string" ? options.query.trim() : "";
+        if (!query) {
+          return [];
+        }
+        const limit = Math.min(
+          Math.max(1, Math.floor(options.limit ?? SEARCH_USERS_DEFAULT_LIMIT)),
+          SEARCH_USERS_MAX_LIMIT,
+        );
+        try {
+          return await this.rpc.call<MindooDBAppDirectoryPerson[]>("directory.searchUsers", {
+            databaseId: this.databaseId,
+            query,
+            limit,
+          });
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+        }
+        // Older hosts search usernames only: the first word narrows the list on
+        // the host, names come from lookupUsers, the ranking is the same.
+        const directory = this.directory;
+        const [firstWord] = query.split(/\s+/);
+        const page = await directory.listUsers({ query: firstWord, limit: 500 });
+        const people = page.users.length
+          ? await directory.lookupUsers(page.users.slice(0, 200))
+          : [];
+        return searchDirectoryPeople(people, { query, limit });
+      },
+      mailGateways: async () => {
+        try {
+          const gateways = await this.rpc.call<MindooDBAppMailGateway[]>("directory.mailGateways", {
+            databaseId: this.databaseId,
+          });
+          return Array.isArray(gateways) ? gateways : [];
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return [];
         }
       },
     };

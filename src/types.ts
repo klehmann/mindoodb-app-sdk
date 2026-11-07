@@ -4029,6 +4029,77 @@ export interface MindooDBAppDirectoryApi {
    * Requires the `directory` capability; at most 200 usernames per call.
    */
   lookupUsers(usernames: string[]): Promise<MindooDBAppDirectoryPerson[]>;
+  /**
+   * People whose username, first, last or display name matches `query`, with
+   * their names: one call per keystroke of a recipient typeahead. Every word of
+   * the query must occur (case-insensitive); words that start a name part rank
+   * first, so "kar leh" finds `CN=kl/O=Mindoo` when the admin entered the name
+   * Karsten Lehmann. Active users only, best matches first, at most `limit`
+   * (default 20, at most 100). An empty query finds nobody.
+   *
+   * Hosts that do not know the call (older Haven) search the usernames only:
+   * the SDK then combines `listUsers({ query })` and `lookupUsers` and ranks
+   * the result the same way. Requires the `directory` capability.
+   */
+  searchUsers(options: MindooDBAppSearchUsersOptions): Promise<MindooDBAppDirectoryPerson[]>;
+  /**
+   * The MindooMail gateways of the tenant: from the configuration documents a
+   * tenant admin keeps in the directory (`mmailgw_<gatewayGrantDocId>`, form
+   * "mindoomail", type "gatewayconfig"; see mindoomail-gateway
+   * docs/config-and-outbox.md). Each names the gateway's username (seal
+   * outgoing internet mail to it), the domains it serves, the members' internet
+   * addresses there, and the current user's own addresses. Empty when the
+   * tenant has no gateway, and on hosts that do not know the call.
+   * Requires the `directory` capability.
+   */
+  mailGateways(): Promise<MindooDBAppMailGateway[]>;
+}
+
+/** Options of {@link MindooDBAppDirectoryApi.searchUsers}. */
+export interface MindooDBAppSearchUsersOptions {
+  /** What was typed: words matched against username and names. */
+  query: string;
+  /** Most results, default 20, at most 100. */
+  limit?: number;
+}
+
+/** A member and their internet addresses at one gateway. */
+export interface MindooDBAppMailGatewayUser {
+  /** Canonical username (`CN=Jane Doe/O=Acme`). */
+  username: string;
+  /** Lower-cased addresses within the gateway's domains; the first is the primary one. */
+  addresses: string[];
+}
+
+/**
+ * A gateway configuration document as stored in the directory (the part
+ * {@link MindooDBAppDirectoryApi.mailGateways} reads). Usernames may be
+ * abbreviated there.
+ */
+export interface MindooDBAppMailGatewayConfig {
+  gatewayUsername: string;
+  domains: string[];
+  users: MindooDBAppMailGatewayUser[];
+}
+
+/** One gateway of {@link MindooDBAppDirectoryApi.mailGateways}. */
+export interface MindooDBAppMailGateway extends MindooDBAppMailGatewayConfig {
+  /** Canonical username of the gateway, the reader of outgoing internet mail. */
+  gatewayUsername: string;
+  /** Lower-cased mail domains the gateway receives and sends for. */
+  domains: string[];
+  /**
+   * Members with an address at this gateway. Addresses outside `domains` and
+   * addresses listed for two people are left out, as the gateway does.
+   */
+  users: MindooDBAppMailGatewayUser[];
+  /** The current user's addresses at this gateway (first = primary), empty when none. */
+  ownAddresses: string[];
+  /**
+   * True for exactly one gateway: the first that gives the current user an
+   * address, else the first one. It sends the user's internet mail.
+   */
+  isDefault: boolean;
 }
 
 /** One user of {@link MindooDBAppDirectoryApi.lookupUsers}. */
