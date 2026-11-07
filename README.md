@@ -561,6 +561,35 @@ session.onIncomingContent(async (content) => {
 
 Register the handler once, early. Haven waits for it before delivering, so a launch started for a delivery receives it as soon as the handler exists. `item.path` is relative (`assets/logo.png` inside a shared folder) and never absolute. What the app does with the content is up to the app. The returned `status` and `message` are shown to the user; a throwing handler counts as `rejected`. In tests, `createMockMindooDBAppSession().emitIncomingContent({ acceptId, items })` plays Haven's part.
 
+### Quick actions (iOS Shortcuts, Action Button, Siri)
+
+An app can offer a few actions that run from outside Haven. In Haven's iOS app they appear in Shortcuts as "Run Haven action", so the user can put "Start timer" or "New task" on the iPhone's Action Button, ask Siri, or build their own shortcut around it. Declare them in `haven-app.json`:
+
+```json
+"actions": [
+  { "id": "timer-toggle", "title": { "en": "Start or stop timer", "de": "Timer starten oder stoppen" } },
+  {
+    "id": "new-task",
+    "title": { "en": "New task", "de": "Neue Aufgabe" },
+    "text": { "label": { "en": "Title", "de": "Titel" } }
+  }
+]
+```
+
+Haven lists each action per installed app ("TimeRecords: Start or stop timer", with the tenant's name when the app is installed more than once), opens the app when the user runs it, and delivers the run:
+
+```ts
+session.actions.onInvoked(async (run) => {
+  if (run.id === "new-task") {
+    await tasks.create({ title: run.text ?? "" });
+  } else if (run.id === "timer-toggle") {
+    await timer.toggle();
+  }
+});
+```
+
+Register the handler once, early; a run that started the app waits until then. `text` is set only for actions that declare `text` and got one (`required: true` makes Shortcuts ask for it). Only the user runs actions: links and other apps cannot. A locked Haven asks to unlock first. In tests, `createMockMindooDBAppSession().emitActionInvoked("new-task", "Milk")` plays Haven's part.
+
 ### Components: embedding another app's editor
 
 An app can offer an editor to other apps, and an app can show such an editor inside
