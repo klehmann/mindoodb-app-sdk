@@ -86,6 +86,7 @@ import type {
   MindooDBAppOpenDatabaseOptions,
   MindooDBAppDirectoryApi,
   MindooDBAppDirectoryPerson,
+  MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
   MindooDBAppMailGatewayConfig,
   MindooDBAppRichTextMaterializeValue,
@@ -167,7 +168,7 @@ import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOp
 import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
-import { mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
+import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
 
 const PROTOCOL = "mindoodb-app-bridge";
@@ -2848,12 +2849,14 @@ interface MockDirectorySource {
   /** Names by lower-cased username. */
   names: () => ReadonlyMap<string, MindooDBAppDirectoryPerson>;
   gateways: () => MindooDBAppMailGateway[];
+  addresses: (usernames: readonly string[]) => MindooDBAppMailAddresses[];
 }
 
 const EMPTY_DIRECTORY: MockDirectorySource = {
   users: () => [],
   names: () => new Map(),
   gateways: () => [],
+  addresses: (usernames) => usernames.map((username) => ({ username, addresses: [] })),
 };
 
 function createDatabaseHandle(
@@ -3753,6 +3756,9 @@ function createDatabaseHandle(
     async mailGateways() {
       return directorySource.gateways();
     },
+    async mailAddressesFor(usernames) {
+      return directorySource.addresses(usernames);
+    },
   };
 
   const defaultViews: MockViewApi = {
@@ -4330,6 +4336,7 @@ function createMockSessionState(
     users: () => directoryUsers,
     names: () => directoryNames,
     gateways: () => mailGatewaysFromConfigs(mailGatewayConfigs, launchContext.user.username),
+    addresses: (usernames) => mailAddressesFromConfigs(mailGatewayConfigs, usernames),
   };
   const setCapabilities = (databaseId: string, capabilities: MindooDBAppCapability[]) => {
     const entry = databaseInfos.find((info) => info.id === databaseId);
@@ -5014,8 +5021,8 @@ export interface CreateMockMindooDBAppSessionOptions {
   directoryPeople?: readonly MindooDBAppDirectoryPerson[];
   /**
    * MindooMail gateway configuration documents of the tenant. `directory.mailGateways()`
-   * answers them as Haven does, with `ownAddresses` and `isDefault` for the
-   * launch context's `user.username`.
+   * and `directory.mailAddressesFor()` answer them as Haven does, with `ownAddresses`
+   * and `isDefault` for the launch context's `user.username`.
    */
   mailGateways?: readonly MindooDBAppMailGatewayConfig[];
   /**
@@ -6561,6 +6568,10 @@ export function createFakeBridgeHost(
           });
       case "directory.mailGateways":
         return await state.getDatabase(String(params.databaseId)).directory.mailGateways();
+      case "directory.mailAddressesFor":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .directory.mailAddressesFor(Array.isArray(params.usernames) ? params.usernames.map(String) : []);
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { directoryPersonMatchScore, mailGatewaysFromConfigs, searchDirectoryPeople } from "./directorySearch";
+import { directoryPersonMatchScore, mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "./directorySearch";
 
 const people = [
   { username: "CN=kl/O=Mindoo", firstName: "Karsten", lastName: "Lehmann" },
@@ -59,18 +59,24 @@ describe("mailGatewaysFromConfigs", () => {
     ],
   };
 
-  it("applies the gateway's rules: canonical names, lower case, own domains, no conflicts", () => {
+  it("applies the gateway's rules: canonical names, lower case, own domains, no conflicts; no other members", () => {
     expect(mailGatewaysFromConfigs([config], "CN=Alice/O=Acme")).toEqual([
       {
         gatewayUsername: "cn=mail-gateway/o=acme",
         domains: ["mail.acme.example"],
-        users: [
-          { username: "cn=alice/o=acme", addresses: ["alice@mail.acme.example"] },
-          { username: "cn=bob/o=acme", addresses: ["bob@mail.acme.example"] },
-        ],
         ownAddresses: ["alice@mail.acme.example"],
         isDefault: true,
       },
+    ]);
+  });
+
+  it("mailAddressesFromConfigs: one entry per username asked, same rules, all gateways", () => {
+    const other = { gatewayUsername: "cn=gw2/o=acme", domains: ["acme.example"], users: [{ username: "cn=alice/o=acme", addresses: ["a@acme.example"] }] };
+    expect(mailAddressesFromConfigs([config, other], ["CN=Alice/O=Acme", "bob/acme", "carol/acme", "nobody/acme"])).toEqual([
+      { username: "CN=Alice/O=Acme", addresses: ["alice@mail.acme.example", "a@acme.example"] },
+      { username: "bob/acme", addresses: ["bob@mail.acme.example"] },
+      { username: "carol/acme", addresses: [] },
+      { username: "nobody/acme", addresses: [] },
     ]);
   });
 

@@ -1,6 +1,7 @@
 import { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 import type {
   MindooDBAppDirectoryPerson,
+  MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
   MindooDBAppMailGatewayConfig,
   MindooDBAppSearchUsersOptions,
@@ -96,22 +97,21 @@ function domainOf(address: string): string {
   return at >= 0 ? address.slice(at + 1) : "";
 }
 
+/** One configuration with the gateway's rules applied; addresses by lower-cased canonical username. */
+interface ResolvedGateway {
+  gatewayUsername: string;
+  domains: string[];
+  addressesByUser: Map<string, string[]>;
+}
+
 /**
- * What `directory.mailGateways()` answers for the configuration documents of a
- * tenant, as seen by `currentUsername`. Applies the gateway's own rules
- * (mindoomail-gateway docs/config-and-outbox.md §1): usernames canonical,
- * addresses and domains lower-cased, addresses outside the gateway's domains
- * and addresses listed for two people left out. `ownAddresses` are the current
- * user's addresses; the default gateway is the first that gives the user an
- * address, else the first one. Configurations without a gateway username or
- * domains are skipped.
+ * Applies the gateway's own rules (mindoomail-gateway docs/config-and-outbox.md
+ * §1): usernames canonical, addresses and domains lower-cased, addresses
+ * outside the gateway's domains and addresses listed for two people left out.
+ * Configurations without a gateway username or domains are skipped.
  */
-export function mailGatewaysFromConfigs(
-  configs: readonly MindooDBAppMailGatewayConfig[],
-  currentUsername: string,
-): MindooDBAppMailGateway[] {
-  const me = currentUsername ? canonicalKey(currentUsername) : "";
-  const gateways: MindooDBAppMailGateway[] = [];
+function resolveGateways(configs: readonly MindooDBAppMailGatewayConfig[]): ResolvedGateway[] {
+  const gateways: ResolvedGateway[] = [];
   for (const config of configs) {
     const gatewayUsername = typeof config.gatewayUsername === "string" ? config.gatewayUsername.trim() : "";
     const domains = [
@@ -124,12 +124,10 @@ export function mailGatewaysFromConfigs(
     ];
     if (!gatewayUsername || !domains.length) continue;
     const owners = new Map<string, Set<string>>();
-    const usernames = new Map<string, string>();
     for (const user of Array.isArray(config.users) ? config.users : []) {
-      const username = typeof user?.username === "string" ? expandAbbreviatedName(user.username.trim()) : "";
+      const username = typeof user?.username === "string" ? user.username.trim() : "";
       if (!username) continue;
-      const key = username.toLowerCase();
-      if (!usernames.has(key)) usernames.set(key, username);
+      const key = canonicalKey(username);
       for (const raw of Array.isArray(user.addresses) ? user.addresses : []) {
         if (typeof raw !== "string") continue;
         const address = raw.trim().toLowerCase();
@@ -145,18 +143,48 @@ export function mailGatewaysFromConfigs(
       if (!addressesByUser.has(key!)) addressesByUser.set(key!, []);
       addressesByUser.get(key!)!.push(address);
     }
-    const users = [...usernames]
-      .filter(([key]) => addressesByUser.has(key))
-      .map(([key, username]) => ({ username, addresses: addressesByUser.get(key)! }));
-    gateways.push({
-      gatewayUsername: expandAbbreviatedName(gatewayUsername),
-      domains,
-      users,
-      ownAddresses: me ? [...(addressesByUser.get(me) ?? [])] : [],
-      isDefault: false,
-    });
+    gateways.push({ gatewayUsername: expandAbbreviatedName(gatewayUsername), domains, addressesByUser });
   }
+  return gateways;
+}
+
+/**
+ * What `directory.mailGateways()` answers for the configuration documents of a
+ * tenant, as seen by `currentUsername`: per gateway its username, domains, the
+ * current user's own addresses, and whether it is the default (the first that
+ * gives the user an address, else the first one). No other member's addresses:
+ * those come one person at a time from {@link mailAddressesFromConfigs}.
+ */
+export function mailGatewaysFromConfigs(
+  configs: readonly MindooDBAppMailGatewayConfig[],
+  currentUsername: string,
+): MindooDBAppMailGateway[] {
+  const me = currentUsername ? canonicalKey(currentUsername) : "";
+  const gateways: MindooDBAppMailGateway[] = resolveGateways(configs).map((gateway) => ({
+    gatewayUsername: gateway.gatewayUsername,
+    domains: gateway.domains,
+    ownAddresses: me ? [...(gateway.addressesByUser.get(me) ?? [])] : [],
+    isDefault: false,
+  }));
   const preferred = gateways.find((gateway) => gateway.ownAddresses.length > 0) ?? gateways[0];
   if (preferred) preferred.isDefault = true;
   return gateways;
+}
+
+/**
+ * What `directory.mailAddressesFor(usernames)` answers: one entry per username
+ * asked for, in that order, with the username as given. `addresses` collects
+ * the person's addresses at every gateway (in gateway order, the first per
+ * gateway being its primary), empty when no gateway lists the person.
+ */
+export function mailAddressesFromConfigs(
+  configs: readonly MindooDBAppMailGatewayConfig[],
+  usernames: readonly string[],
+): MindooDBAppMailAddresses[] {
+  const gateways = resolveGateways(configs);
+  return usernames.map((username) => {
+    const key = canonicalKey(username);
+    const addresses = [...new Set(gateways.flatMap((gateway) => gateway.addressesByUser.get(key) ?? []))];
+    return { username, addresses };
+  });
 }

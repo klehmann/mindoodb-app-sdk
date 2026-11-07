@@ -86,6 +86,7 @@ import type {
   MindooDBAppListUsersOptions,
   MindooDBAppListUsersPage,
   MindooDBAppDirectoryPerson,
+  MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
@@ -1405,6 +1406,20 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
             throw error;
           }
           return [];
+        }
+      },
+      mailAddressesFor: async (usernames) => {
+        try {
+          const found = await this.rpc.call<MindooDBAppMailAddresses[]>("directory.mailAddressesFor", {
+            databaseId: this.databaseId,
+            usernames,
+          });
+          return Array.isArray(found) ? found : [];
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return usernames.map((username) => ({ username, addresses: [] }));
         }
       },
     };

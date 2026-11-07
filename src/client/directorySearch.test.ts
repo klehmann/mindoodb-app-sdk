@@ -56,8 +56,10 @@ describe("directory.searchUsers and directory.mailGateways (bridge client)", () 
     const host = connectToHost({
       "directory.searchUsers": () => [{ username: "CN=kl/O=Mindoo", firstName: "Karsten", lastName: "Lehmann" }],
       "directory.mailGateways": () => [
-        { gatewayUsername: "CN=mail-gateway/O=Mindoo", domains: ["mindoo.de"], users: [], ownAddresses: [], isDefault: true },
+        { gatewayUsername: "CN=mail-gateway/O=Mindoo", domains: ["mindoo.de"], ownAddresses: [], isDefault: true },
       ],
+      "directory.mailAddressesFor": (params) =>
+        (params.usernames as string[]).map((username) => ({ username, addresses: ["kl@mindoo.de"] })),
     });
     const db = await host.open();
     expect(await db.directory.searchUsers({ query: " karsten ", limit: 500 })).toEqual([
@@ -69,6 +71,9 @@ describe("directory.searchUsers and directory.mailGateways (bridge client)", () 
       limit: 100,
     });
     expect((await db.directory.mailGateways())[0]?.gatewayUsername).toBe("CN=mail-gateway/O=Mindoo");
+    expect(await db.directory.mailAddressesFor(["CN=kl/O=Mindoo"])).toEqual([
+      { username: "CN=kl/O=Mindoo", addresses: ["kl@mindoo.de"] },
+    ]);
   });
 
   it("an empty query finds nobody without asking the host", async () => {
@@ -95,6 +100,7 @@ describe("directory.searchUsers and directory.mailGateways (bridge client)", () 
     ]);
     expect(host.calls.find((call) => call.method === "directory.listUsers")?.params).toMatchObject({ query: "kar" });
     expect(await db.directory.mailGateways()).toEqual([]);
+    expect(await db.directory.mailAddressesFor(["CN=Ada/O=Acme"])).toEqual([{ username: "CN=Ada/O=Acme", addresses: [] }]);
   });
 });
 
@@ -137,10 +143,13 @@ describe("directory.searchUsers and directory.mailGateways (mock host)", () => {
       {
         gatewayUsername: "cn=mail-gateway/o=acme",
         domains: ["mail.acme.example"],
-        users: [{ username: "cn=alice/o=acme", addresses: ["alice@mail.acme.example"] }],
         ownAddresses: ["alice@mail.acme.example"],
         isDefault: true,
       },
+    ]);
+    expect(await db.directory.mailAddressesFor(["alice/acme", "cn=bob/o=acme"])).toEqual([
+      { username: "alice/acme", addresses: ["alice@mail.acme.example"] },
+      { username: "cn=bob/o=acme", addresses: [] },
     ]);
     mock.setMailGateways([]);
     expect(await db.directory.mailGateways()).toEqual([]);

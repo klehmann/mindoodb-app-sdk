@@ -88,6 +88,7 @@ export {
   SEARCH_USERS_DEFAULT_LIMIT,
   SEARCH_USERS_MAX_LIMIT,
   directoryPersonMatchScore,
+  mailAddressesFromConfigs,
   mailGatewaysFromConfigs,
   searchDirectoryPeople,
 } from "./directorySearch";
