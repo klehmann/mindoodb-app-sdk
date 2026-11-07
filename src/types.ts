@@ -265,6 +265,7 @@ export type MindooDBAppCapability =
   | "sign"
   | "timestamps"
   | "directory"
+  | "freebusy"
   | "sealedchannel";
 
 /**
@@ -4064,6 +4065,71 @@ export interface MindooDBAppDirectoryApi {
   mailAddressesFor(usernames: string[]): Promise<MindooDBAppMailAddresses[]>;
 }
 
+/**
+ * When colleagues are busy, for a scheduling assistant: times only, never what
+ * the appointments are. Each member's Haven publishes them into a small
+ * personal database (`mbusy_<grantDocId>`) that the other members may read.
+ */
+export interface MindooDBAppCalendarApi {
+  /**
+   * Busy times of members between `from` and `to`. One entry per username
+   * asked for, in that order; `busy` is sorted, merged and clipped to
+   * `[from, to]`. `state` says whether the times can be trusted: `"ok"` (free
+   * where `busy` has nothing), `"unpublished"` (the person switched publishing
+   * off) or `"unknown"` (never published, not a member, or the tenant's policy
+   * does not let you read it). `computedAt` is when the person's device last
+   * computed them; show its age when it is old.
+   *
+   * At most 50 people and 14 weeks per call (else a `RangeError`). Hosts that
+   * do not know the call (older Haven) answer `"unknown"` for everyone.
+   * Requires the `freebusy` capability.
+   */
+  freeBusy(request: MindooDBAppFreeBusyRequest): Promise<MindooDBAppFreeBusyResult[]>;
+}
+
+/** Input of {@link MindooDBAppCalendarApi.freeBusy}. */
+export interface MindooDBAppFreeBusyRequest {
+  /** Canonical usernames (as in the directory), at most 50. */
+  usernames: string[];
+  /** Start of the range, ISO date-time. */
+  from: string;
+  /** End of the range, ISO date-time; at most 14 weeks after `from`. */
+  to: string;
+}
+
+/** How a busy interval is marked: busy, tentative, or out of office. */
+export type MindooDBAppFreeBusyStatus = "busy" | "tentative" | "oof";
+
+/** One busy interval of {@link MindooDBAppFreeBusyResult}. */
+export interface MindooDBAppFreeBusyInterval {
+  /** ISO date-time (UTC). */
+  start: string;
+  /** ISO date-time (UTC), after `start`. */
+  end: string;
+  status: MindooDBAppFreeBusyStatus;
+}
+
+/** Whether a person's busy times are known. */
+export type MindooDBAppFreeBusyState = "ok" | "unpublished" | "unknown";
+
+/** One person of {@link MindooDBAppCalendarApi.freeBusy}. */
+export interface MindooDBAppFreeBusyResult {
+  /** The username asked for. */
+  username: string;
+  state: MindooDBAppFreeBusyState;
+  /** Empty unless `state` is `"ok"`. */
+  busy: MindooDBAppFreeBusyInterval[];
+  /** When the person's device last computed the times (ISO), when known. */
+  computedAt?: string;
+  /**
+   * End of the weeks the person published (ISO), set when the request reaches
+   * past them: times from here on are not known, so do not show them as free.
+   * Haven publishes one week back and the tenant's weeks ahead (default 12);
+   * a request entirely outside them answers `"unknown"`. Older hosts leave it out.
+   */
+  publishedUntil?: string;
+}
+
 /** Options of {@link MindooDBAppDirectoryApi.searchUsers}. */
 export interface MindooDBAppSearchUsersOptions {
   /** What was typed: words matched against username and names. */
@@ -4734,6 +4800,8 @@ export interface MindooDBAppDatabase {
   identity: MindooDBAppIdentityApi;
   timestamps: MindooDBAppTimestampApi;
   directory: MindooDBAppDirectoryApi;
+  /** Colleagues' busy times (`calendar.freeBusy`); requires the `freebusy` capability. */
+  calendar: MindooDBAppCalendarApi;
   /**
    * Read the database's full-text index configuration from the synced
    * `dbsetup` document. Resolves to `null` when full-text indexing has

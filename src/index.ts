@@ -93,6 +93,13 @@ export {
   searchDirectoryPeople,
 } from "./directorySearch";
 export {
+  FREE_BUSY_MAX_USERS,
+  FREE_BUSY_MAX_WEEKS,
+  mergeFreeBusyIntervals,
+  normalizeFreeBusyRequest,
+  unknownFreeBusy,
+} from "./freeBusy";
+export {
   DEFAULT_DRAG_LONG_PRESS_MS,
   DEFAULT_DRAG_POINTER_THRESHOLD_PX,
   MINDOODB_APP_DRAG_FILE_TTL_MS,

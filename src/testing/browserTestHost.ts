@@ -1,4 +1,5 @@
 import type { MindooDBAppDefinition } from "../appDefinition";
+import type { MockFreeBusyPerson } from "../freeBusy";
 import type {
   MindooDBAppDirectoryPerson,
   MindooDBAppMailGatewayConfig,
@@ -127,6 +128,8 @@ export interface BrowserTestHost {
   setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
   /** Replaces the MindooMail gateway configuration documents (`directory.mailGateways()`). */
   setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
+  /** Replaces the busy times members published (`calendar.freeBusy()`). */
+  setFreeBusy(people: readonly MockFreeBusyPerson[]): void;
   /**
    * Another device edits a document and the change syncs in: the app's live queries
    * update. With Automerge-backed databases (`automerge=1` / `automerge: true`) the
@@ -155,6 +158,7 @@ export const ALL_CAPABILITIES: readonly MindooDBAppCapability[] = [
   "attachments",
   "views",
   "directory",
+  "freebusy",
   "sign",
   "timestamps",
   "sealedchannel",
@@ -180,6 +184,7 @@ export function capabilitiesForDefinitionPermissions(
       permission === "sign" ||
       permission === "timestamps" ||
       permission === "directory" ||
+      permission === "freebusy" ||
       permission === "sealedchannel"
     ) {
       result.add(permission);
@@ -516,6 +521,10 @@ export function createBrowserTestHost(options: CreateBrowserTestHostOptions): Br
     },
     setMailGateways(configs) {
       host.setMailGateways(configs);
+      onChange?.();
+    },
+    setFreeBusy(people) {
+      host.setFreeBusy(people);
       onChange?.();
     },
     async applyRemoteUpdate(databaseId, docId, input, updateOptions) {
