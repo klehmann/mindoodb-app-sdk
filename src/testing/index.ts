@@ -59,6 +59,8 @@ import type {
   MindooDBAppReminder,
   MindooDBAppReminderOpened,
   MindooDBAppReminderOpenedHandler,
+  MindooDBAppActionInvoked,
+  MindooDBAppActionInvokedHandler,
   MindooDBAppIncomingItem,
   MindooDBAppIncomingResult,
   MindooDBAppIncomingSource,
@@ -3968,6 +3970,7 @@ type MockSessionState = {
   getAccountRequests: () => MindooDBAppAccountRequestInput[];
   getAccountGrants: () => Record<string, MindooDBAppAccountScope[]>;
   emitReminderOpened: (id: string, action?: "open" | "done") => Promise<void>;
+  emitActionInvoked: (id: string, text?: string) => Promise<void>;
   links: ReturnType<typeof createMockLinks>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
@@ -4047,6 +4050,8 @@ function createMockSessionState(
   let pdfSignOutcome: MockPdfSignOutcome = "signed";
   const shareRequests: MockShareRequest[] = [];
   let shareOutcome: MockShareOutcome = "share";
+  let actionHandler: MindooDBAppActionInvokedHandler | null = null;
+  const pendingActionRuns: MindooDBAppActionInvoked[] = [];
   let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
   const pendingReminderTaps: MindooDBAppReminderOpened[] = [];
   const pendingIncoming: Array<() => void> = [];
@@ -4569,6 +4574,17 @@ function createMockSessionState(
         };
       },
     },
+    actions: {
+      onInvoked(handler) {
+        actionHandler = handler;
+        pendingActionRuns.splice(0).forEach((invoked) => void handler(invoked));
+        return () => {
+          if (actionHandler === handler) {
+            actionHandler = null;
+          }
+        };
+      },
+    },
     pdf: {
       async sign(input): Promise<MindooDBAppPdfSignResult> {
         const pdf = input.pdf instanceof Uint8Array ? input.pdf : new Uint8Array(input.pdf as ArrayLike<number>);
@@ -4743,6 +4759,19 @@ function createMockSessionState(
     },
     setShareOutcome(outcome: MockShareOutcome) {
       shareOutcome = outcome;
+    },
+    async emitActionInvoked(id, text) {
+      const invoked: MindooDBAppActionInvoked = {
+        id,
+        source: "shortcut",
+        invokedAt: Date.now(),
+        ...(text?.trim() ? { text: text.trim() } : {}),
+      };
+      if (actionHandler) {
+        await actionHandler(invoked);
+      } else {
+        pendingActionRuns.push(invoked);
+      }
     },
     async emitReminderOpened(id, action = "open") {
       const reminder = mockReminders.get(id);
@@ -5101,6 +5130,11 @@ export interface MockMindooDBAppSessionController {
    * to `session.reminders.onOpened` (held until registered).
    */
   emitReminderOpened(id: string, action?: "open" | "done"): Promise<void>;
+  /**
+   * As if the user ran this `actions` entry from iOS Shortcuts: delivered to
+   * `session.actions.onInvoked` (held until registered).
+   */
+  emitActionInvoked(id: string, text?: string): Promise<void>;
   /** `session.links`: open a link to the app as the user would, and the links it created. */
   readonly links: MockLinksController;
   /** Every `session.pdf.sign` request so far, oldest first. */
@@ -5357,6 +5391,7 @@ export function createMockMindooDBAppSession(
     getAccountRequests: state.getAccountRequests,
     getAccountGrants: state.getAccountGrants,
     emitReminderOpened: state.emitReminderOpened,
+    emitActionInvoked: state.emitActionInvoked,
     links: state.links.controller,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
