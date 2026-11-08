@@ -151,6 +151,14 @@ export interface MindooDBAppDefinition {
    */
   accepts?: MindooDBAppAcceptSpec[];
   /**
+   * Quick actions the app offers outside itself: in Haven's native app they
+   * show up in iOS Shortcuts ("Run Haven action"), so the user can put them on
+   * the Action Button, Siri or a home-screen shortcut. Haven opens the app and
+   * delivers the action through `session.actions.onInvoked`. Only the user
+   * triggers them; a link or another app cannot. See {@link MindooDBAppActionSpec}.
+   */
+  actions?: MindooDBAppActionSpec[];
+  /**
    * Editors this app offers to other apps. A host app (a CRM, a project file) asks
    * Haven for the components that fit a document and shows one embedded in its own
    * page; Haven runs this app in a sandbox that holds only that document and its
@@ -236,6 +244,26 @@ export interface MindooDBAppAcceptSpec {
   multiple?: boolean;
   /** Largest total size the app handles; larger deliveries are not offered. */
   maxBytes?: number;
+}
+
+/**
+ * One quick action, e.g. "Start timer" or "New task". Haven lists it per
+ * installed app (with the tenant's name when the app is installed more than
+ * once) and hands the app its `id` when the user runs it.
+ */
+export interface MindooDBAppActionSpec {
+  /** Stable id, handed back as `id`. Lowercase letters, digits, `-` and `_`. */
+  id: string;
+  /** Short title, e.g. "Start timer". Haven puts the app's name in front. */
+  title: MindooDBAppLocalizedText;
+  /** One sentence on what the action does, shown where the system has room. */
+  description?: MindooDBAppLocalizedText;
+  /**
+   * Text the action takes, e.g. the title of a new task. Shortcuts asks for it
+   * (or passes it from an earlier step); `required: false` (default) lets the
+   * action run without.
+   */
+  text?: { label: MindooDBAppLocalizedText; required?: boolean };
 }
 
 /** What a host may ask a component for. */
@@ -736,6 +764,77 @@ export function validateMindooDBAppAccepts(value: unknown): {
   const errors: string[] = [];
   const accepts = readAccepts(value, errors);
   return { accepts: errors.length ? undefined : accepts, errors };
+}
+
+export const MINDOODB_APP_ACTIONS_MAX = 12;
+
+function readActions(value: unknown, errors: string[]): MindooDBAppActionSpec[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("App definition actions must be an array.");
+    return undefined;
+  }
+  if (value.length > MINDOODB_APP_ACTIONS_MAX) {
+    errors.push(`App definition actions must not have more than ${MINDOODB_APP_ACTIONS_MAX} entries.`);
+    return undefined;
+  }
+  const result: MindooDBAppActionSpec[] = [];
+  const ids = new Set<string>();
+  value.forEach((entry, index) => {
+    const label = `App definition actions[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${label} must be an object.`);
+      return;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!ACCEPT_ID_PATTERN.test(id)) {
+      errors.push(`${label}.id must be 1-48 lowercase letters, digits, "-" or "_", received ${JSON.stringify(entry.id)}.`);
+      return;
+    }
+    if (ids.has(id)) {
+      errors.push(`${label}.id "${id}" is used twice.`);
+      return;
+    }
+    ids.add(id);
+    const title = readLocalizedText(entry.title, `${label}.title`, 60, errors);
+    if (!title) {
+      errors.push(`${label}.title is required.`);
+      return;
+    }
+    const description =
+      entry.description === undefined ? undefined : readLocalizedText(entry.description, `${label}.description`, 160, errors);
+    let text: MindooDBAppActionSpec["text"];
+    if (entry.text !== undefined) {
+      if (!isPlainObject(entry.text)) {
+        errors.push(`${label}.text must be an object with a label.`);
+        return;
+      }
+      const textLabel = readLocalizedText(entry.text.label, `${label}.text.label`, 60, errors);
+      if (!textLabel) {
+        errors.push(`${label}.text.label is required.`);
+        return;
+      }
+      const required = readOptionalBoolean(entry.text, "required", errors);
+      text = { label: textLabel, ...(required ? { required } : {}) };
+    }
+    result.push({ id, title, ...(description ? { description } : {}), ...(text ? { text } : {}) });
+  });
+  return result.length ? result : undefined;
+}
+
+/**
+ * Validates an `actions` list on its own, for hosts that read it from another
+ * manifest format (Haven's app store catalog).
+ */
+export function validateMindooDBAppActions(value: unknown): {
+  actions: MindooDBAppActionSpec[] | undefined;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const actions = readActions(value, errors);
+  return { actions: errors.length ? undefined : actions, errors };
 }
 
 /** Whether `type` (e.g. `image/png`) matches a pattern like `image/*` or `*\/*`. */
@@ -1610,6 +1709,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowFiles = readFilesPermission(raw.allowFiles, errors);
   const listing = readListing(raw.listing, errors);
   const accepts = readAccepts(raw.accepts, errors);
+  const actions = readActions(raw.actions, errors);
   const components = readComponents(raw.components, errors);
   const uses = readUses(raw.uses, errors);
   const agent = readAgentProfile(raw.agent, errors);
@@ -1664,6 +1764,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       defaultLaunchDatabaseId,
       databases,
       accepts,
+      ...(actions ? { actions } : {}),
       components,
       ...(uses ? { uses } : {}),
       listing,
