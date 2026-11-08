@@ -206,7 +206,10 @@ async function buildVirtualView(
     const commonOptions = {
       title: column.title,
       isHidden: column.hidden,
-      expression: column.expression,
+      // The mock computes the values itself (computeColumnValues); folder
+      // operations are resolved per document there, so the engine gets
+      // them as literals (it has no filing join here).
+      expression: substituteFilingOperations(column.expression, () => []),
     };
     switch (column.role) {
       case "category":
