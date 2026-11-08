@@ -58,6 +58,19 @@ const DATABASE_REQUIREMENTS: Record<string, Requirement> = {
   setFulltextSetup: ["update"],
   setExtractionSetup: ["update"],
   setSummarySetup: ["update"],
+  // the accessor itself is free; its methods are guarded below
+  filing: NONE,
+};
+
+/** Filing writes need `update` on the filing database, reads `read`. */
+const FILING_REQUIREMENTS: Record<string, Requirement> = {
+  add: ["update"],
+  remove: ["update"],
+  move: ["update"],
+  createFolder: ["update"],
+  updateFolder: ["update"],
+  renameFolder: ["update"],
+  deleteFolder: ["update"],
 };
 
 export class MockForbiddenError extends Error {
@@ -156,5 +169,7 @@ export function guardDatabase(
     timestamps: guardApi(database.timestamps, () => ["timestamps"], check("timestamps.")),
     directory: guardApi(database.directory, () => ["directory"], check("directory.")),
     calendar: guardApi(database.calendar, () => ["freebusy"], check("calendar.")),
+    filing: (store: string) =>
+      guardApi(database.filing(store), (method) => FILING_REQUIREMENTS[method] ?? READ, check("filing.")),
   };
 }

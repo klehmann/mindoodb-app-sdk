@@ -98,6 +98,7 @@ import type {
   MindooDBAppFulltextSetup,
   MindooDBAppExtractionSetup,
   MindooDBAppSummarySetup,
+  MindooDBAppCreateFolderInput,
   MindooDBAppIdentityApi,
   MindooDBAppRevisionVerification,
   MindooDBAppSignStatementInput,
@@ -174,6 +175,7 @@ import { pageUsers } from "../directoryPaging";
 import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
 import { answerFreeBusyFromMock, type MockFreeBusyPerson } from "../freeBusy";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
+import { MockFilingRegistry } from "./mockFiling";
 
 const PROTOCOL = "mindoodb-app-bridge";
 
@@ -2880,6 +2882,8 @@ function createDatabaseHandle(
   applyRemoteUpdate: MockApplyRemoteUpdate;
   /** The documents as they stood at `cutoff` (the latest revision before it), for time-travel handles. */
   seedsAt: (cutoff: number) => MockSeedDocument[];
+  /** Filing stores of this database (`database.filing(store)`). */
+  filing: MockFilingRegistry;
 } {
   let createCounter = 0;
   let changeCounter = 0;
@@ -3862,7 +3866,9 @@ function createDatabaseHandle(
   let summarySetup: MindooDBAppSummarySetup | null =
     definition.summarySetup ?? null;
 
+  const filing = new MockFilingRegistry(definition.info.id, () => peers.documentsChanged(definition.info.id));
   const databaseHandle: MindooDBAppDatabase = {
+    filing: (store: string) => filing.api(store),
     async info() {
       return {
         ...definition.info,
@@ -3915,6 +3921,7 @@ function createDatabaseHandle(
 
   return {
     handle: databaseHandle,
+    filing,
     listViewDocuments: () =>
       Array.from(storedDocuments.values())
         .filter((document) => !document.isDeleted && !document.inaccessible)
@@ -4125,6 +4132,7 @@ function createMockSessionState(
   const databaseHandles = new Map<string, MindooDBAppDatabase>();
   const databaseViewDocumentLists = new Map<string, () => EvaluatingViewDocument[]>();
   const databaseDocumentStores = new Map<string, Map<string, MockStoredDocument>>();
+  const databaseFilings = new Map<string, MockFilingRegistry>();
   const databaseLiveQueryRefreshers = new Map<string, () => void>();
   const databaseRemoteUpdaters = new Map<string, MockApplyRemoteUpdate>();
   const databaseDefinitions = new Map<string, MockMindooDBAppDatabaseDefinition>();
@@ -4287,21 +4295,42 @@ function createMockSessionState(
       );
       databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
       databaseDocumentStores.set(definition.info.id, created.documents);
+      databaseFilings.set(definition.info.id, created.filing);
       databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
       databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
       databaseDefinitions.set(definition.info.id, definition);
       databaseSeedsAt.set(definition.info.id, created.seedsAt);
       const createView = async (input: MindooDBAppCreateViewNavigatorInput) => {
+          const filingStores = input.filingStores ?? [];
+          for (const joined of filingStores) {
+            if (!databaseFilings.has(joined.databaseId)) {
+              throw new Error(`Unknown test database for filing store "${joined.name}": ${joined.databaseId}`);
+            }
+          }
           const build = () =>
             createEvaluatingViewNavigator(
               input,
               input.databaseIds.flatMap((databaseId) => {
                 const list = databaseViewDocumentLists.get(databaseId);
-                return list ? list() : [];
+                const documents = list ? list() : [];
+                if (filingStores.length === 0) return documents;
+                return documents.map((document) => ({
+                  ...document,
+                  foldersOf: (name: string) => {
+                    const joined = filingStores.find((entry) => entry.name === name);
+                    return joined
+                      ? databaseFilings.get(joined.databaseId)!.foldersOf(joined.store, databaseId, document.docId)
+                      : [];
+                  },
+                }));
               }),
             );
           const subscribe = (onChange: () => void) => {
-            const listener = { databaseIds: [...input.databaseIds], onChange };
+            // Filing changes live in the filing databases: listen there too.
+            const listener = {
+              databaseIds: [...input.databaseIds, ...filingStores.map((entry) => entry.databaseId)],
+              onChange,
+            };
             viewChangeListeners.add(listener);
             return () => viewChangeListeners.delete(listener);
           };
@@ -6037,6 +6066,9 @@ export function createFakeBridgeHost(
           options: params.options as
             | MindooDBAppViewNavigatorOpenOptions
             | undefined,
+          ...(Array.isArray(params.filingStores)
+            ? { filingStores: params.filingStores as MindooDBAppCreateViewNavigatorInput["filingStores"] }
+            : {}),
         });
         viewSessions.set(navigatorId, navigator);
         navigator.onDidUpdate((stats) => {
@@ -6355,6 +6387,56 @@ export function createFakeBridgeHost(
             (params.config ?? null) as MindooDBAppExtractionSetup | null,
           );
         return { ok: true };
+      case "filing.add":
+      case "filing.remove":
+      case "filing.move":
+      case "filing.foldersOf":
+      case "filing.contents":
+      case "filing.count":
+      case "filing.createFolder":
+      case "filing.updateFolder":
+      case "filing.deleteFolder":
+      case "filing.getFolder":
+      case "filing.listFolders": {
+        const filing = state.getDatabase(String(params.databaseId)).filing(String(params.store));
+        const ref = params.ref as { databaseId?: string; docId: string };
+        const folderIds = params.folderIds as string[] | undefined;
+        switch (request.method) {
+          case "filing.add":
+            await filing.add(ref, folderIds ?? []);
+            return { ok: true };
+          case "filing.remove":
+            await filing.remove(ref, folderIds);
+            return { ok: true };
+          case "filing.move":
+            await filing.move(ref, {
+              to: params.to as string[],
+              ...(params.from ? { from: params.from as string[] } : {}),
+            });
+            return { ok: true };
+          case "filing.foldersOf":
+            return { folderIds: await filing.foldersOf(ref) };
+          case "filing.contents":
+            return await filing.contents(String(params.folderId), {
+              limit: params.limit as number | undefined,
+              cursor: (params.cursor as string | null | undefined) ?? null,
+            });
+          case "filing.count":
+            return { count: await filing.count(String(params.folderId)) };
+          case "filing.createFolder":
+            return { folder: await filing.createFolder(params.input as MindooDBAppCreateFolderInput) };
+          case "filing.updateFolder":
+            await filing.updateFolder(String(params.folderId), (params.changes ?? {}) as Partial<MindooDBAppCreateFolderInput>);
+            return { ok: true };
+          case "filing.deleteFolder":
+            await filing.deleteFolder(String(params.folderId), { keepFiling: params.keepFiling === true });
+            return { ok: true };
+          case "filing.getFolder":
+            return { folder: await filing.getFolder(String(params.folderId)) };
+          default:
+            return { folders: await filing.listFolders() };
+        }
+      }
       case "database.getSummarySetup":
         return {
           config: await state

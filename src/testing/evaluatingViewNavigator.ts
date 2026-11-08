@@ -9,6 +9,7 @@
  * unavailable, callers should fall back to the empty stub navigator.
  */
 import { evaluateExpression, getFieldValue } from "mindoodb-view-language";
+import { substituteFilingOperations } from "./mockFiling";
 import type {
   MindooDBAppCreateViewNavigatorInput,
   MindooDBAppScopedDocId,
@@ -32,6 +33,8 @@ export type EvaluatingViewDocument = {
   lastModifiedAt?: string | null;
   witnessed?: boolean;
   awaitingWitness?: boolean;
+  /** Folder ids of the document per joined filing store (`filingStores`). */
+  foldersOf?: (store: string) => string[];
 };
 
 type MindoodbVirtualViews = typeof import("mindoodb");
@@ -67,8 +70,11 @@ function matchesFilter(
   void mindoodb;
   if (!definition.filter) return true;
   const { data: doc, origin, docId, createdAt, lastModifiedAt, witnessed, awaitingWitness } = document;
+  const filter = document.foldersOf
+    ? substituteFilingOperations(definition.filter.expression, document.foldersOf)
+    : definition.filter.expression;
   return toFormulaBoolean(
-    evaluateExpression(definition.filter.expression, {
+    evaluateExpression(filter, {
       doc,
       values: doc,
       origin,
@@ -92,7 +98,9 @@ function computeColumnValues(
     if (!key.startsWith("_")) values[key] = value;
   }
   for (const column of definition.columns) {
-    const expression = column.expression;
+    const expression = document.foldersOf
+      ? substituteFilingOperations(column.expression, document.foldersOf)
+      : column.expression;
     const value =
       expression.kind === "field"
         ? (getFieldValue(doc, expression.path) ?? getFieldValue(values, expression.path))
@@ -166,7 +174,8 @@ function serializeEntry(
     parentKey: parent && !parent.isRoot() ? parent.getPositionStr() : null,
     categoryPath: getCategoryPath(entry),
     categoryValue: entry.isCategory() ? entry.getCategoryValue() : null,
-    columnValues: entry.getColumnValues(),
+    // Category entries carry the totals of total columns, as in Haven.
+    columnValues: entry.isCategory() ? { ...entry.getColumnValues(), ...entry.getTotalValues() } : entry.getColumnValues(),
     childCount: entry.getChildCount(),
     descendantDocumentCount: entry.getDescendantDocumentCount(),
     descendantCount: entry.getDescendantCount(),
@@ -197,7 +206,10 @@ async function buildVirtualView(
     const commonOptions = {
       title: column.title,
       isHidden: column.hidden,
-      expression: column.expression,
+      // The mock computes the values itself (computeColumnValues); folder
+      // operations are resolved per document there, so the engine gets
+      // them as literals (it has no filing join here).
+      expression: substituteFilingOperations(column.expression, () => []),
     };
     switch (column.role) {
       case "category":
@@ -267,6 +279,9 @@ function createCoreNavigator(
   else if (includeCategories && !includeDocuments) builder.categoriesOnly();
   if (options?.hideEmptyCategories) builder.hideEmptyCategories();
 
+  if (Array.isArray(options?.rootCategoryPaths) && options.rootCategoryPaths.length > 0) {
+    return createMergedListNavigator(mindoodb, view, options.rootCategoryPaths);
+  }
   if (Array.isArray(options?.rootCategoryPath) && options.rootCategoryPath.length > 0) {
     builder.fromCategory(options.rootCategoryPath.map((part) => String(part)).join("\\"));
   } else if (options?.rootEntryKey) {
@@ -276,6 +291,104 @@ function createCoreNavigator(
   }
 
   return builder.build();
+}
+
+/**
+ * `rootCategoryPaths`: the documents of several categories as one list,
+ * merged by the document sort columns, each document once — as Haven
+ * builds it. A navigator subclass that walks that list; selection and the
+ * other navigator state work as usual, tree positions stay valid tokens.
+ */
+function createMergedListNavigator(
+  mindoodb: MindoodbVirtualViews,
+  view: import("mindoodb").VirtualView,
+  paths: unknown[][],
+): import("mindoodb").VirtualViewNavigator {
+  type Entry = import("mindoodb").VirtualViewEntryData;
+  const lookup = mindoodb.VirtualViewFactory.createSimpleNavigator(view);
+  const roots: Entry[] = [];
+  for (const path of paths) {
+    if (!Array.isArray(path) || path.length === 0) continue;
+    const root = lookup.findCategoryEntryByParts(path);
+    if (root && !roots.includes(root)) roots.push(root);
+  }
+  const seen = new Set<string>();
+  const list: Entry[] = [];
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const entry = stack.pop()!;
+    for (const child of entry.getChildEntries()) {
+      if (child.isCategory()) {
+        stack.push(child);
+      } else if (!seen.has(`${child.origin}:${child.docId}`)) {
+        seen.add(`${child.origin}:${child.docId}`);
+        list.push(child);
+      }
+    }
+  }
+  if (roots.length > 0) {
+    const comparator = roots[0]!.getChildrenComparator();
+    list.sort((a, b) => comparator.compare(a.getSortKey(), b.getSortKey()));
+  }
+  const indexOf = new Map(list.map((entry, index) => [entry, index]));
+
+  class MergedListNavigator extends mindoodb.VirtualViewNavigator {
+    private index = -1;
+    override getCurrentEntry() {
+      return this.index >= 0 ? list[this.index] ?? null : null;
+    }
+    override gotoFirst() {
+      this.index = list.length > 0 ? 0 : -1;
+      return this.index >= 0;
+    }
+    override gotoLast() {
+      this.index = list.length - 1;
+      return this.index >= 0;
+    }
+    override gotoNext() {
+      if (this.index + 1 >= list.length) return false;
+      this.index++;
+      return true;
+    }
+    override gotoPrev() {
+      if (this.index <= 0) return false;
+      this.index--;
+      return true;
+    }
+    override gotoNextSibling() {
+      return this.gotoNext();
+    }
+    override gotoPrevSibling() {
+      return this.gotoPrev();
+    }
+    override gotoParent() {
+      return false;
+    }
+    override gotoFirstChild() {
+      return false;
+    }
+    override gotoLastChild() {
+      return false;
+    }
+    override getPos(position: string) {
+      const entry = lookup.getPos(position);
+      return entry && indexOf.has(entry) ? entry : null;
+    }
+    override gotoPos(position: string) {
+      const entry = this.getPos(position);
+      if (!entry) return false;
+      this.index = indexOf.get(entry)!;
+      return true;
+    }
+  }
+  return new MergedListNavigator(
+    view,
+    view.getRoot(),
+    mindoodb.WithCategories.NO,
+    mindoodb.WithDocuments.YES,
+    null,
+    false,
+  );
 }
 
 function normalizePageLimit(limit?: number): number {

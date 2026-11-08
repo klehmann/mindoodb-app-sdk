@@ -2563,8 +2563,86 @@ Available expression helpers:
 - **Null/existence:** `coalesce()`, `exists()`, `notExists()`
 - **Date/path:** `datePart()`, `pathJoin()`
 - **Control flow:** `ifElse()`, `let()` — `ifElse()` accepts multiple condition/value pairs followed by a default, like Domino's `@If`: `v.ifElse(cond1, val1, cond2, val2, default)`
+- **Lists:** `union()`, `split()`
+- **Folders:** `folders()`, `inFolder()` (see [Folders (filing)](#folders-filing))
 
 The full language guide lives in the `mindoodb-view-language` package. The SDK re-exports `createViewLanguage()` for convenience.
+
+### Folders (filing)
+
+Folders let users file documents into named folders **without changing the documents**: each filed document gets a small sidecar document in a filing database, holding the folders it is in. Moving a document is one small change of that sidecar. So an app can file mail it may only read, keep private folders over shared documents (a personal database as filing database), and put documents of several databases into one folder. One view shows all folders of a design at once, with the folder as a category — counts and unread totals come from the view.
+
+```ts
+const db = await session.openDatabase("main");
+const filing = db.filing("mail");                       // a filing store in this database
+
+const projects = await filing.createFolder({ name: "Projects" });   // { folderId: "fld_…", name, parentId, role, design }
+await filing.createFolder({ name: "Inbox", folderId: "inbox", role: "inbox" }); // fixed id: devices converge
+await filing.add(docId, projects.folderId);              // file a document of this database
+await filing.add({ databaseId: "crm", docId: dealId }, projects.folderId); // …or of another mapped database
+await filing.move(docId, { from: "inbox", to: projects.folderId });       // one small sidecar change
+await filing.move(docId, { to: projects.folderId });     // leave every other folder of the store
+await filing.remove(docId, projects.folderId);           // without folder ids: out of every folder
+await filing.foldersOf(docId);                           // ["fld_…"]
+await filing.count(projects.folderId);
+const page = await filing.contents(projects.folderId, { limit: 100 }); // { items: [{ databaseId, docId, filedAt }], nextCursor }
+await filing.renameFolder(projects.folderId, "Projects 2026");
+await filing.deleteFolder(projects.folderId);            // { keepFiling: true } keeps the memberships hidden
+await filing.listFolders();
+```
+
+- **Capabilities:** filing needs `update` on the filing database; for a document of another database, `read` on that database is enough — the filed document is never written. Reads (`foldersOf`, `contents`, `listFolders` …) need `read`.
+- **References:** a plain string is a document id in the filing database; `{ databaseId, docId }` names a document of another database by the app's binding id. Haven stores the physical identity, so references stay valid across devices and tenants. `contents()` reports `databaseId: null` for documents of databases the app has not mapped.
+- **Folder ids** are stable (views categorize by them), so renaming a folder changes no row. They must not contain a backslash.
+
+**Views with folders.** Join a filing store with `filingStores` and use `v.folders(name)` (the folder ids of a document — a multi-value category) and `v.inFolder(name, folderId?)` (a filter, AND-combined with the rest):
+
+```ts
+const v = createViewLanguage<{ subject: string; receivedAt: string; isRead: boolean; mailboxTags: string }>();
+
+const navigator = await session.createViewNavigator({
+  databaseIds: ["main"],
+  filingStores: [{ name: "mail", databaseId: "main", store: "mail" }],
+  definition: {
+    id: "mail-by-folder-v1",
+    title: "Mail by folder",
+    filter: { mode: "expression", expression: v.and(v.eq(v.field("type"), "message"), v.inFolder("mail")) },
+    columns: [
+      { name: "folder", role: "category", expression: v.folders("mail"), sorting: "ascending" },
+      { name: "receivedAt", role: "sort", expression: v.field("receivedAt"), sorting: "descending" },
+      { name: "subject", role: "display", expression: v.field("subject") },
+      { name: "unread", role: "total", expression: v.ifElse(v.field("isRead"), 0, 1), totalMode: "sum" },
+    ],
+  },
+  options: { includeDocuments: false },               // just the folders, for counters
+});
+
+const { entries } = await navigator.entriesForward({ limit: 500 });
+for (const folder of entries) {
+  // Category entries carry the totals of total columns, and the document count.
+  console.log(folder.categoryValue, folder.columnValues.unread, folder.descendantDocumentCount);
+}
+```
+
+- Filing changes update the view live (`onDidUpdate`), also when the filing database is not one of the view's `databaseIds`.
+- `v.union(a, b, …)` and `v.split(text, separator)` combine folders from different sources, e.g. folders a server sync writes into the document plus own folders: `v.union(v.split(v.field("mailboxTags"), "|"), v.folders("mail"))`.
+- A filter `v.inFolder(name, "<folderId>")` (alone or in a top-level `v.and`) reads only that folder's members — a cheap view for one folder with its own columns.
+- `documents.query` / `liveQuery` cannot evaluate folder expressions; use a view.
+
+**Several folders as one list.** The open option `rootCategoryPaths` reads several categories of the same view as one list, merged by the view's document sort columns, each document once — e.g. "inbox of all accounts", or folders with the same name merged. Switching which folders are shown only opens another navigator over the same persisted view; nothing is rebuilt:
+
+```ts
+const inboxes = await session.createViewNavigator({
+  databaseIds: ["main"],
+  filingStores: [{ name: "mail", databaseId: "main", store: "mail" }],
+  definition: mailByFolder,                            // the same definition (same id) as above
+  options: { rootCategoryPaths: [["acc1/inbox"], ["acc2/INBOX"], ["inbox"]] },
+});
+const first = await inboxes.entriesForward({ limit: 50 });  // documents only, newest first
+const next = await inboxes.entriesForward({ startPosition: first.nextPosition!, limit: 50 });
+```
+
+In the test helpers (`mindoodb-app-sdk/testing`) filing works in memory with the same semantics, including capability checks, live view updates and `rootCategoryPaths`.
 
 ## Testing without Haven
 
@@ -2803,6 +2881,7 @@ Host-kept key/value state, the only durable storage a hosted app has. See [Stora
 | `setFulltextSetup(config)`   | `Promise<void>`                                |
 | `getSummarySetup()`          | `Promise<MindooDBAppSummarySetup \| null>`     |
 | `setSummarySetup(config)`    | `Promise<void>`                                |
+| `filing(store)`              | `MindooDBAppFilingApi` (folders, see above)    |
 
 ### MindooDBAppDocumentApi
 

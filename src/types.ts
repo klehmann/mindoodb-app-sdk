@@ -4397,6 +4397,11 @@ export interface MindooDBAppViewEntry {
   parentKey: string | null;
   categoryPath: unknown[];
   categoryValue: unknown | null;
+  /**
+   * Column values by column name. On category entries the total columns
+   * (`role: "total"`) hold the category's sum/average — e.g. unread
+   * messages per folder.
+   */
   columnValues: Record<string, unknown>;
   childCount?: number;
   descendantDocumentCount?: number;
@@ -4424,6 +4429,16 @@ export interface MindooDBAppViewNavigatorOpenOptions {
   rootCategoryPath?: unknown[];
   /** Restrict the navigator to the subtree below this entry key (alternative to `rootCategoryPath`). */
   rootEntryKey?: string;
+  /**
+   * Read the documents of SEVERAL categories as one list, merged by the
+   * view's document sort columns, each document once — e.g. the inbox
+   * folders of several accounts from one "mail by folder" view, without
+   * rebuilding it. Each path is a category-value path from the top, like
+   * `["acc1/inbox"]`. The navigator then yields documents only (no
+   * categories); positions stay valid paging tokens. Takes precedence over
+   * `rootCategoryPath` / `rootEntryKey`.
+   */
+  rootCategoryPaths?: unknown[][];
 }
 
 /** Input used when creating a dynamic view and immediately opening a navigator. */
@@ -4432,6 +4447,13 @@ export interface MindooDBAppCreateViewNavigatorInput {
   definition: MindooDBAppViewDefinition;
   categorizationStyle?: MindooDBAppConfiguredViewCategorizationStyle;
   options?: MindooDBAppViewNavigatorOpenOptions;
+  /**
+   * Filing stores the view joins, so its expressions can use
+   * `v.folders(name)` (folder ids of a document — typically a multi-value
+   * category) and `v.inFolder(name, folderId?)` (a filter). Needs `read` on
+   * each filing database. Filing changes update the view live.
+   */
+  filingStores?: MindooDBAppViewFilingStore[];
   /**
    * Force the host to index from fully materialized documents instead of
    * the document summary buffer. Expensive by design — without it the host
@@ -4817,6 +4839,117 @@ export interface MindooDBAppAttachmentApi {
 }
 
 /** Database handle returned from `session.openDatabase()`. */
+/**
+ * A document to file, as the app names it: a document id in the filing
+ * database itself, or `{ databaseId, docId }` for a document of another
+ * database the app has opened (its logical binding id — the host stores the
+ * physical identity, so references stay valid across tenants and devices).
+ */
+export type MindooDBAppFilingRef = string | { databaseId?: string; docId: string };
+
+/** A filed document, as listed by {@link MindooDBAppFilingApi.contents}. */
+export interface MindooDBAppFilingEntry {
+  /**
+   * The app's binding id of the database the document lives in, or `null`
+   * when that database is not bound to this app (the document can then not
+   * be opened by the app).
+   */
+  databaseId: string | null;
+  docId: string;
+  /** When the document was filed into the folder (epoch ms). */
+  filedAt: number;
+}
+
+/** A folder of a filing store. */
+export interface MindooDBAppFilingFolder {
+  /** Stable id — the value `folders()` yields and view categories use. */
+  folderId: string;
+  name: string;
+  /** Parent folder for hierarchies, `null` for top-level folders. */
+  parentId: string | null;
+  /** System role such as `"inbox"`, `null` for user folders. */
+  role: string | null;
+  /** View design the folder is shown with, `null` for the default. */
+  design: string | null;
+}
+
+/** Input of {@link MindooDBAppFilingApi.createFolder}. */
+export interface MindooDBAppCreateFolderInput {
+  name: string;
+  /**
+   * Fixed folder id, e.g. `"inbox"` for system folders every device creates
+   * (they converge on one definition). Omit to generate one. No backslash.
+   */
+  folderId?: string;
+  parentId?: string | null;
+  role?: string | null;
+  design?: string | null;
+}
+
+/** One page of {@link MindooDBAppFilingApi.contents}. */
+export interface MindooDBAppFilingContentsPage {
+  items: MindooDBAppFilingEntry[];
+  /** Pass back as `cursor` for the next page; `null` at the end. */
+  nextCursor: string | null;
+}
+
+/**
+ * Folders ("filing") of one filing store in a database — see
+ * {@link MindooDBAppDatabase.filing}.
+ *
+ * Filing never changes the filed document: each filed document gets a small
+ * sidecar document in this (the filing) database holding its folders. So
+ * filing needs the `update` capability on the filing database only; for a
+ * document of another database, `read` access to that database is enough.
+ * Show folders in a view with `filingStores` on `createViewNavigator` and the
+ * expressions `v.folders(name)` / `v.inFolder(name, folderId?)`.
+ */
+export interface MindooDBAppFilingApi {
+  /** Name of the filing store. */
+  readonly store: string;
+  /** File a document into one or more folders (`update`). */
+  add(ref: MindooDBAppFilingRef, folderIds: string | string[]): Promise<void>;
+  /** Remove a document from folders; without `folderIds` from all folders of the store (`update`). */
+  remove(ref: MindooDBAppFilingRef, folderIds?: string | string[]): Promise<void>;
+  /**
+   * Move a document — one small change of its sidecar (`update`). Without
+   * `from` it leaves every other folder of the store.
+   */
+  move(ref: MindooDBAppFilingRef, options: { from?: string | string[]; to: string | string[] }): Promise<void>;
+  /** Folder ids the document is filed in (`read`). */
+  foldersOf(ref: MindooDBAppFilingRef): Promise<string[]>;
+  /** Documents in a folder, oldest filing first, paged (`read`). */
+  contents(folderId: string, options?: { limit?: number; cursor?: string | null }): Promise<MindooDBAppFilingContentsPage>;
+  /** Number of documents in a folder (`read`). */
+  count(folderId: string): Promise<number>;
+  /** Create a folder, or revive a deleted one with the same `folderId` (`update`). */
+  createFolder(input: MindooDBAppCreateFolderInput): Promise<MindooDBAppFilingFolder>;
+  /** Change name, parent, role or design (`update`). */
+  updateFolder(folderId: string, changes: Partial<Omit<MindooDBAppCreateFolderInput, "folderId">>): Promise<void>;
+  /** Rename a folder; filed rows do not change, views categorize by folder id (`update`). */
+  renameFolder(folderId: string, name: string): Promise<void>;
+  /**
+   * Delete a folder (`update`). Documents are removed from it unless
+   * `keepFiling` is set (their memberships then stay hidden until a folder
+   * with the same id is created again).
+   */
+  deleteFolder(folderId: string, options?: { keepFiling?: boolean }): Promise<void>;
+  /** A folder, or `null` when unknown or deleted (`read`). */
+  getFolder(folderId: string): Promise<MindooDBAppFilingFolder | null>;
+  /** All folders of the store (`read`). */
+  listFolders(): Promise<MindooDBAppFilingFolder[]>;
+}
+
+/** A filing store joined into a view (see {@link MindooDBAppCreateViewNavigatorInput.filingStores}). */
+export interface MindooDBAppViewFilingStore {
+  /** Name the view's expressions use: `v.folders(name)`, `v.inFolder(name, …)`. */
+  name: string;
+  /** Binding id of the filing database. */
+  databaseId: string;
+  /** Filing store in that database (`database.filing(store)`). */
+  store: string;
+}
+
 export interface MindooDBAppDatabase {
   /** Metadata (id, title, role, granted capabilities) of this database binding. */
   info(): Promise<MindooDBAppDatabaseInfo>;
@@ -4893,6 +5026,13 @@ export interface MindooDBAppDatabase {
    * {@link setFulltextSetup}.
    */
   setSummarySetup(config: MindooDBAppSummarySetup | null): Promise<void>;
+  /**
+   * The filing store `store` of this database: folders plus the documents
+   * filed into them, without changing the documents (see
+   * {@link MindooDBAppFilingApi}). Synchronous — calls go to the host when
+   * used.
+   */
+  filing(store: string): MindooDBAppFilingApi;
 }
 
 /** Request to open a host-owned encrypted channel to a tenant-joined service. */
