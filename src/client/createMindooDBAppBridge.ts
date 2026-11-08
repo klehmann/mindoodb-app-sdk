@@ -137,6 +137,8 @@ import type {
   MindooDBAppNotifyInput,
   MindooDBAppNotifyResult,
   MindooDBAppDeviceInfo,
+  MindooDBAppFilingApi,
+  MindooDBAppFilingRef,
 } from "../types";
 import { pageUsers } from "../directoryPaging";
 import { searchDirectoryPeople, SEARCH_USERS_DEFAULT_LIMIT, SEARCH_USERS_MAX_LIMIT } from "../directorySearch";
@@ -1726,6 +1728,56 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
       databaseId: this.databaseId,
       config,
     });
+  }
+
+  /** The filing store `store` of this database (folders without changing documents). */
+  filing(store: string): MindooDBAppFilingApi {
+    if (typeof store !== "string" || !store) {
+      throw new Error("database.filing(store): store must be a non-empty string.");
+    }
+    const rpc = this.rpc;
+    const databaseId = this.databaseId;
+    const call = <T = void>(method: string, params: Record<string, unknown> = {}) =>
+      rpc.call<T>(`filing.${method}`, { databaseId, store, ...params });
+    const toFolderIds = (value: string | string[]) => (Array.isArray(value) ? [...value] : [value]);
+    const toRef = (ref: MindooDBAppFilingRef) => (typeof ref === "string" ? { docId: ref } : { ...ref });
+    return {
+      store,
+      add: async (ref, folderIds) => {
+        await call("add", { ref: toRef(ref), folderIds: toFolderIds(folderIds) });
+      },
+      remove: async (ref, folderIds) => {
+        await call("remove", {
+          ref: toRef(ref),
+          ...(folderIds === undefined ? {} : { folderIds: toFolderIds(folderIds) }),
+        });
+      },
+      move: async (ref, options) => {
+        await call("move", {
+          ref: toRef(ref),
+          to: toFolderIds(options.to),
+          ...(options.from === undefined ? {} : { from: toFolderIds(options.from) }),
+        });
+      },
+      foldersOf: async (ref) => (await call<{ folderIds: string[] }>("foldersOf", { ref: toRef(ref) })).folderIds,
+      contents: async (folderId, options) =>
+        await call("contents", { folderId, limit: options?.limit, cursor: options?.cursor ?? null }),
+      count: async (folderId) => (await call<{ count: number }>("count", { folderId })).count,
+      createFolder: async (input) => (await call<{ folder: Awaited<ReturnType<MindooDBAppFilingApi["createFolder"]>> }>("createFolder", { input })).folder,
+      updateFolder: async (folderId, changes) => {
+        await call("updateFolder", { folderId, changes });
+      },
+      renameFolder: async (folderId, name) => {
+        await call("updateFolder", { folderId, changes: { name } });
+      },
+      deleteFolder: async (folderId, options) => {
+        await call("deleteFolder", { folderId, keepFiling: options?.keepFiling === true });
+      },
+      getFolder: async (folderId) =>
+        (await call<{ folder: Awaited<ReturnType<MindooDBAppFilingApi["getFolder"]>> }>("getFolder", { folderId })).folder,
+      listFolders: async () =>
+        (await call<{ folders: Awaited<ReturnType<MindooDBAppFilingApi["listFolders"]>> }>("listFolders")).folders,
+    };
   }
 
   /** Reads the summary buffer configuration from the synced `dbsetup` document. */
