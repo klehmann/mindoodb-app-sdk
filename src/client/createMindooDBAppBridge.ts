@@ -1777,6 +1777,11 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
         (await call<{ folder: Awaited<ReturnType<MindooDBAppFilingApi["getFolder"]>> }>("getFolder", { folderId })).folder,
       listFolders: async () =>
         (await call<{ folders: Awaited<ReturnType<MindooDBAppFilingApi["listFolders"]>> }>("listFolders")).folders,
+      prune: async (options) =>
+        await call("prune", {
+          ...(options?.databaseIds ? { databaseIds: [...options.databaseIds] } : {}),
+          ...(options?.gracePeriodMs !== undefined ? { gracePeriodMs: options.gracePeriodMs } : {}),
+        }),
     };
   }
 

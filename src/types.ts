@@ -4938,6 +4938,23 @@ export interface MindooDBAppFilingApi {
   getFolder(folderId: string): Promise<MindooDBAppFilingFolder | null>;
   /** All folders of the store (`read`). */
   listFolders(): Promise<MindooDBAppFilingFolder[]>;
+  /**
+   * Take deleted documents out of all their folders (`update`). Only
+   * documents that are really deleted, and deleted longer ago than the grace
+   * period (default 30 days, so an undelete keeps the folders); documents
+   * the user cannot read are never touched. Documents of the filing
+   * database are also cleaned up automatically; pass `databaseIds` to check
+   * filed documents of other mapped databases too.
+   */
+  prune(options?: { databaseIds?: string[]; gracePeriodMs?: number }): Promise<MindooDBAppFilingPruneResult>;
+}
+
+/** Result of {@link MindooDBAppFilingApi.prune}. */
+export interface MindooDBAppFilingPruneResult {
+  /** Documents taken out of all their folders. */
+  removed: number;
+  /** Deleted documents still within the grace period. */
+  pending: number;
 }
 
 /** A filing store joined into a view (see {@link MindooDBAppCreateViewNavigatorInput.filingStores}). */

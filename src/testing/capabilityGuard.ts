@@ -71,6 +71,7 @@ const FILING_REQUIREMENTS: Record<string, Requirement> = {
   updateFolder: ["update"],
   renameFolder: ["update"],
   deleteFolder: ["update"],
+  prune: ["update"],
 };
 
 export class MockForbiddenError extends Error {
