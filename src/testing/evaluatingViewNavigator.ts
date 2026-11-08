@@ -174,7 +174,8 @@ function serializeEntry(
     parentKey: parent && !parent.isRoot() ? parent.getPositionStr() : null,
     categoryPath: getCategoryPath(entry),
     categoryValue: entry.isCategory() ? entry.getCategoryValue() : null,
-    columnValues: entry.getColumnValues(),
+    // Category entries carry the totals of total columns, as in Haven.
+    columnValues: entry.isCategory() ? { ...entry.getColumnValues(), ...entry.getTotalValues() } : entry.getColumnValues(),
     childCount: entry.getChildCount(),
     descendantDocumentCount: entry.getDescendantDocumentCount(),
     descendantCount: entry.getDescendantCount(),

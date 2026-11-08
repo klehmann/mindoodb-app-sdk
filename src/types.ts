@@ -4397,6 +4397,11 @@ export interface MindooDBAppViewEntry {
   parentKey: string | null;
   categoryPath: unknown[];
   categoryValue: unknown | null;
+  /**
+   * Column values by column name. On category entries the total columns
+   * (`role: "total"`) hold the category's sum/average — e.g. unread
+   * messages per folder.
+   */
   columnValues: Record<string, unknown>;
   childCount?: number;
   descendantDocumentCount?: number;

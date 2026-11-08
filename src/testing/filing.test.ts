@@ -27,6 +27,7 @@ const folderView: MindooDBAppViewDefinition = {
     { name: "folder", role: "category", expression: folders("mail"), sorting: "ascending" },
     { name: "receivedAt", role: "sort", expression: field("receivedAt"), sorting: "descending" },
     { name: "subject", role: "display", expression: field("subject") },
+    { name: "count", role: "total", expression: literal(1), totalMode: "sum" },
   ],
 };
 
@@ -103,6 +104,15 @@ describe("views with filing stores (mock host, over the bridge)", () => {
     const ids = async () =>
       (await navigator.entriesForward({ limit: 100 })).entries.map((e) => (e.categoryPath ?? []).join("\\") + ":" + e.docId);
     expect(await ids()).toEqual(["acc1/inbox:a1", "acc1/inbox:a2", "acc1/inbox:b2", "acc2/INBOX:b1", "acc2/INBOX:b2"]);
+
+    const categories = await session.createViewNavigator({
+      databaseIds: ["mail"],
+      definition: { ...folderView, id: "mail-by-folder-categories" },
+      filingStores: [{ name: "mail", databaseId: "mail", store: "mail" }],
+      options: { includeDocuments: false },
+    });
+    const top = (await categories.entriesForward({ limit: 10 })).entries.map((e) => [e.categoryValue, e.columnValues.count]);
+    expect(top).toEqual([["acc1/inbox", 3], ["acc2/INBOX", 2]]);
 
     let updates = 0;
     navigator.onDidUpdate(() => updates++);
