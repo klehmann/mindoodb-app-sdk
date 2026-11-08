@@ -87,6 +87,7 @@ import type {
   MindooDBAppDatabaseInfo,
   MindooDBAppOpenDatabaseOptions,
   MindooDBAppDirectoryApi,
+  MindooDBAppCalendarApi,
   MindooDBAppDirectoryPerson,
   MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
@@ -171,6 +172,7 @@ import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
+import { answerFreeBusyFromMock, type MockFreeBusyPerson } from "../freeBusy";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
 
 const PROTOCOL = "mindoodb-app-bridge";
@@ -2812,6 +2814,7 @@ type MockDatabaseMethods = {
   identity?: Partial<MindooDBAppIdentityApi>;
   timestamps?: Partial<MindooDBAppTimestampApi>;
   directory?: Partial<MindooDBAppDirectoryApi>;
+  calendar?: Partial<MindooDBAppCalendarApi>;
 };
 
 /** Lower-case hex SHA-256, or `null` where WebCrypto is unavailable. */
@@ -2852,6 +2855,8 @@ interface MockDirectorySource {
   names: () => ReadonlyMap<string, MindooDBAppDirectoryPerson>;
   gateways: () => MindooDBAppMailGateway[];
   addresses: (usernames: readonly string[]) => MindooDBAppMailAddresses[];
+  /** Published busy times, for `calendar.freeBusy`. */
+  freeBusy: () => readonly MockFreeBusyPerson[];
 }
 
 const EMPTY_DIRECTORY: MockDirectorySource = {
@@ -2859,6 +2864,7 @@ const EMPTY_DIRECTORY: MockDirectorySource = {
   names: () => new Map(),
   gateways: () => [],
   addresses: (usernames) => usernames.map((username) => ({ username, addresses: [] })),
+  freeBusy: () => [],
 };
 
 function createDatabaseHandle(
@@ -3763,6 +3769,13 @@ function createDatabaseHandle(
     },
   };
 
+  // From the `freeBusy` option: everyone else is "unknown", like a member who never published.
+  const defaultCalendar: MindooDBAppCalendarApi = {
+    async freeBusy(request) {
+      return answerFreeBusyFromMock(directorySource.freeBusy(), request);
+    },
+  };
+
   const defaultViews: MockViewApi = {
     async create(_input: MindooDBAppCreateViewNavigatorInput) {
       return await defaultViewFactory();
@@ -3876,6 +3889,10 @@ function createDatabaseHandle(
       ...defaultDirectory,
       ...methods.directory,
     },
+    calendar: {
+      ...defaultCalendar,
+      ...methods.calendar,
+    },
     async getFulltextSetup() {
       return fulltextSetup === null ? null : { ...fulltextSetup };
     },
@@ -3969,6 +3986,7 @@ type MockSessionState = {
   getDirectoryUsers: () => string[];
   setDirectoryPeople: (people: readonly MindooDBAppDirectoryPerson[]) => void;
   setMailGateways: (configs: readonly MindooDBAppMailGatewayConfig[]) => void;
+  setFreeBusy: (people: readonly MockFreeBusyPerson[]) => void;
   /** Document stores by database id, for `syncMockReplicas`. */
   replicaStores: () => Map<string, Map<string, MockStoredDocument>>;
   /** After a sync wrote into a store: live queries refresh as after any write. */
@@ -4337,11 +4355,13 @@ function createMockSessionState(
   };
   setDirectoryPeople(options.directoryPeople ?? []);
   let mailGatewayConfigs: MindooDBAppMailGatewayConfig[] = [...(options.mailGateways ?? [])];
+  let freeBusyPeople: MockFreeBusyPerson[] = [...(options.freeBusy ?? [])];
   const directorySource: MockDirectorySource = {
     users: () => directoryUsers,
     names: () => directoryNames,
     gateways: () => mailGatewaysFromConfigs(mailGatewayConfigs, launchContext.user.username),
     addresses: (usernames) => mailAddressesFromConfigs(mailGatewayConfigs, usernames),
+    freeBusy: () => freeBusyPeople,
   };
   const setCapabilities = (databaseId: string, capabilities: MindooDBAppCapability[]) => {
     const entry = databaseInfos.find((info) => info.id === databaseId);
@@ -4740,6 +4760,9 @@ function createMockSessionState(
     setMailGateways(configs) {
       mailGatewayConfigs = [...configs];
     },
+    setFreeBusy(people) {
+      freeBusyPeople = [...people];
+    },
     replicaStores: () => databaseDocumentStores,
     notifyReplicaChange: (databaseId) => databaseLiveQueryRefreshers.get(databaseId)?.(),
     embedHost,
@@ -5055,6 +5078,13 @@ export interface CreateMockMindooDBAppSessionOptions {
    */
   mailGateways?: readonly MindooDBAppMailGatewayConfig[];
   /**
+   * Busy times members published, for `calendar.freeBusy()` on every database (it is
+   * tenant-wide in Haven). People not listed answer `"unknown"`; `state: "unpublished"`
+   * answers without times. Busy times are clipped to the asked range and merged, and
+   * `computedAt` defaults to the time of the call.
+   */
+  freeBusy?: readonly MockFreeBusyPerson[];
+  /**
    * Automerge actor (hex) of the app's writes in `automerge: true` databases. Mocks
    * that are synced with each other (`syncMockReplicas`, the test host's two-user
    * mode) need distinct actors, like two devices.
@@ -5154,6 +5184,8 @@ export interface MockMindooDBAppSessionController {
   setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
   /** Replaces the gateway configuration documents (see `mailGateways`). */
   setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
+  /** Replaces the published busy times (see `freeBusy`). */
+  setFreeBusy(people: readonly MockFreeBusyPerson[]): void;
   /**
    * Writes `input` to a document as another device would, then syncs it in:
    * live queries update like after any write. With `automerge: true` on the
@@ -5446,6 +5478,7 @@ export function createMockMindooDBAppSession(
     setDirectoryUsers: state.setDirectoryUsers,
     setDirectoryPeople: state.setDirectoryPeople,
     setMailGateways: state.setMailGateways,
+    setFreeBusy: state.setFreeBusy,
     applyRemoteUpdate: state.applyRemoteUpdate,
     emitThemeChange: state.emitThemeChange,
     emitViewportChange: state.emitViewportChange,
@@ -5592,6 +5625,8 @@ export interface FakeBridgeHostController {
   setDirectoryPeople(people: readonly MindooDBAppDirectoryPerson[]): void;
   /** See {@link CreateMockMindooDBAppSessionOptions.mailGateways}. */
   setMailGateways(configs: readonly MindooDBAppMailGatewayConfig[]): void;
+  /** See {@link CreateMockMindooDBAppSessionOptions.freeBusy}. */
+  setFreeBusy(people: readonly MockFreeBusyPerson[]): void;
   /** See {@link MockMindooDBAppSessionController.applyRemoteUpdate}. */
   applyRemoteUpdate(
     databaseId: string,
@@ -6607,6 +6642,12 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .directory.mailAddressesFor(Array.isArray(params.usernames) ? params.usernames.map(String) : []);
+      case "calendar.freeBusy":
+        return await state.getDatabase(String(params.databaseId)).calendar.freeBusy({
+          usernames: Array.isArray(params.usernames) ? params.usernames.map(String) : [],
+          from: String(params.from),
+          to: String(params.to),
+        });
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =
@@ -7215,6 +7256,7 @@ export function createFakeBridgeHost(
     getDirectoryUsers: state.getDirectoryUsers,
     setDirectoryPeople: state.setDirectoryPeople,
     setMailGateways: state.setMailGateways,
+    setFreeBusy: state.setFreeBusy,
     applyRemoteUpdate: state.applyRemoteUpdate,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
@@ -7405,3 +7447,4 @@ export {
   type TwoUserTestHost,
 } from "./twoUserTestHost";
 export { MockForbiddenError } from "./capabilityGuard";
+export type { MockFreeBusyPerson } from "../freeBusy";

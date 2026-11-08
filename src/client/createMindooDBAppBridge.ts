@@ -89,6 +89,8 @@ import type {
   MindooDBAppDirectoryPerson,
   MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
+  MindooDBAppCalendarApi,
+  MindooDBAppFreeBusyResult,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -138,6 +140,7 @@ import type {
 } from "../types";
 import { pageUsers } from "../directoryPaging";
 import { searchDirectoryPeople, SEARCH_USERS_DEFAULT_LIMIT, SEARCH_USERS_MAX_LIMIT } from "../directorySearch";
+import { normalizeFreeBusyRequest, unknownFreeBusy } from "../freeBusy";
 import { installDownloadCapture } from "../downloadCapture";
 import { installHostFocusCapture } from "../hostFocus";
 import { applySafeAreaVariables } from "../safeArea";
@@ -1007,6 +1010,7 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly identity: MindooDBAppIdentityApi;
   public readonly timestamps: MindooDBAppTimestampApi;
   public readonly directory: MindooDBAppDirectoryApi;
+  public readonly calendar: MindooDBAppCalendarApi;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -1421,6 +1425,29 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
             throw error;
           }
           return usernames.map((username) => ({ username, addresses: [] }));
+        }
+      },
+    };
+
+    this.calendar = {
+      freeBusy: async (request) => {
+        const { usernames, from, to } = normalizeFreeBusyRequest(request);
+        if (!usernames.length) {
+          return [];
+        }
+        try {
+          const found = await this.rpc.call<MindooDBAppFreeBusyResult[]>("calendar.freeBusy", {
+            databaseId: this.databaseId,
+            usernames,
+            from,
+            to,
+          });
+          return Array.isArray(found) ? found : unknownFreeBusy(usernames);
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return unknownFreeBusy(usernames);
         }
       },
     };
