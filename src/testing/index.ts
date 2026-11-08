@@ -3866,7 +3866,16 @@ function createDatabaseHandle(
   let summarySetup: MindooDBAppSummarySetup | null =
     definition.summarySetup ?? null;
 
-  const filing = new MockFilingRegistry(definition.info.id, () => peers.documentsChanged(definition.info.id));
+  const filing = new MockFilingRegistry(
+    definition.info.id,
+    () => peers.documentsChanged(definition.info.id),
+    (databaseId, docId) => {
+      const document = peers.getDocuments(databaseId)?.get(docId);
+      if (!document?.isDeleted || document.inaccessible) return null;
+      const at = document.updatedAt ? Date.parse(document.updatedAt) : NaN;
+      return Number.isFinite(at) ? at : 0;
+    },
+  );
   const databaseHandle: MindooDBAppDatabase = {
     filing: (store: string) => filing.api(store),
     async info() {
@@ -6397,7 +6406,8 @@ export function createFakeBridgeHost(
       case "filing.updateFolder":
       case "filing.deleteFolder":
       case "filing.getFolder":
-      case "filing.listFolders": {
+      case "filing.listFolders":
+      case "filing.prune": {
         const filing = state.getDatabase(String(params.databaseId)).filing(String(params.store));
         const ref = params.ref as { databaseId?: string; docId: string };
         const folderIds = params.folderIds as string[] | undefined;
@@ -6433,6 +6443,11 @@ export function createFakeBridgeHost(
             return { ok: true };
           case "filing.getFolder":
             return { folder: await filing.getFolder(String(params.folderId)) };
+          case "filing.prune":
+            return await filing.prune({
+              ...(Array.isArray(params.databaseIds) ? { databaseIds: params.databaseIds as string[] } : {}),
+              ...(typeof params.gracePeriodMs === "number" ? { gracePeriodMs: params.gracePeriodMs } : {}),
+            });
           default:
             return { folders: await filing.listFolders() };
         }

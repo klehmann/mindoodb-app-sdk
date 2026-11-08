@@ -37,12 +37,19 @@ function toList(value: string | string[]): string[] {
 }
 
 /** All filing stores of one mock database. */
+/** Deletion state of a mock document: `null` = exists or unknown, else deleted at (epoch ms). */
+export type MockDeletionLookup = (databaseId: string, docId: string) => number | null;
+
+/** Default grace period before deleted documents leave their folders (as in MindooDB). */
+export const MOCK_FILING_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class MockFilingRegistry {
   private readonly stores = new Map<string, StoreState>();
 
   constructor(
     private readonly databaseId: string,
     private readonly onChange: () => void,
+    private readonly deletedAt: MockDeletionLookup = () => null,
   ) {}
 
   private state(store: string): StoreState {
@@ -194,6 +201,27 @@ export class MockFilingRegistry {
         return folder && !folder.deleted ? publicFolder(folder) : null;
       },
       listFolders: async () => [...state().folders.values()].filter((f) => !f.deleted).map(publicFolder),
+      prune: async (options) => {
+        const grace = Math.max(0, options?.gracePeriodMs ?? MOCK_FILING_PRUNE_GRACE_MS);
+        const databases = new Set([this.databaseId, ...(options?.databaseIds ?? [])]);
+        let removed = 0;
+        let pending = 0;
+        for (const [key, map] of state().members) {
+          if (map.size === 0) continue;
+          const [databaseId, docId] = key.split("\u0000");
+          if (!databaseId || !docId || !databases.has(databaseId)) continue;
+          const at = this.deletedAt(databaseId, docId);
+          if (at === null) continue;
+          if (Date.now() - at < grace) {
+            pending++;
+            continue;
+          }
+          map.clear();
+          removed++;
+        }
+        if (removed) changed();
+        return { removed, pending };
+      },
     };
   }
 }

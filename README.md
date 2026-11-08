@@ -2594,6 +2594,7 @@ await filing.listFolders();
 - **Capabilities:** filing needs `update` on the filing database; for a document of another database, `read` on that database is enough — the filed document is never written. Reads (`foldersOf`, `contents`, `listFolders` …) need `read`.
 - **References:** a plain string is a document id in the filing database; `{ databaseId, docId }` names a document of another database by the app's binding id. Haven stores the physical identity, so references stay valid across devices and tenants. `contents()` reports `databaseId: null` for documents of databases the app has not mapped.
 - **Folder ids** are stable (views categorize by them), so renaming a folder changes no row. They must not contain a backslash.
+- **Deleted documents** leave their folders after a grace period (default 30 days, so an undelete keeps the folders): documents of the filing database automatically, documents of other databases with `await filing.prune({ databaseIds: ["crm"] })` (returns `{ removed, pending }`, needs `update`). Documents the user cannot read are never removed.
 
 **Views with folders.** Join a filing store with `filingStores` and use `v.folders(name)` (the folder ids of a document — a multi-value category) and `v.inFolder(name, folderId?)` (a filter, AND-combined with the rest):
 

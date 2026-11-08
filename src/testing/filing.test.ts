@@ -76,6 +76,34 @@ describe("database.filing (mock host)", () => {
   });
 });
 
+describe("filing.prune (mock host)", () => {
+  it("takes deleted documents out of their folders after the grace period", async () => {
+    const session = createMockMindooDBAppSession({
+      databases: [
+        { info: { id: "mail", title: "Mail", capabilities: ["read", "update", "delete"] }, documents: mails([["m1", 1], ["m2", 2]]) },
+        { info: { id: "crm", title: "CRM", capabilities: ["read", "delete"] }, documents: mails([["c1", 3]]) },
+      ],
+    });
+    const mail = await session.session.openDatabase("mail");
+    const crm = await session.session.openDatabase("crm");
+    const filing = mail.filing("mail");
+    await filing.add("m1", "inbox");
+    await filing.add("m2", "inbox");
+    await filing.add({ databaseId: "crm", docId: "c1" }, "inbox");
+    await mail.documents.delete("m1");
+    await crm.documents.delete("c1");
+
+    expect(await filing.prune()).toEqual({ removed: 0, pending: 1 }); // 30 days by default
+    expect(await filing.prune({ gracePeriodMs: 0 })).toEqual({ removed: 1, pending: 0 });
+    expect(await filing.foldersOf("m1")).toEqual([]);
+    expect(await filing.foldersOf("m2")).toEqual(["inbox"]);
+    // Other databases only when named.
+    expect(await filing.foldersOf({ databaseId: "crm", docId: "c1" })).toEqual(["inbox"]);
+    expect(await filing.prune({ databaseIds: ["crm"], gracePeriodMs: 0 })).toEqual({ removed: 1, pending: 0 });
+    expect(await filing.count("inbox")).toBe(1);
+  });
+});
+
 describe("views with filing stores (mock host, over the bridge)", () => {
   it("categorizes by folder, updates live and merges several categories", async () => {
     const mock = createMockMindooDBAppBridge({
