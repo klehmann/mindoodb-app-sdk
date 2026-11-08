@@ -6066,6 +6066,9 @@ export function createFakeBridgeHost(
           options: params.options as
             | MindooDBAppViewNavigatorOpenOptions
             | undefined,
+          ...(Array.isArray(params.filingStores)
+            ? { filingStores: params.filingStores as MindooDBAppCreateViewNavigatorInput["filingStores"] }
+            : {}),
         });
         viewSessions.set(navigatorId, navigator);
         navigator.onDidUpdate((stats) => {
