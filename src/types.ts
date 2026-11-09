@@ -1981,6 +1981,60 @@ export interface MindooDBAppActionsApi {
   onInvoked(handler: MindooDBAppActionInvokedHandler): () => void;
 }
 
+/** What `session.foreignContent.show` puts on screen. */
+export interface MindooDBAppForeignContentInput {
+  /**
+   * The element to show the content in. The SDK appends a frame with Haven's
+   * viewer page that is as wide as the element and as high as the content
+   * (see `onHeight`); give the element no fixed height.
+   */
+  container: HTMLElement;
+  /**
+   * The content's HTML (the body of an HTML mail). It runs no code in the viewer
+   * whatever it contains, but clean it as you would for showing it yourself.
+   */
+  html: string;
+  /** Load remote images (`https:`/`http:`). Default false: only `data:`/`blob:` images. */
+  remoteImages?: boolean;
+  /** Extra CSS for the content (plain text, no `@import` that could load anything). */
+  css?: string;
+  /** Accessible name of the frame, e.g. "Message body". */
+  title?: string;
+}
+
+/** Content shown by Haven's viewer; see {@link MindooDBAppForeignContentApi.show}. */
+export interface MindooDBAppForeignContentView {
+  /** The frame in the container. */
+  readonly frame: HTMLIFrameElement;
+  /** Shows other content, or the same with remote images allowed now. */
+  update(input: Partial<Pick<MindooDBAppForeignContentInput, "html" | "remoteImages" | "css">>): void;
+  /** The content's height in CSS pixels, after each layout change (the frame already has it). */
+  onHeight(listener: (height: number) => void): () => void;
+  /**
+   * A link in the content was clicked. Nothing opens by itself: the app decides
+   * (e.g. ask when `text` names another address than `href`, then open it).
+   */
+  onLink(listener: (link: { href: string; text: string }) => void): () => void;
+  /** After each render: how many remote images the content has (blocked unless `remoteImages`). */
+  onRendered(listener: (info: { remoteImages: number }) => void): () => void;
+  /** Removes the frame. */
+  close(): void;
+}
+
+/**
+ * `session.foreignContent`: content from outside (an HTML mail, a newsletter)
+ * shown under Haven's policy instead of the app's. A hosted app may not load
+ * images from the internet; Haven's viewer may, once the user allows it, and
+ * the content still runs no code and reaches nothing of the app.
+ */
+export interface MindooDBAppForeignContentApi {
+  /**
+   * Shows `html` in `container`. Rejects with code `unsupported` on a Haven
+   * that has no viewer yet: show the content yourself then.
+   */
+  show(input: MindooDBAppForeignContentInput): Promise<MindooDBAppForeignContentView>;
+}
+
 /** `session.reminders`: notifications at a time the app chooses (Haven's native app). */
 export interface MindooDBAppRemindersApi {
   /**
@@ -5331,6 +5385,11 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /**
+   * Content from outside (HTML mail) under Haven's policy, e.g. with remote
+   * images the app's own policy blocks. See {@link MindooDBAppForeignContentApi}.
+   */
+  foreignContent: MindooDBAppForeignContentApi;
   /** Quick actions from `actions` (iOS Shortcuts, Action Button). See {@link MindooDBAppActionsApi}. */
   actions: MindooDBAppActionsApi;
   /** Links to the app's documents that open in Haven. See {@link MindooDBAppLinksApi}. */

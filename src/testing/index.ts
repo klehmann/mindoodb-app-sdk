@@ -4653,6 +4653,12 @@ function createMockSessionState(
     },
     localFiles: mockLocalFiles.api,
     links: mockLinks.api,
+    // The mock has no viewer page: apps show the content themselves (as on an older Haven).
+    foreignContent: {
+      async show() {
+        throw Object.assign(new Error("This Haven has no viewer for foreign content."), { code: "unsupported" });
+      },
+    },
     reminders: {
       async schedule(request) {
         const at = request.at instanceof Date ? request.at.getTime() : request.at;
