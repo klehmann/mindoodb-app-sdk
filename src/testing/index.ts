@@ -807,7 +807,14 @@ type MockStoredDocument = MindooDBAppDocument & {
  * Mirrors the host projection of the encryption key id: a person-encrypted
  * document (`_encryptFor`) has no shareable named key, so it reports none.
  */
-function mockDecryptionKeyId(document: MockStoredDocument): { decryptionKeyId?: string } {
+function mockDecryptionKeyId(document: MockStoredDocument): {
+  decryptionKeyId?: string;
+  groupKeyDocId?: string;
+} {
+  if (document.decryptionKeyId?.startsWith("$sealed:")) {
+    // Encrypted with a group document's key series (`groupKeyDocId`).
+    return { groupKeyDocId: document.decryptionKeyId.slice("$sealed:".length) };
+  }
   if (!document.decryptionKeyId || document.data._encryptFor) {
     return {};
   }
@@ -3436,6 +3443,21 @@ function createDatabaseHandle(
       const encryptFor = Array.isArray(input.recipients)
         ? { _encryptFor: mockEncryptForMap(input.recipients) }
         : {};
+      if (input.groupKeyDocId !== undefined) {
+        // Like MindooDB: the group document must be a sealed document of this
+        // database. The mock does not model membership, so every caller "is" one.
+        if (input.recipients !== undefined || input.decryptionKeyId !== undefined) {
+          throw new Error("groupKeyDocId is mutually exclusive with recipients and decryptionKeyId");
+        }
+        const group = storedDocuments.get(input.groupKeyDocId);
+        if (!group || group.isDeleted || !group.data._encryptFor) {
+          throw new Error(
+            `group document "${input.groupKeyDocId}" does not exist in this database or was not created with recipients`,
+          );
+        }
+      }
+      const createKeyId =
+        input.groupKeyDocId !== undefined ? `$sealed:${input.groupKeyDocId}` : input.decryptionKeyId ?? "default";
       if (automergeMode) {
         const stored: MockStoredDocument = {
           id,
@@ -3443,7 +3465,7 @@ function createDatabaseHandle(
           attachments: [],
           updatedAt: createdAt,
           isDeleted: false,
-          decryptionKeyId: input.decryptionKeyId ?? "default",
+          decryptionKeyId: createKeyId,
         };
         persistMockAutomergeDocument(
           stored,
@@ -3478,7 +3500,7 @@ function createDatabaseHandle(
         data: structuredClone(created.data),
         attachments: [],
         isDeleted: false,
-        decryptionKeyId: input.decryptionKeyId ?? "default",
+        decryptionKeyId: createKeyId,
       };
       storedDocuments.set(created.id, stored);
       notifyLiveQueries();
