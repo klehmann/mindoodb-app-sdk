@@ -58,6 +58,11 @@ export {
   validateMindooDBAppAccepts,
   validateMindooDBAppActions,
   validateMindooDBAppDefinition,
+  MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN,
+  MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER,
+  mindoodbAppFamilyBindingId,
+  parseMindooDBAppFamilyBindingId,
+  resolveMindooDBAppFamilyDatabaseId,
 } from "./appDefinition";
 export type {
   MindooDBAppAcceptSpec,

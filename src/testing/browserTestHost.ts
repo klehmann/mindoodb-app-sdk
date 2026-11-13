@@ -227,6 +227,14 @@ export function mockDatabasesFromDefinition(
     .filter((database) => options.overrides?.[database.logicalDatabaseId]?.mapped !== false)
     .map((database) => {
       const override = options.overrides?.[database.logicalDatabaseId];
+      // A family's members are seeded as `"<family>:<memberId>"` keys and start subscribed.
+      const familyDocuments = database.family
+        ? Object.fromEntries(
+            Object.entries(seed)
+              .filter(([key]) => key.startsWith(`${database.logicalDatabaseId}:`))
+              .map(([key, documents]) => [key.slice(database.logicalDatabaseId.length + 1), documents ?? []]),
+          )
+        : undefined;
       return {
         info: {
           id: database.logicalDatabaseId,
@@ -234,8 +242,10 @@ export function mockDatabasesFromDefinition(
           capabilities: override?.capabilities
             ? [...new Set<MindooDBAppCapability>(override.capabilities)]
             : capabilitiesForDefinitionPermissions(database.permissions),
+          ...(database.family ? { family: database.logicalDatabaseId } : {}),
         },
-        documents: seed[database.logicalDatabaseId],
+        documents: database.family ? [] : seed[database.logicalDatabaseId],
+        ...(familyDocuments ? { familyDocuments } : {}),
         ...(options.automerge ? { automerge: true } : {}),
         ...(options.attachments === "none"
           ? {}
@@ -270,7 +280,8 @@ export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
   const params = new URLSearchParams(search);
   const settings: TestHostUrlSettings = { overrides: {} };
   for (const entry of params.getAll("db")) {
-    const separator = entry.indexOf(":");
+    // The last colon: family member ids (`rooms:abc`) contain one themselves.
+    const separator = entry.lastIndexOf(":");
     if (separator <= 0) continue;
     const id = entry.slice(0, separator);
     const list = entry.slice(separator + 1);
@@ -840,6 +851,8 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     for (const key of ["db", "enforce", "users", "locale", "theme"]) params.delete(key);
     const initial = new Map((hostOptions.databases ?? []).map((database) => [database.info.id, database]));
     for (const info of testHost.host.listDatabases()) {
+      // Family members take the family's capabilities; only the family is in the URL.
+      if (info.familyMemberId) continue;
       const requested = initial.get(info.id)?.info.capabilities ?? [];
       const same =
         requested.length === info.capabilities.length &&

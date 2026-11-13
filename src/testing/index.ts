@@ -162,8 +162,12 @@ import type {
   MindooDBAppAttachmentRef,
   MindooDBAppAttachmentAvailabilitySubscription,
   MindooDBAppBridgeAttachmentAvailabilityMessage,
+  MindooDBAppFamilyChange,
+  MindooDBAppFamilyDatabase,
 } from "../types";
 import { MINDOODB_APP_VALUE_TAG } from "../values";
+import { mindoodbAppFamilyBindingId, MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN } from "../appDefinition";
+import { createMemoryAttachments as createFamilyMemberAttachments, isMemoryAttachments } from "./memoryAttachments";
 import { toShareFilePayloads, type MindooDBAppShareFilePayload } from "../client/files";
 import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
@@ -3995,6 +3999,11 @@ type MockSessionState = {
   ) => MindooDBAppLaunchContext;
   listDatabaseInfos: () => MindooDBAppDatabaseInfo[];
   setDatabases: (definitions: MockMindooDBAppDatabaseDefinition[]) => void;
+  listFamily: (family: string) => MindooDBAppFamilyDatabase[];
+  openFamily: (family: string, memberId: string) => MindooDBAppFamilyDatabase;
+  subscribeFamily: (family: string, memberId: string) => MindooDBAppFamilyDatabase;
+  unsubscribeFamily: (family: string, memberId: string, removeLocalCopy: boolean) => void;
+  onFamilyChange: (listener: (change: MindooDBAppFamilyChange) => void) => () => void;
   setCapabilities: (databaseId: string, capabilities: MindooDBAppCapability[]) => void;
   setEnforceCapabilities: (enforce: boolean) => void;
   getEnforceCapabilities: () => boolean;
@@ -4272,6 +4281,100 @@ function createMockSessionState(
     },
   };
 
+  /** Builds the handle, stores and views of one database (also used for family members). */
+  function registerDatabase(definition: MockMindooDBAppDatabaseDefinition) {
+    const created = createDatabaseHandle(
+      definition,
+      databasePeers,
+      directorySource,
+      options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
+    );
+    const databaseId = definition.info.id;
+    databaseHandles.set(
+      databaseId,
+      guardDatabase(
+        created.handle,
+        () => databaseInfos.find((entry) => entry.id === databaseId) ?? definition.info,
+        () => enforceCapabilities,
+      ),
+    );
+    databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
+    databaseDocumentStores.set(definition.info.id, created.documents);
+    databaseFilings.set(definition.info.id, created.filing);
+    databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
+    databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
+    databaseDefinitions.set(definition.info.id, definition);
+    databaseSeedsAt.set(definition.info.id, created.seedsAt);
+    const createView = async (input: MindooDBAppCreateViewNavigatorInput) => {
+        const filingStores = input.filingStores ?? [];
+        for (const joined of filingStores) {
+          if (!databaseFilings.has(joined.databaseId)) {
+            throw new Error(`Unknown test database for filing store "${joined.name}": ${joined.databaseId}`);
+          }
+        }
+        const build = () =>
+          createEvaluatingViewNavigator(
+            input,
+            input.databaseIds.flatMap((databaseId) => {
+              const list = databaseViewDocumentLists.get(databaseId);
+              const documents = list ? list() : [];
+              if (filingStores.length === 0) return documents;
+              return documents.map((document) => ({
+                ...document,
+                foldersOf: (name: string) => {
+                  const joined = filingStores.find((entry) => entry.name === name);
+                  return joined
+                    ? databaseFilings.get(joined.databaseId)!.foldersOf(joined.store, databaseId, document.docId)
+                    : [];
+                },
+              }));
+            }),
+          );
+        const subscribe = (onChange: () => void) => {
+          // Filing changes live in the filing databases: listen there too.
+          const listener = {
+            databaseIds: [...input.databaseIds, ...filingStores.map((entry) => entry.databaseId)],
+            onChange,
+          };
+          viewChangeListeners.add(listener);
+          return () => viewChangeListeners.delete(listener);
+        };
+        const evaluating = await build();
+        if (evaluating) {
+          return createLiveMockViewNavigator(evaluating, build, subscribe);
+        }
+        console.warn(
+          "[mindoodb-app-sdk/testing] mindoodb peer not available; using empty view navigator. Install mindoodb as a devDependency for evaluating VirtualViews.",
+        );
+        // Still announce writes, so apps that only listen for view
+        // updates (replica watchers) react like they do in Haven.
+        return createLiveMockViewNavigator(
+          await createDefaultViewNavigator(),
+          async () => null,
+          subscribe,
+        );
+    };
+    databaseViewApis.set(definition.info.id, {
+      create: createView,
+      // A view configured in the launch context, evaluated over the mock
+      // documents of its sources: a fresh navigator per open, with the
+      // open options applied, as Haven builds one.
+      async open(viewId: string, openOptions?: MindooDBAppViewNavigatorOpenOptions) {
+        const configured = launchContext.views.find((view) => view.id === viewId);
+        if (!configured) {
+          return await createDefaultViewNavigator();
+        }
+        return await createView({
+          databaseIds: configured.sources.map((source) => source.databaseId),
+          definition: configuredViewDefinition(configured),
+          categorizationStyle: configured.categorizationStyle,
+          ...(openOptions ? { options: openOptions } : {}),
+        });
+      },
+      ...(definition.methods?.views ?? {}),
+    });
+  }
+
   const setDatabases = (definitions: MockMindooDBAppDatabaseDefinition[]) => {
     databaseHandles.clear();
     databaseViewDocumentLists.clear();
@@ -4287,101 +4390,121 @@ function createMockSessionState(
       capabilities: [...definition.info.capabilities],
     }));
     for (const definition of definitions) {
-      const created = createDatabaseHandle(
-        definition,
-        databasePeers,
-        directorySource,
-        options.automergeActor ?? MOCK_AUTOMERGE_LOCAL_ACTOR,
-      );
-      const databaseId = definition.info.id;
-      databaseHandles.set(
-        databaseId,
-        guardDatabase(
-          created.handle,
-          () => databaseInfos.find((entry) => entry.id === databaseId) ?? definition.info,
-          () => enforceCapabilities,
-        ),
-      );
-      databaseViewDocumentLists.set(definition.info.id, created.listViewDocuments);
-      databaseDocumentStores.set(definition.info.id, created.documents);
-      databaseFilings.set(definition.info.id, created.filing);
-      databaseLiveQueryRefreshers.set(definition.info.id, created.notifyLiveQueries);
-      databaseRemoteUpdaters.set(definition.info.id, created.applyRemoteUpdate);
-      databaseDefinitions.set(definition.info.id, definition);
-      databaseSeedsAt.set(definition.info.id, created.seedsAt);
-      const createView = async (input: MindooDBAppCreateViewNavigatorInput) => {
-          const filingStores = input.filingStores ?? [];
-          for (const joined of filingStores) {
-            if (!databaseFilings.has(joined.databaseId)) {
-              throw new Error(`Unknown test database for filing store "${joined.name}": ${joined.databaseId}`);
-            }
-          }
-          const build = () =>
-            createEvaluatingViewNavigator(
-              input,
-              input.databaseIds.flatMap((databaseId) => {
-                const list = databaseViewDocumentLists.get(databaseId);
-                const documents = list ? list() : [];
-                if (filingStores.length === 0) return documents;
-                return documents.map((document) => ({
-                  ...document,
-                  foldersOf: (name: string) => {
-                    const joined = filingStores.find((entry) => entry.name === name);
-                    return joined
-                      ? databaseFilings.get(joined.databaseId)!.foldersOf(joined.store, databaseId, document.docId)
-                      : [];
-                  },
-                }));
-              }),
-            );
-          const subscribe = (onChange: () => void) => {
-            // Filing changes live in the filing databases: listen there too.
-            const listener = {
-              databaseIds: [...input.databaseIds, ...filingStores.map((entry) => entry.databaseId)],
-              onChange,
-            };
-            viewChangeListeners.add(listener);
-            return () => viewChangeListeners.delete(listener);
-          };
-          const evaluating = await build();
-          if (evaluating) {
-            return createLiveMockViewNavigator(evaluating, build, subscribe);
-          }
-          console.warn(
-            "[mindoodb-app-sdk/testing] mindoodb peer not available; using empty view navigator. Install mindoodb as a devDependency for evaluating VirtualViews.",
-          );
-          // Still announce writes, so apps that only listen for view
-          // updates (replica watchers) react like they do in Haven.
-          return createLiveMockViewNavigator(
-            await createDefaultViewNavigator(),
-            async () => null,
-            subscribe,
-          );
-      };
-      databaseViewApis.set(definition.info.id, {
-        create: createView,
-        // A view configured in the launch context, evaluated over the mock
-        // documents of its sources: a fresh navigator per open, with the
-        // open options applied, as Haven builds one.
-        async open(viewId: string, openOptions?: MindooDBAppViewNavigatorOpenOptions) {
-          const configured = launchContext.views.find((view) => view.id === viewId);
-          if (!configured) {
-            return await createDefaultViewNavigator();
-          }
-          return await createView({
-            databaseIds: configured.sources.map((source) => source.databaseId),
-            definition: configuredViewDefinition(configured),
-            categorizationStyle: configured.categorizationStyle,
-            ...(openOptions ? { options: openOptions } : {}),
-          });
-        },
-        ...(definition.methods?.views ?? {}),
-      });
+      registerDatabase(definition);
     }
     launchContext = mergeLaunchContext(launchContext, {
       databases: databaseInfos,
     });
+    seedFamilies();
   };
+
+  // --- Database families (session.families) ---
+  const familyMembers = new Map<string, Map<string, { subscribed: boolean }>>();
+  const familyListeners = new Set<(change: MindooDBAppFamilyChange) => void>();
+
+  function familyTemplate(family: string): MockMindooDBAppDatabaseDefinition {
+    const template = databaseDefinitions.get(family);
+    if (!template || template.info.family !== family || template.info.familyMemberId) {
+      throw Object.assign(new Error(`Unknown database family: ${family}`), { code: "database-not-found" });
+    }
+    return template;
+  }
+
+  function familyEntry(family: string, memberId: string): MindooDBAppFamilyDatabase {
+    return {
+      family,
+      memberId,
+      databaseId: mindoodbAppFamilyBindingId(family, memberId),
+      subscribed: familyMembers.get(family)?.get(memberId)?.subscribed === true,
+    };
+  }
+
+  function listFamily(family: string): MindooDBAppFamilyDatabase[] {
+    familyTemplate(family);
+    return [...(familyMembers.get(family)?.keys() ?? [])].sort().map((memberId) => familyEntry(family, memberId));
+  }
+
+  function emitFamilyChange(family: string) {
+    const change = { family, databases: listFamily(family) };
+    familyListeners.forEach((listener) => listener(change));
+  }
+
+  /** Registers the member's database the first time (with the template's capabilities). */
+  function ensureFamilyMember(family: string, memberId: string) {
+    if (!MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN.test(memberId)) {
+      throw Object.assign(new Error(`Invalid family member id: ${memberId}`), { code: "invalid-request" });
+    }
+    const template = familyTemplate(family);
+    const databaseId = mindoodbAppFamilyBindingId(family, memberId);
+    if (!databaseHandles.has(databaseId)) {
+      const attachments = template.methods?.attachments;
+      registerDatabase({
+        ...template,
+        info: {
+          ...template.info,
+          id: databaseId,
+          title: `${template.info.title} · ${memberId}`,
+          capabilities: [...template.info.capabilities],
+          family,
+          familyMemberId: memberId,
+        },
+        documents: template.familyDocuments?.[memberId] ?? [],
+        familyDocuments: undefined,
+        ...(attachments && isMemoryAttachments(attachments)
+          ? { methods: { ...template.methods, attachments: createFamilyMemberAttachments() } }
+          : {}),
+      });
+      databaseInfos.push({ ...template.info, id: databaseId, title: `${template.info.title} · ${memberId}`, capabilities: [...template.info.capabilities], family, familyMemberId: memberId });
+      launchContext = mergeLaunchContext(launchContext, { databases: databaseInfos });
+    }
+    let members = familyMembers.get(family);
+    if (!members) {
+      members = new Map();
+      familyMembers.set(family, members);
+    }
+    if (!members.has(memberId)) {
+      members.set(memberId, { subscribed: false });
+    }
+    return members.get(memberId)!;
+  }
+
+  function subscribeFamily(family: string, memberId: string): MindooDBAppFamilyDatabase {
+    const member = ensureFamilyMember(family, memberId);
+    if (!member.subscribed) {
+      member.subscribed = true;
+      emitFamilyChange(family);
+    }
+    return familyEntry(family, memberId);
+  }
+
+  function unsubscribeFamily(family: string, memberId: string, removeLocalCopy: boolean) {
+    familyTemplate(family);
+    const members = familyMembers.get(family);
+    const member = members?.get(memberId);
+    if (!member) return;
+    member.subscribed = false;
+    if (removeLocalCopy) {
+      const databaseId = mindoodbAppFamilyBindingId(family, memberId);
+      members!.delete(memberId);
+      databaseHandles.delete(databaseId);
+      databaseDocumentStores.delete(databaseId);
+      databaseDefinitions.delete(databaseId);
+      databaseInfos = databaseInfos.filter((info) => info.id !== databaseId);
+      launchContext = mergeLaunchContext(launchContext, { databases: databaseInfos });
+    }
+    emitFamilyChange(family);
+  }
+
+  function seedFamilies() {
+    familyMembers.clear();
+    for (const definition of [...databaseDefinitions.values()]) {
+      if (definition.info.family && !definition.info.familyMemberId) {
+        for (const memberId of Object.keys(definition.familyDocuments ?? {})) {
+          ensureFamilyMember(definition.info.family, memberId).subscribed = true;
+        }
+      }
+    }
+  }
 
   let enforceCapabilities = options.enforceCapabilities ?? false;
   let directoryUsers: string[] = [...(options.directoryUsers ?? [])];
@@ -4413,6 +4536,27 @@ function createMockSessionState(
   setDatabases(options.databases ?? []);
 
   const session: MindooDBAppSession = {
+    families: {
+      async list(family) {
+        return listFamily(family);
+      },
+      async open(family, memberId) {
+        const entry = subscribeFamily(family, memberId);
+        return await session.openDatabase(entry.databaseId);
+      },
+      async subscribe(family, memberId) {
+        return subscribeFamily(family, memberId);
+      },
+      async unsubscribe(family, memberId, unsubscribeOptions) {
+        unsubscribeFamily(family, memberId, unsubscribeOptions?.removeLocalCopy === true);
+      },
+      onChange(handler) {
+        familyListeners.add(handler);
+        return () => {
+          familyListeners.delete(handler);
+        };
+      },
+    },
     async getLaunchContext() {
       return mergeLaunchContext(launchContext);
     },
@@ -4777,6 +4921,16 @@ function createMockSessionState(
   };
 
   return {
+    listFamily,
+    openFamily: subscribeFamily,
+    subscribeFamily,
+    unsubscribeFamily,
+    onFamilyChange(listener) {
+      familyListeners.add(listener);
+      return () => {
+        familyListeners.delete(listener);
+      };
+    },
     getLaunchContext() {
       return mergeLaunchContext(launchContext);
     },
@@ -5007,6 +5161,11 @@ export interface MockMindooDBAppDatabaseDefinition {
    * merge. Off by default (plain JSON with `mock-head-N` heads).
    */
   automerge?: boolean;
+  /**
+   * For a family template (`info.family` set, no `familyMemberId`): seed documents
+   * per member id. Each listed member starts subscribed.
+   */
+  familyDocuments?: Record<string, MockSeedDocument[]>;
 }
 
 /** Options of `applyRemoteUpdate`. */
@@ -5768,6 +5927,9 @@ export function createFakeBridgeHost(
   );
   const requests: MindooDBAppBridgeRpcRequest[] = [];
   const connectedPorts = new Set<MessagePort>();
+  state.onFamilyChange((change) => {
+    connectedPorts.forEach((port) => port.postMessage({ protocol: PROTOCOL, kind: "families-changed", change }));
+  });
   // Open `session.localFiles` writers and readers by handle, as Haven keeps them.
   const localFileHandles = new Map<string, MindooDBAppLocalFileWriter | MindooDBAppLocalFileReader>();
   let nextLocalFileHandle = 0;
@@ -6056,6 +6218,15 @@ export function createFakeBridgeHost(
         return state.getDevice();
       case "session.listDatabases":
         return state.listDatabaseInfos();
+      case "families.list":
+        return state.listFamily(String(params.family));
+      case "families.open":
+        return state.openFamily(String(params.family), String(params.memberId));
+      case "families.subscribe":
+        return state.subscribeFamily(String(params.family), String(params.memberId));
+      case "families.unsubscribe":
+        state.unsubscribeFamily(String(params.family), String(params.memberId), params.removeLocalCopy === true);
+        return { ok: true };
       case "session.listDocumentsSinceViewCursor":
         // Same answer as the Level 1 session: the mock has no view cursors.
         return { items: [], nextCursor: null } satisfies MindooDBAppViewCursorDocumentListResult;

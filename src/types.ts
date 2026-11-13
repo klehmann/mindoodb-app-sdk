@@ -469,6 +469,15 @@ export interface MindooDBAppDatabaseInfo {
   role?: string;
   capabilities: MindooDBAppCapability[];
   /**
+   * Set on a member of a database family (`haven-app.json` `family: true`): the
+   * family's logical id. {@link familyMemberId} names the member; `id` is then
+   * `<family>:<memberId>`. On the family entry itself `family` is set and
+   * `familyMemberId` is absent: it is a template the app cannot open directly.
+   */
+  family?: string;
+  /** The member id of a family member, see {@link family}. */
+  familyMemberId?: string;
+  /**
    * Set on a handle opened with `openDatabase(id, { timeTravelDate })` (and in
    * a time-travel launch): the epoch-millisecond cutoff the handle shows.
    */
@@ -2167,6 +2176,71 @@ export interface MindooDBAppBridgeReminderOpenedMessage {
   reminder: MindooDBAppReminderOpened;
 }
 
+
+/** One database of a family, see {@link MindooDBAppDatabaseFamiliesApi}. */
+export interface MindooDBAppFamilyDatabase {
+  /** The family's logical id from `haven-app.json`. */
+  family: string;
+  /** The app's id for this member (what replaces `${id}`). */
+  memberId: string;
+  /** The binding id for `openDatabase()` and every other database call: `<family>:<memberId>`. */
+  databaseId: string;
+  /**
+   * The person subscribed to this member: it is synced and kept on all their devices.
+   * `false` for a member that exists on this device but was left.
+   */
+  subscribed: boolean;
+}
+
+/** What `families.onChange` receives: the current members of one family. */
+export interface MindooDBAppFamilyChange {
+  family: string;
+  databases: MindooDBAppFamilyDatabase[];
+}
+
+/** Options for {@link MindooDBAppDatabaseFamiliesApi.unsubscribe}. */
+export interface MindooDBAppFamilyUnsubscribeOptions {
+  /** Also delete the local copy on this device. Default `false`: it stops syncing but stays readable. */
+  removeLocalCopy?: boolean;
+}
+
+/**
+ * `session.families`: databases the app creates and opens at runtime, one per chat
+ * room, project or class, all from one pattern in `haven-app.json`:
+ *
+ * ```json
+ * { "logicalDatabaseId": "rooms", "databaseId": "mchat_${id}", "family": true, "permissions": ["write"] }
+ * ```
+ *
+ * The user grants the family once at install. Which members live on a device is the
+ * person's **subscription list**: Haven keeps it sealed in the tenant's
+ * `userdirectory`, so joining a room on the phone brings it to the desktop as well,
+ * and syncs exactly the subscribed members. Whether the person may read a member at
+ * all is still decided by the tenant's server and keys.
+ */
+export interface MindooDBAppDatabaseFamiliesApi {
+  /** The members of a family the person is subscribed to (and those still on this device). */
+  list(family: string): Promise<MindooDBAppFamilyDatabase[]>;
+  /**
+   * Open a member, creating it locally when it does not exist yet, and subscribe to it.
+   * Same handle as `session.openDatabase("<family>:<memberId>")` afterwards.
+   */
+  open(family: string, memberId: string): Promise<MindooDBAppDatabase>;
+  /** Subscribe without opening, e.g. after an invitation: syncs the member on every device. */
+  subscribe(family: string, memberId: string): Promise<MindooDBAppFamilyDatabase>;
+  /** Leave a member: stop syncing it on every device of the person. */
+  unsubscribe(family: string, memberId: string, options?: MindooDBAppFamilyUnsubscribeOptions): Promise<void>;
+  /** Members changed (subscribed on another device, left, …). Returns an unsubscribe function. */
+  onChange(handler: (change: MindooDBAppFamilyChange) => void): () => void;
+}
+
+/** Host → app: the members of a database family changed. */
+export interface MindooDBAppBridgeFamiliesChangedMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "families-changed";
+  change: MindooDBAppFamilyChange;
+}
+
 /** Host → app: the user opened a link to a document of this app. */
 export interface MindooDBAppBridgeLinkOpenedMessage {
   protocol: "mindoodb-app-bridge";
@@ -3033,7 +3107,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
-  | MindooDBAppBridgeEmbeddingRequestMessage;
+  | MindooDBAppBridgeEmbeddingRequestMessage
+  | MindooDBAppBridgeFamiliesChangedMessage;
 
 /** Placement hint for a host-rendered overlay menu. */
 export type MindooDBAppMenuPlacement =
@@ -5385,6 +5460,12 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /**
+   * Database families: one database per room, project or class, opened at runtime
+   * and kept on the person's devices by subscription. See
+   * {@link MindooDBAppDatabaseFamiliesApi}.
+   */
+  families: MindooDBAppDatabaseFamiliesApi;
   /**
    * Content from outside (HTML mail) under Haven's policy, e.g. with remote
    * images the app's own policy blocks. See {@link MindooDBAppForeignContentApi}.

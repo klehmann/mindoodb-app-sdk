@@ -44,6 +44,7 @@ import { MindooDBAppIncomingApiImpl } from "./incomingContent";
 import { MindooDBAppFilesApiImpl } from "./files";
 import { MindooDBAppPdfApiImpl } from "./pdf";
 import { MindooDBAppAccountsApiImpl } from "./accounts";
+import { MindooDBAppDatabaseFamiliesApiImpl } from "./families";
 import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
 import { MindooDBAppLinksApiImpl } from "./links";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
@@ -2003,6 +2004,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly links: MindooDBAppLinksApiImpl;
   public readonly localFiles: MindooDBAppLocalFilesApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
+  public readonly families: MindooDBAppDatabaseFamiliesApiImpl;
   public readonly pdf: MindooDBAppPdfApiImpl;
   public readonly files: MindooDBAppFilesApiImpl;
   private readonly embedsClient: MindooDBAppEmbedsClient;
@@ -2038,6 +2040,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.links = new MindooDBAppLinksApiImpl(this.rpc);
     this.localFiles = new MindooDBAppLocalFilesApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
+    this.families = new MindooDBAppDatabaseFamiliesApiImpl(this.rpc, (databaseId) => this.openDatabase(databaseId));
     this.pdf = new MindooDBAppPdfApiImpl(this.rpc);
     this.files = new MindooDBAppFilesApiImpl(this.rpc);
     this.embedsClient = new MindooDBAppEmbedsClient(this.rpc);
