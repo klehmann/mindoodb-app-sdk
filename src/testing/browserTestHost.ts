@@ -280,7 +280,8 @@ export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
   const params = new URLSearchParams(search);
   const settings: TestHostUrlSettings = { overrides: {} };
   for (const entry of params.getAll("db")) {
-    const separator = entry.indexOf(":");
+    // The last colon: family member ids (`rooms:abc`) contain one themselves.
+    const separator = entry.lastIndexOf(":");
     if (separator <= 0) continue;
     const id = entry.slice(0, separator);
     const list = entry.slice(separator + 1);
@@ -850,6 +851,8 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     for (const key of ["db", "enforce", "users", "locale", "theme"]) params.delete(key);
     const initial = new Map((hostOptions.databases ?? []).map((database) => [database.info.id, database]));
     for (const info of testHost.host.listDatabases()) {
+      // Family members take the family's capabilities; only the family is in the URL.
+      if (info.familyMemberId) continue;
       const requested = initial.get(info.id)?.info.capabilities ?? [];
       const same =
         requested.length === info.capabilities.length &&
