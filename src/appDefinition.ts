@@ -78,6 +78,46 @@ export interface MindooDBAppDefinitionDatabase {
    * user already has it.
    */
   create?: boolean;
+  /**
+   * A **database family**: not one database but any number of them from one
+   * pattern, e.g. one per chat room. `databaseId` must contain
+   * {@link MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER} exactly once (`"mchat_${id}"`);
+   * the app picks the member id at runtime with
+   * `session.families.open("<logicalDatabaseId>", memberId)`. The permissions apply
+   * to every member, and the user grants them once for the whole family. Haven
+   * creates nothing at install; a member comes into being when the app opens it.
+   */
+  family?: boolean;
+}
+
+/** The part of a family's `databaseId` that the member id replaces. */
+export const MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER = "${id}";
+
+/** Member ids of a database family: lowercase letters, digits and `_`, 1-64 characters. */
+export const MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9_]{0,63}$/;
+
+/** The binding id a family member is opened and addressed by: `<family>:<memberId>`. */
+export function mindoodbAppFamilyBindingId(family: string, memberId: string): string {
+  return `${family}:${memberId}`;
+}
+
+/** Splits a binding id from {@link mindoodbAppFamilyBindingId}; `null` for an ordinary database id. */
+export function parseMindooDBAppFamilyBindingId(
+  bindingId: string,
+): { family: string; memberId: string } | null {
+  const index = bindingId.indexOf(":");
+  if (index <= 0) return null;
+  const family = bindingId.slice(0, index);
+  const memberId = bindingId.slice(index + 1);
+  return MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN.test(memberId) ? { family, memberId } : null;
+}
+
+/** The physical database id of one family member (`mchat_${id}` + `abc` = `mchat_abc`). */
+export function resolveMindooDBAppFamilyDatabaseId(pattern: string, memberId: string): string {
+  if (!MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN.test(memberId)) {
+    throw new Error(`Family member id "${memberId}" must match ${String(MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN)}.`);
+  }
+  return pattern.split(MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER).join(memberId);
 }
 
 export interface MindooDBAppDefinition {
@@ -598,6 +638,17 @@ function readDatabases(
     if (entry.databaseId !== undefined && entry.databaseId !== null && !databaseId) {
       errors.push(`App definition database "${logicalDatabaseId}" has an empty databaseId.`);
     }
+    const family = entry.family === true;
+    const placeholders = databaseId.split(MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER).length - 1;
+    if (family && placeholders !== 1) {
+      errors.push(
+        `App definition database family "${logicalDatabaseId}" needs a databaseId with ${MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER} exactly once.`,
+      );
+    } else if (!family && placeholders > 0) {
+      errors.push(
+        `App definition database "${logicalDatabaseId}" uses ${MINDOODB_APP_FAMILY_MEMBER_PLACEHOLDER} but is not a family (set "family": true).`,
+      );
+    }
 
     result.push({
       logicalDatabaseId,
@@ -613,6 +664,7 @@ function readDatabases(
         errors,
       ),
       create: entry.create === false ? false : undefined,
+      ...(family ? { family: true } : {}),
     });
   });
 

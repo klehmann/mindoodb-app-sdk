@@ -961,6 +961,45 @@ if (!db.capabilities.includes("delete")) {
 
 When the database is readable, `documents.list()` can also expose deleted document IDs by setting `status: "all"` or `status: "deleted"`. This is useful for app-side indexes and sync checkpoints.
 
+### Database families
+
+Some apps need not one database but one **per room, project or class**, created at
+runtime. Declare a family in `haven-app.json`: `family: true` and a `databaseId` with
+`${id}` exactly once.
+
+```json
+{ "logicalDatabaseId": "rooms", "label": "Chat rooms", "databaseId": "mchat_${id}", "family": true, "permissions": ["write", "delete"] }
+```
+
+The user grants the family once at install; the permissions apply to every member.
+Haven creates nothing up front. The app opens members by id at runtime:
+
+```ts
+const room = await session.families.open("rooms", roomId);   // creates locally if needed, subscribes
+await room.documents.create({ set: { text: "Hello" } });
+
+await session.families.list("rooms");      // [{ family, memberId, databaseId: "rooms:<id>", subscribed }]
+await session.families.subscribe("rooms", invitedRoomId);    // sync it without opening
+await session.families.unsubscribe("rooms", roomId, { removeLocalCopy: true });
+const stop = session.families.onChange(({ family, databases }) => refreshRoomList(databases));
+```
+
+- A member's binding id is `<family>:<memberId>` (`mindoodbAppFamilyBindingId`). It works
+  with `openDatabase()` and every other database call, and subscribed members are in
+  `launchContext.databases` with `family` and `familyMemberId` set. The family entry
+  itself (no `familyMemberId`) is a template and cannot be opened.
+- Member ids match `MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN` (`[a-z0-9][a-z0-9_]{0,63}`).
+  They become part of a database id the sync server sees, so use random ids, never names.
+- **Which members live on a device** is the person's subscription list. Haven keeps it
+  sealed in the tenant's `userdirectory` and syncs exactly the subscribed members, so a
+  room joined on the phone arrives on the desktop too. `unsubscribe` stops syncing on all
+  of the person's devices; with `removeLocalCopy` this device also deletes its copy.
+- Whether the person may read or write a member at all is still the tenant's decision
+  (keys, server rules). Subscribing to a database you are not allowed to sync fails at
+  the server, not in the app.
+- In tests, seed members as `"<family>:<memberId>"` keys of `mockDatabasesFromDefinition`;
+  they start subscribed. `families.open` in the mock registers new members on the fly.
+
 ### Directory users
 
 With the `directory` capability, `db.directory.listUsers()` returns the tenant's active usernames, e.g. for a recipient picker. For large directories ask for pages instead, with an optional case-insensitive search:

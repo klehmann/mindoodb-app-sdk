@@ -227,6 +227,14 @@ export function mockDatabasesFromDefinition(
     .filter((database) => options.overrides?.[database.logicalDatabaseId]?.mapped !== false)
     .map((database) => {
       const override = options.overrides?.[database.logicalDatabaseId];
+      // A family's members are seeded as `"<family>:<memberId>"` keys and start subscribed.
+      const familyDocuments = database.family
+        ? Object.fromEntries(
+            Object.entries(seed)
+              .filter(([key]) => key.startsWith(`${database.logicalDatabaseId}:`))
+              .map(([key, documents]) => [key.slice(database.logicalDatabaseId.length + 1), documents ?? []]),
+          )
+        : undefined;
       return {
         info: {
           id: database.logicalDatabaseId,
@@ -234,8 +242,10 @@ export function mockDatabasesFromDefinition(
           capabilities: override?.capabilities
             ? [...new Set<MindooDBAppCapability>(override.capabilities)]
             : capabilitiesForDefinitionPermissions(database.permissions),
+          ...(database.family ? { family: database.logicalDatabaseId } : {}),
         },
-        documents: seed[database.logicalDatabaseId],
+        documents: database.family ? [] : seed[database.logicalDatabaseId],
+        ...(familyDocuments ? { familyDocuments } : {}),
         ...(options.automerge ? { automerge: true } : {}),
         ...(options.attachments === "none"
           ? {}
