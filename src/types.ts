@@ -908,6 +908,15 @@ export interface MindooDBAppAccessDecision {
  * Matches MindooDB `recipientOptions`. The launching user is included as a
  * reader unless {@link includeSelf} is `false`.
  */
+/** Options of `documents.addRecipients`. */
+export interface MindooDBAppAddRecipientsOptions {
+  /**
+   * `"all"` (default): new readers decrypt everything written so far.
+   * `"none"`: they only read what is written after they were added.
+   */
+  history?: "all" | "none";
+}
+
 export interface MindooDBAppRecipientOptions {
   /**
    * When `false`, the launching user is not added as a reader. Use this to
@@ -3989,8 +3998,25 @@ export interface MindooDBAppDocumentApi {
    * One key wrap per new user, no rotation — new readers can decrypt the
    * whole history. The launching user is already on the list and does not
    * need to be passed. Requires the `update` capability.
+   *
+   * With `history: "none"` the key rotates first and the new readers only get
+   * the new generation: nothing written before they were added is readable
+   * for them (for a group document: none of the older documents that use its
+   * key). Their entry in `_encryptFor` then carries `historyFrom`; hand them
+   * the history later with {@link revealHistory}.
    */
   addRecipients(
+    docId: string,
+    recipients: string[],
+    options?: MindooDBAppAddRecipientsOptions,
+  ): Promise<MindooDBAppDocument>;
+  /**
+   * Give readers that were added with `history: "none"` the older key
+   * generations after all, so they read the whole history. No rotation. Only
+   * a reader who holds the whole history can do this. Cannot be taken back
+   * for what was already received. Requires the `update` capability.
+   */
+  revealHistory(
     docId: string,
     recipients: string[],
   ): Promise<MindooDBAppDocument>;

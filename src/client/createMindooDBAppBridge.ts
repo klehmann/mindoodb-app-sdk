@@ -1185,8 +1185,15 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           docId,
           patch,
         }),
-      addRecipients: async (docId, recipients) =>
+      addRecipients: async (docId, recipients, options) =>
         await this.rpc.call("documents.addRecipients", {
+          databaseId: this.databaseId,
+          docId,
+          recipients,
+          ...(options?.history ? { history: options.history } : {}),
+        }),
+      revealHistory: async (docId, recipients) =>
+        await this.rpc.call("documents.revealHistory", {
           databaseId: this.databaseId,
           docId,
           recipients,
