@@ -911,8 +911,11 @@ export interface MindooDBAppAccessDecision {
 /** Options of `documents.addRecipients`. */
 export interface MindooDBAppAddRecipientsOptions {
   /**
-   * `"all"` (default): new readers decrypt everything written so far.
-   * `"none"`: they only read what is written after they were added.
+   * `"all"` (default): new readers decrypt everything written so far, as far
+   * back as the caller can read it.
+   * `"none"`: they only read what is written after they were added (existing
+   * attachments of the document included, so use it for chats, not for
+   * sharing a document).
    */
   history?: "all" | "none";
 }
@@ -4012,8 +4015,8 @@ export interface MindooDBAppDocumentApi {
   ): Promise<MindooDBAppDocument>;
   /**
    * Give readers that were added with `history: "none"` the older key
-   * generations after all, so they read the whole history. No rotation. Only
-   * a reader who holds the whole history can do this. Cannot be taken back
+   * generations after all, so they read the history as far back as the caller
+   * holds it. No rotation. Cannot be taken back
    * for what was already received. Requires the `update` capability.
    */
   revealHistory(
