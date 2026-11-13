@@ -93,6 +93,8 @@ import type {
   MindooDBAppMailGateway,
   MindooDBAppCalendarApi,
   MindooDBAppFreeBusyResult,
+  MindooDBAppColleagueCalendar,
+  MindooDBAppSharedCalendar,
   MindooDBAppBooleanExpression,
   MindooDBAppDocumentApi,
   MindooDBAppDocumentQuery,
@@ -144,7 +146,7 @@ import type {
 } from "../types";
 import { pageUsers } from "../directoryPaging";
 import { searchDirectoryPeople, SEARCH_USERS_DEFAULT_LIMIT, SEARCH_USERS_MAX_LIMIT } from "../directorySearch";
-import { normalizeFreeBusyRequest, unknownFreeBusy } from "../freeBusy";
+import { COLLEAGUE_EVENTS_MAX_USERS, normalizeFreeBusyRequest, unknownFreeBusy, unsharedCalendars } from "../freeBusy";
 import { installDownloadCapture } from "../downloadCapture";
 import { installHostFocusCapture } from "../hostFocus";
 import { applySafeAreaVariables } from "../safeArea";
@@ -1452,6 +1454,42 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
             throw error;
           }
           return unknownFreeBusy(usernames);
+        }
+      },
+      colleagueEvents: async (request) => {
+        const { usernames, from, to } = normalizeFreeBusyRequest(request);
+        if (usernames.length > COLLEAGUE_EVENTS_MAX_USERS) {
+          throw new RangeError(`calendar.colleagueEvents: at most ${COLLEAGUE_EVENTS_MAX_USERS} people per call.`);
+        }
+        if (!usernames.length) {
+          return [];
+        }
+        try {
+          const found = await this.rpc.call<MindooDBAppColleagueCalendar[]>("calendar.colleagueEvents", {
+            databaseId: this.databaseId,
+            usernames,
+            from,
+            to,
+          });
+          return Array.isArray(found) ? found : unsharedCalendars(usernames);
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return unsharedCalendars(usernames);
+        }
+      },
+      sharedCalendars: async () => {
+        try {
+          const found = await this.rpc.call<MindooDBAppSharedCalendar[]>("calendar.sharedCalendars", {
+            databaseId: this.databaseId,
+          });
+          return Array.isArray(found) ? found : [];
+        } catch (error) {
+          if (!isMethodNotFoundError(error)) {
+            throw error;
+          }
+          return [];
         }
       },
     };

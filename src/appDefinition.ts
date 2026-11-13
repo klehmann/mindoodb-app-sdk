@@ -41,6 +41,7 @@ export const MINDOODB_APP_DEFINITION_PERMISSIONS = [
   "timestamps",
   "directory",
   "freebusy",
+  "calendarshare",
   "sealedchannel",
   "proposeapps",
 ] as const;

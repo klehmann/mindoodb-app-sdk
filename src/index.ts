@@ -106,6 +106,9 @@ export {
   mergeFreeBusyIntervals,
   normalizeFreeBusyRequest,
   unknownFreeBusy,
+  unsharedCalendars,
+  subtractFreeBusyIntervals,
+  COLLEAGUE_EVENTS_MAX_USERS,
 } from "./freeBusy";
 export {
   DEFAULT_DRAG_LONG_PRESS_MS,
