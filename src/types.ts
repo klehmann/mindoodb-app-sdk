@@ -267,7 +267,8 @@ export type MindooDBAppCapability =
   | "directory"
   | "freebusy"
   | "calendarshare"
-  | "sealedchannel";
+  | "sealedchannel"
+  | "live";
 
 /**
  * Which browser features the host leaves available to the app. `true` means the host
@@ -2280,6 +2281,20 @@ export interface MindooDBAppBridgeLinkOpenedMessage {
   link: MindooDBAppLinkOpened;
 }
 
+export interface MindooDBAppBridgeLiveMessageMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "live-message";
+  channelId: string;
+  message: MindooDBAppLiveMessage;
+}
+
+export interface MindooDBAppBridgeLiveStateMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "live-state";
+  channelId: string;
+  state: MindooDBAppLiveState;
+}
+
 /** What a link points at: a document of this app, and optionally a place in it. */
 export interface MindooDBAppLinkInput {
   /** The app's logical database id (as in haven-app.json), e.g. `invoices`. */
@@ -2362,6 +2377,67 @@ export interface MindooDBAppLinksApi {
    * new browser tab. Works for links to other apps and to this app.
    */
   open(url: string): Promise<MindooDBAppLinkOpenResult>;
+}
+
+/** One message from a live channel, see {@link MindooDBAppLiveApi}. */
+export interface MindooDBAppLiveMessage {
+  /** Username of the sender, checked by Haven (signature and tenant directory), not taken from the message. */
+  from: string;
+  /** The app's own message kind, e.g. `typing`. */
+  type: string;
+  /** JSON data of the message; `null` when it has none. */
+  data: unknown;
+  /** The sender's clock when the message was sent (ms epoch). */
+  sentAt: number;
+}
+
+/**
+ * `connecting`: Haven is (re)connecting; nothing is delivered meanwhile.
+ * `unavailable`: no live channel here (no server for this database, an older
+ * server or Haven). The app works without it; `send` does nothing.
+ */
+export type MindooDBAppLiveState = "connecting" | "connected" | "unavailable";
+
+export interface MindooDBAppLiveOpenOptions {
+  /** Logical database id; the channel belongs to this database. Needs the `live` permission. */
+  databaseId: string;
+  /**
+   * For documents of a private group ({@link MindooDBAppCreateDocumentInput.groupKeyDocId}):
+   * the group document. The channel is then encrypted with the group's key, so
+   * only its current members can read it. Without it the database's default key is used.
+   */
+  groupKeyDocId?: string;
+}
+
+export interface MindooDBAppLiveChannel {
+  /**
+   * Send a message to everyone who has this channel open right now. Not stored
+   * and not retried: whoever is not connected never gets it. At most about
+   * 8 KB of JSON; Haven and the server throttle floods.
+   */
+  send(type: string, data?: unknown): Promise<void>;
+  /** Messages of the others (never the app's own). Returns an unsubscribe function. */
+  onMessage(handler: (message: MindooDBAppLiveMessage) => void): () => void;
+  /** Connection state; called with the current state right away. Returns an unsubscribe function. */
+  onState(handler: (state: MindooDBAppLiveState) => void): () => void;
+  readonly state: MindooDBAppLiveState;
+  close(): Promise<void>;
+}
+
+/**
+ * `session.live`: an ephemeral channel per database for what must not be stored,
+ * such as "is typing", who is here, or a position on a map. Messages reach the
+ * people who have the same database's channel open at that moment, through the
+ * sync server, and are gone afterwards. Haven encrypts them with a key of the
+ * database's readers (the server relays ciphertext) and signs them, so `from`
+ * can be trusted.
+ *
+ * The database and its sync stay the source of truth: never put anything on the
+ * channel that has to survive, and make the app work when the channel is
+ * `unavailable`.
+ */
+export interface MindooDBAppLiveApi {
+  open(options: MindooDBAppLiveOpenOptions): Promise<MindooDBAppLiveChannel>;
 }
 
 /**
@@ -3173,6 +3249,8 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeReminderOpenedMessage
   | MindooDBAppBridgeActionInvokedMessage
   | MindooDBAppBridgeLinkOpenedMessage
+  | MindooDBAppBridgeLiveMessageMessage
+  | MindooDBAppBridgeLiveStateMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
   | MindooDBAppBridgeEmbeddingRequestMessage
@@ -5621,6 +5699,8 @@ export interface MindooDBAppSession {
   actions: MindooDBAppActionsApi;
   /** Links to the app's documents that open in Haven. See {@link MindooDBAppLinksApi}. */
   links: MindooDBAppLinksApi;
+  /** Ephemeral messages per database ("is typing", presence). See {@link MindooDBAppLiveApi}. */
+  live: MindooDBAppLiveApi;
   /**
    * Mail, calendar and contacts accounts the user connected in Haven, reached
    * through JMAP. See {@link MindooDBAppAccountsApi}.

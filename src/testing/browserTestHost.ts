@@ -163,6 +163,7 @@ export const ALL_CAPABILITIES: readonly MindooDBAppCapability[] = [
   "sign",
   "timestamps",
   "sealedchannel",
+  "live",
 ];
 
 /**
@@ -187,7 +188,8 @@ export function capabilitiesForDefinitionPermissions(
       permission === "directory" ||
       permission === "freebusy" ||
       permission === "calendarshare" ||
-      permission === "sealedchannel"
+      permission === "sealedchannel" ||
+      permission === "live"
     ) {
       result.add(permission);
     }

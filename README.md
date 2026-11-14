@@ -544,6 +544,32 @@ anchor.addEventListener("click", async (event) => {
 
 `open` works for links to other apps and to the app itself (it then arrives at its own `onOpened`). `parseMindooDBAppLink(url)` is the same parser without a session. In the mocks, `mock.links.openRequests()` lists what the app asked to open and `mock.links.answerOpen("noApp")` sets the answer for links to other apps.
 
+### Live channel: typing notices, presence, positions
+
+Some things are worthless after seconds and must not become documents: "Anna is typing", who has the room open, a position on a map. MindooDB stores are append-only, so writing them as documents would keep every keystroke forever. `session.live` is an ephemeral channel per database for exactly this:
+
+```ts
+const channel = await session.live.open({ databaseId: "rooms:" + roomId });   // needs the "live" permission
+// in a private group: session.live.open({ databaseId, groupKeyDocId: "group" })
+
+channel.onMessage(({ from, type, data, sentAt }) => {
+  if (type === "typing") showTyping(from);
+});
+channel.onState((state) => setLiveAvailable(state === "connected"));
+
+await channel.send("typing");                 // at most every few seconds while the user types
+await channel.close();                        // when the room closes
+```
+
+- A message reaches the people who have the same database's channel open **right now**, through the sync server. It is not stored, not replayed and not retried.
+- Haven encrypts it with a key of the database's readers (with `groupKeyDocId`: the group's key, so only current members read it) and signs it. The server relays ciphertext. `from` is the sender's username as Haven checked it against the tenant directory, never a field the sender filled in.
+- The app never gets its own messages back.
+- `state` is `connected`, `connecting` (Haven reconnects by itself) or `unavailable` (no server for this database, or an older server or Haven). `send` does nothing while unavailable. **The app must work without the channel**: the database and its sync stay the source of truth, so never send anything that has to survive.
+- Keep messages small (about 8 KB of JSON at most) and rare. Haven and the server throttle floods; for a typing notice, send at most every three seconds and let it expire on the receiving side after about five.
+- The server sees who sends when on which database's channel. Presence is therefore something users should be able to switch off.
+
+Declare the permission in `haven-app.json`: `"permissions": ["write", "live"]`. In tests, two mock sessions of the same tenant and database reach each other (the test host's "Two users" mode included); `mock.live.receive(databaseId, { from, type, data })` plays another person, `mock.live.sent()` lists what the app sent, and `mock.live.setState("unavailable")` plays a host without the channel.
+
 ### Receiving files and content
 
 Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:
@@ -963,6 +989,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `freebusy`    | See when colleagues are busy (`calendar.freeBusy()`): times only, no details |
 | `calendarshare` | See colleagues' calendars as each shares them (`calendar.colleagueEvents()`): titles and places of shared appointments |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
+| `live`          | Ephemeral messages on the database's live channel          |
 
 ```ts
 const db = ctx.databases[0]!;

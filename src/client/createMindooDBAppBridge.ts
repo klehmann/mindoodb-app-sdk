@@ -47,6 +47,7 @@ import { MindooDBAppAccountsApiImpl } from "./accounts";
 import { MindooDBAppDatabaseFamiliesApiImpl } from "./families";
 import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
 import { MindooDBAppLinksApiImpl } from "./links";
+import { MindooDBAppLiveApiImpl } from "./live";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
 import { MindooDBAppForeignContentClient } from "./foreignContent";
 import { MindooDBAppActionsApiImpl } from "./actions";
@@ -2047,6 +2048,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly foreignContent: MindooDBAppForeignContentClient;
   public readonly actions: MindooDBAppActionsApiImpl;
   public readonly links: MindooDBAppLinksApiImpl;
+  public readonly live: MindooDBAppLiveApiImpl;
   public readonly localFiles: MindooDBAppLocalFilesApiImpl;
   public readonly accounts: MindooDBAppAccountsApiImpl;
   public readonly families: MindooDBAppDatabaseFamiliesApiImpl;
@@ -2083,6 +2085,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.foreignContent = new MindooDBAppForeignContentClient(this.rpc);
     this.actions = new MindooDBAppActionsApiImpl(this.rpc);
     this.links = new MindooDBAppLinksApiImpl(this.rpc);
+    this.live = new MindooDBAppLiveApiImpl(this.rpc);
     this.localFiles = new MindooDBAppLocalFilesApiImpl(this.rpc);
     this.accounts = new MindooDBAppAccountsApiImpl(this.rpc);
     this.families = new MindooDBAppDatabaseFamiliesApiImpl(this.rpc, (databaseId) => this.openDatabase(databaseId));
@@ -2450,6 +2453,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.reminders.dispose();
     this.actions.dispose();
     this.links.dispose();
+    this.live.dispose();
     this.embedsClient.dispose();
     try {
       await this.rpc.call("session.disconnect", {});
