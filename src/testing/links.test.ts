@@ -52,4 +52,60 @@ describe("session.links", () => {
       host.dispose();
     }
   });
+
+  it("parses links to app documents and nothing else", async () => {
+    const mock = createMockMindooDBAppSession({ databases, launchContext: { appId: "mindoodb-app-invoice", tenantId: "t_8f3k2m" } });
+    const session = await mock.bridge.connect();
+    expect(session.links.parse("https://haven.mindoodb.com/open/t_8f3k2m/mindoodb-app-crm/deals/d%201#tab=notes")).toEqual({
+      tenantId: "t_8f3k2m",
+      appId: "mindoodb-app-crm",
+      databaseId: "deals",
+      docId: "d 1",
+      target: "tab=notes",
+    });
+    expect(session.links.parse("https://haven.example.org/intranet/open/t/a/db/doc")).toEqual({ tenantId: "t", appId: "a", databaseId: "db", docId: "doc" });
+    for (const other of [
+      "https://mindoodb.com/",
+      "https://haven.mindoodb.com/open/t/a/db",
+      "https://haven.mindoodb.com/open/t/a/db/doc/more",
+      "javascript:alert(1)",
+      "mailto:a@b.c",
+      "not a url",
+    ]) {
+      expect(session.links.parse(other)).toBeNull();
+    }
+  });
+
+  it("opens links in Haven: own links reach onOpened, foreign ones are Haven's business (both levels)", async () => {
+    const mock = createMockMindooDBAppSession({ databases, launchContext: { appId: "mindoodb-app-invoice", tenantId: "t_8f3k2m" } });
+    const session = await mock.bridge.connect();
+    const opened: MindooDBAppLinkOpened[] = [];
+    session.links.onOpened((link) => {
+      opened.push(link);
+    });
+    const own = await session.links.create({ databaseId: "invoices", docId: "inv_7", target: "line=2" });
+    expect(await session.links.open(own.url)).toEqual({ status: "opened" });
+    await expect.poll(() => opened).toEqual([{ databaseId: "invoices", docId: "inv_7", target: "line=2" }]);
+
+    const foreign = "https://haven.mindoodb.com/open/t_8f3k2m/mindoodb-app-crm/deals/d_1";
+    expect(await session.links.open(foreign)).toEqual({ status: "opened" });
+    mock.links.answerOpen("noApp");
+    expect(await session.links.open(foreign)).toEqual({ status: "noApp" });
+    expect(await session.links.open("https://mindoodb.com/")).toEqual({ status: "invalid" });
+    expect(mock.links.openRequests().map((parts) => parts.appId)).toEqual([
+      "mindoodb-app-invoice",
+      "mindoodb-app-crm",
+      "mindoodb-app-crm",
+    ]);
+
+    const host = createFakeBridgeHost({ databases, launchContext: { appId: "mindoodb-app-invoice" } });
+    host.install();
+    try {
+      const bridged = await createMindooDBAppBridge().connect();
+      expect(await bridged.links.open(foreign)).toEqual({ status: "opened" });
+      expect(host.links.openRequests()).toHaveLength(1);
+    } finally {
+      host.dispose();
+    }
+  });
 });

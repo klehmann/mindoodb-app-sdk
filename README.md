@@ -529,6 +529,21 @@ session.links.onOpened(({ databaseId, docId, target }) => openDocument(docId, ta
 
 Haven opens such a link through the recipient's own installation of the app (same `appId`, a mapping of that database in that tenant): it starts or focuses the app and hands the document to `onOpened`. A link that started the app is held until the handler is registered. Links carry ids only, never titles or contents, and `target` (max. 500 characters) sits after `#`, so servers never log it. The mocks answer with `https://haven.mindoodb.com/open/…` links and let tests open one (`mock.links.open(...)`, `host.links.open(...)`); the browser test host lists the links the app created with an "Open" button.
 
+**Links inside an app.** A chat, a note or a mail can contain links to other apps' documents. A plain click on one would leave Haven for a new browser tab. Recognise such links with `session.links.parse(url)` (the parts `{ tenantId, appId, databaseId, docId, target }`, or `null` for any other URL) and open them in the running Haven on click:
+
+```ts
+anchor.addEventListener("click", async (event) => {
+  if (!session.links.parse(anchor.href)) return;      // an ordinary web link
+  event.preventDefault();
+  const { status } = await session.links.open(anchor.href);
+  // "opened": Haven started or focused the app in the link's tenant and handed it the document
+  // "noTenant" | "noApp" | "noDatabase": Haven tells the user why it cannot open the link
+  // "external": an older Haven; the link was opened in a new browser tab
+});
+```
+
+`open` works for links to other apps and to the app itself (it then arrives at its own `onOpened`). `parseMindooDBAppLink(url)` is the same parser without a session. In the mocks, `mock.links.openRequests()` lists what the app asked to open and `mock.links.answerOpen("noApp")` sets the answer for links to other apps.
+
 ### Receiving files and content
 
 Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:
