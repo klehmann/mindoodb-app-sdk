@@ -1000,6 +1000,33 @@ const stop = session.families.onChange(({ family, databases }) => refreshRoomLis
 - In tests, seed members as `"<family>:<memberId>"` keys of `mockDatabasesFromDefinition`;
   they start subscribed. `families.open` in the mock registers new members on the fly.
 
+### Group keys: one member list for many documents
+
+A chat has one member list and any number of messages. Make the member list a **group
+document** (a document created with `recipients`) and create the messages with
+`groupKeyDocId`: they use the group document's key series.
+
+```ts
+const group = await db.documents.create({ recipients: ["CN=Bob/O=Acme"], set: { name: "Project X" } });
+await db.documents.create({ id: messageId, assumeUniqueId: true, groupKeyDocId: group.id, set: { text: "Hi" } });
+
+await db.documents.addRecipients(group.id, ["CN=Carol/O=Acme"]);    // Carol reads all messages so far
+await db.documents.removeRecipients(group.id, ["CN=Bob/O=Acme"]);   // key rotates: Bob reads nothing new
+```
+
+- Everyone the group document is sealed to can read the documents; adding a member
+  reveals the whole history, removing one rotates the key (they keep what they already
+  had, nothing written afterwards). Honest clients of a removed member hide the group
+  and its documents on the next sync.
+- The group document must be in the same database; the launching user must be a
+  member to create with it. Snapshots report `groupKeyDocId` instead of a
+  `decryptionKeyId`.
+- With a caller-chosen `id`, pass `assumeUniqueId` (random ids only).
+- Members are listed in the group document's `_encryptFor`; change them only with
+  `addRecipients` / `removeRecipients` / `setRecipients` on the group document.
+- The mock checks that the group document exists and is sealed; it does not model
+  membership.
+
 ### Directory users
 
 With the `directory` capability, `db.directory.listUsers()` returns the tenant's active usernames, e.g. for a recipient picker. For large directories ask for pages instead, with an optional case-insensitive search:

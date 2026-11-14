@@ -617,6 +617,12 @@ export interface MindooDBAppDocument {
    * hosts predating this field.
    */
   decryptionKeyId?: string;
+  /**
+   * Set on a document created with {@link MindooDBAppCreateDocumentInput.groupKeyDocId}:
+   * the group document whose members can read it. Absent otherwise and on hosts
+   * predating group keys.
+   */
+  groupKeyDocId?: string;
 }
 
 /** Opaque persisted id for a document revision in the MindooDB DAG. */
@@ -932,6 +938,19 @@ export interface MindooDBAppCreateDocumentInput {
   recipients?: string[];
   /** Sealed-create options. Only used when {@link recipients} is set. */
   recipientOptions?: MindooDBAppRecipientOptions;
+  /**
+   * Encrypt the new document with the key series of a **group document**: a
+   * document of the same database created with {@link recipients}. Everyone the
+   * group document is sealed to can read it; `addRecipients` / `removeRecipients`
+   * on the group document apply to all documents that use it (removing rotates
+   * the key, so a removed member cannot read anything written afterwards). This
+   * is how a chat keeps one member list for any number of messages.
+   *
+   * Mutually exclusive with {@link decryptionKeyId} and {@link recipients}. The
+   * launching user must be a member of the group document. With a caller-chosen
+   * {@link id}, pass {@link assumeUniqueId}.
+   */
+  groupKeyDocId?: string;
   /**
    * Optional caller-provided document id. When omitted, MindooDB generates a
    * MongoDB-style ObjectId (24 lowercase hex characters). When provided, the id
@@ -4026,6 +4045,7 @@ export interface MindooDBAppDocumentApi {
    */
   canCreate(input?: {
     decryptionKeyId?: string;
+    groupKeyDocId?: string;
     recipients?: string[];
     recipientOptions?: MindooDBAppRecipientOptions;
   }): Promise<MindooDBAppAccessDecision>;
