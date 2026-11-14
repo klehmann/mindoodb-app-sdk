@@ -266,6 +266,7 @@ export type MindooDBAppCapability =
   | "timestamps"
   | "directory"
   | "freebusy"
+  | "calendarshare"
   | "sealedchannel";
 
 /**
@@ -4296,6 +4297,66 @@ export interface MindooDBAppCalendarApi {
    * Requires the `freebusy` capability.
    */
   freeBusy(request: MindooDBAppFreeBusyRequest): Promise<MindooDBAppFreeBusyResult[]>;
+  /**
+   * Colleagues' calendars as each of them shares them with the user: at
+   * `"business"` their business appointments, at `"all"` also private ones
+   * (title, time, place, status; never description or attendees). Whatever a
+   * person does not share with the user in detail is in `busy` (busy times not
+   * covered by `events`), at `"busy"` that is all there is, at `"none"`
+   * nothing. One entry per username asked for, in that order.
+   *
+   * At most 20 people and 14 weeks per call (else a `RangeError`). Hosts that
+   * do not know the call (older Haven) answer `level: "none"`, `"unknown"`.
+   * Requires the `calendarshare` capability.
+   */
+  colleagueEvents(request: MindooDBAppFreeBusyRequest): Promise<MindooDBAppColleagueCalendar[]>;
+  /**
+   * The members who share more than free/busy with the user, to offer their
+   * calendars without a search. Older hosts answer `[]`.
+   * Requires the `calendarshare` capability.
+   */
+  sharedCalendars(): Promise<MindooDBAppSharedCalendar[]>;
+}
+
+/** What a person shares of their calendar with the user. */
+export type MindooDBAppCalendarShareLevel = "none" | "busy" | "business" | "all";
+
+/** One appointment of {@link MindooDBAppColleagueCalendar}. */
+export interface MindooDBAppColleagueEvent {
+  /** Stable per appointment and occurrence (not the iCalendar UID). */
+  key: string;
+  /** ISO date-time (UTC). For an all-day entry midnight UTC of the first day. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  title: string;
+  location: string;
+  /** How it blocks time; `"free"` for an all-day entry that does not. */
+  status: MindooDBAppFreeBusyStatus | "free";
+  recurring?: boolean;
+}
+
+/** One person of {@link MindooDBAppCalendarApi.colleagueEvents}. */
+export interface MindooDBAppColleagueCalendar {
+  username: string;
+  level: MindooDBAppCalendarShareLevel;
+  /** As for free/busy: `"ok"` when something is known about the person's times. */
+  state: MindooDBAppFreeBusyState;
+  /** Appointments the user may see, sorted by start, within `[from, to)`. */
+  events: MindooDBAppColleagueEvent[];
+  /** Busy times not covered by `events` (shown as "busy"). */
+  busy: MindooDBAppFreeBusyInterval[];
+  computedAt?: string;
+}
+
+/** One entry of {@link MindooDBAppCalendarApi.sharedCalendars}. */
+export interface MindooDBAppSharedCalendar {
+  username: string;
+  level: "business" | "all";
+  displayName?: string;
+  firstName?: string;
+  lastName?: string;
+  computedAt?: string;
 }
 
 /** Input of {@link MindooDBAppCalendarApi.freeBusy}. */

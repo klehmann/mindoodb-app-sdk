@@ -177,7 +177,12 @@ import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
-import { answerFreeBusyFromMock, type MockFreeBusyPerson } from "../freeBusy";
+import {
+  answerColleagueEventsFromMock,
+  answerFreeBusyFromMock,
+  answerSharedCalendarsFromMock,
+  type MockFreeBusyPerson,
+} from "../freeBusy";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
 import { MockFilingRegistry } from "./mockFiling";
 
@@ -3824,6 +3829,12 @@ function createDatabaseHandle(
     async freeBusy(request) {
       return answerFreeBusyFromMock(directorySource.freeBusy(), request);
     },
+    async colleagueEvents(request) {
+      return answerColleagueEventsFromMock(directorySource.freeBusy(), request);
+    },
+    async sharedCalendars() {
+      return answerSharedCalendarsFromMock(directorySource.freeBusy());
+    },
   };
 
   const defaultViews: MockViewApi = {
@@ -5326,7 +5337,8 @@ export interface CreateMockMindooDBAppSessionOptions {
    * Busy times members published, for `calendar.freeBusy()` on every database (it is
    * tenant-wide in Haven). People not listed answer `"unknown"`; `state: "unpublished"`
    * answers without times. Busy times are clipped to the asked range and merged, and
-   * `computedAt` defaults to the time of the call.
+   * `computedAt` defaults to the time of the call. `level` and `events` answer
+   * `calendar.colleagueEvents()` / `calendar.sharedCalendars()` (calendar sharing).
    */
   freeBusy?: readonly MockFreeBusyPerson[];
   /**
@@ -6972,6 +6984,14 @@ export function createFakeBridgeHost(
           from: String(params.from),
           to: String(params.to),
         });
+      case "calendar.colleagueEvents":
+        return await state.getDatabase(String(params.databaseId)).calendar.colleagueEvents({
+          usernames: Array.isArray(params.usernames) ? params.usernames.map(String) : [],
+          from: String(params.from),
+          to: String(params.to),
+        });
+      case "calendar.sharedCalendars":
+        return await state.getDatabase(String(params.databaseId)).calendar.sharedCalendars();
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =
