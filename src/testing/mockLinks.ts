@@ -5,13 +5,15 @@
  *
  * @module mockLinks
  */
-import { MINDOODB_APP_LINK_TARGET_MAX } from "../client/links";
+import { MINDOODB_APP_LINK_TARGET_MAX, parseMindooDBAppLink } from "../client/links";
 import type {
   MindooDBAppBridgePortMessage,
   MindooDBAppLink,
   MindooDBAppLinkInput,
   MindooDBAppLinkOpened,
   MindooDBAppLinkOpenedHandler,
+  MindooDBAppLinkOpenResult,
+  MindooDBAppLinkParts,
   MindooDBAppLinksApi,
 } from "../types";
 
@@ -29,6 +31,14 @@ export interface MockLinksController {
   open(link: MindooDBAppLinkOpened): void;
   /** Every link the app created (`session.links.create`), oldest first. */
   created(): MockCreatedLink[];
+  /** Every link the app asked Haven to open (`session.links.open`), oldest first. */
+  openRequests(): MindooDBAppLinkParts[];
+  /**
+   * What `session.links.open` answers for links to OTHER apps or tenants (default
+   * `opened`). Links to this app in the mock tenant are delivered to its own
+   * `onOpened`, as Haven does.
+   */
+  answerOpen(status: MindooDBAppLinkOpenResult["status"]): void;
 }
 
 /** `https://…/open/<tenant>/<app>/<database>/<doc>#<target>`, each part encoded. */
@@ -63,6 +73,20 @@ export function createMockLinks(options: {
     return link;
   }
 
+  const openRequests: MindooDBAppLinkParts[] = [];
+  let foreignAnswer: MindooDBAppLinkOpenResult["status"] = "opened";
+
+  function open(url: string): MindooDBAppLinkOpenResult {
+    const parts = parseMindooDBAppLink(url);
+    if (!parts) return { status: "invalid" };
+    openRequests.push(parts);
+    const own = parts.appId === options.appId() && parts.tenantId === (options.tenantId() || MOCK_LINK_TENANT_ID);
+    if (!own) return { status: foreignAnswer };
+    if (!options.hasDatabase(parts.databaseId)) return { status: "noDatabase" };
+    deliver({ databaseId: parts.databaseId, docId: parts.docId, ...(parts.target ? { target: parts.target } : {}) });
+    return { status: "opened" };
+  }
+
   function flush() {
     for (const opened of pending.splice(0)) deliver(opened);
   }
@@ -84,6 +108,10 @@ export function createMockLinks(options: {
         if (handler === next) handler = null;
       };
     },
+    parse: parseMindooDBAppLink,
+    async open(url) {
+      return open(url);
+    },
   };
 
   /** Level 2: the fake host's `links.*` requests; `send` reaches the app's port. */
@@ -91,6 +119,8 @@ export function createMockLinks(options: {
     switch (method) {
       case "links.create":
         return { result: create((params ?? {}) as MindooDBAppLinkInput) };
+      case "links.open":
+        return { result: open(String((params as { url?: unknown } | null)?.url ?? "")) };
       case "links.subscribe":
         post = send;
         flush();
@@ -108,6 +138,10 @@ export function createMockLinks(options: {
       deliver({ databaseId: link.databaseId, docId: link.docId, ...(link.target ? { target: link.target } : {}) });
     },
     created: () => created.map((link) => ({ ...link, input: { ...link.input } })),
+    openRequests: () => openRequests.map((parts) => ({ ...parts })),
+    answerOpen(status) {
+      foreignAnswer = status;
+    },
   };
 
   return { api, dispatch, controller, reset: () => (post = null) };

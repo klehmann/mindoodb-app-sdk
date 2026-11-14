@@ -134,7 +134,7 @@ export {
   snapshotElementToPng,
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
-export { MINDOODB_APP_LINK_TARGET_MAX } from "./client/links";
+export { MINDOODB_APP_LINK_TARGET_MAX, parseMindooDBAppLink } from "./client/links";
 export { isMindooDBAppAgentImage, MindooDBAppAgentToolError } from "./client/agentTools";
 export { normalizeAgentToolInput } from "./client/agentInput";
 export {

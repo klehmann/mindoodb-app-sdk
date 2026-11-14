@@ -2311,6 +2311,29 @@ export interface MindooDBAppLinkOpened {
 
 export type MindooDBAppLinkOpenedHandler = (opened: MindooDBAppLinkOpened) => void | Promise<void>;
 
+/** The parts of a link to an app's document, as {@link MindooDBAppLinksApi.parse} reads them. */
+export interface MindooDBAppLinkParts {
+  tenantId: string;
+  /** The app the link belongs to (`appId` from its haven-app.json), not necessarily this one. */
+  appId: string;
+  databaseId: string;
+  docId: string;
+  target?: string;
+}
+
+/**
+ * What became of {@link MindooDBAppLinksApi.open}:
+ * - `opened`: Haven started or focused the app and handed it the document.
+ * - `noTenant` / `noApp` / `noDatabase`: Haven shows the user why it cannot open
+ *   the link (not in that tenant, app not installed for it, database not mapped).
+ * - `external`: this Haven cannot open links from apps; the link was opened in a
+ *   new browser tab instead.
+ * - `invalid`: not a link to an app's document; nothing happened.
+ */
+export interface MindooDBAppLinkOpenResult {
+  status: "opened" | "noTenant" | "noApp" | "noDatabase" | "external" | "invalid";
+}
+
 /**
  * `session.links`: links to this app's documents that anyone in the tenant can open.
  * The link names the tenant, the app, the database and the document, never their
@@ -2326,6 +2349,19 @@ export interface MindooDBAppLinksApi {
    * Returns an unsubscribe function.
    */
   onOpened(handler: MindooDBAppLinkOpenedHandler): () => void;
+  /**
+   * The parts of a link to an app's document (this app's or another app's), or
+   * `null` for any other URL. Use it to show such links in the app's content as
+   * something to open rather than as a web address.
+   */
+  parse(url: string): MindooDBAppLinkParts | null;
+  /**
+   * Opens a link to an app's document in the running Haven: it starts or focuses
+   * the app the link belongs to, in the link's tenant, and hands it the document.
+   * Call it from a click; without this, a click on such a link leaves Haven for a
+   * new browser tab. Works for links to other apps and to this app.
+   */
+  open(url: string): Promise<MindooDBAppLinkOpenResult>;
 }
 
 /**
