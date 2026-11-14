@@ -367,6 +367,14 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(removed.data._encryptFor).toEqual({
       "cn=Bob/o=Acme": { kind: "user" },
     });
+
+    const late = await database.documents.addRecipients(created.id, ["cn=Carol/o=Acme"], { history: "none" });
+    expect((late.data._encryptFor as Record<string, { historyFrom?: number }>)["cn=Carol/o=Acme"]?.historyFrom).toBe(2);
+    const revealed = await database.documents.revealHistory(created.id, ["CN=carol/O=acme"]);
+    expect(revealed.data._encryptFor).toEqual({
+      "cn=Bob/o=Acme": { kind: "user" },
+      "cn=Carol/o=Acme": { kind: "user" },
+    });
   });
 
   it("reports the shared key a document is encrypted with", async () => {

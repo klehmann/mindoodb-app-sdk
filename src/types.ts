@@ -266,6 +266,7 @@ export type MindooDBAppCapability =
   | "timestamps"
   | "directory"
   | "freebusy"
+  | "calendarshare"
   | "sealedchannel";
 
 /**
@@ -617,6 +618,12 @@ export interface MindooDBAppDocument {
    * hosts predating this field.
    */
   decryptionKeyId?: string;
+  /**
+   * Set on a document created with {@link MindooDBAppCreateDocumentInput.groupKeyDocId}:
+   * the group document whose members can read it. Absent otherwise and on hosts
+   * predating group keys.
+   */
+  groupKeyDocId?: string;
 }
 
 /** Opaque persisted id for a document revision in the MindooDB DAG. */
@@ -902,6 +909,18 @@ export interface MindooDBAppAccessDecision {
  * Matches MindooDB `recipientOptions`. The launching user is included as a
  * reader unless {@link includeSelf} is `false`.
  */
+/** Options of `documents.addRecipients`. */
+export interface MindooDBAppAddRecipientsOptions {
+  /**
+   * `"all"` (default): new readers decrypt everything written so far, as far
+   * back as the caller can read it.
+   * `"none"`: they only read what is written after they were added (existing
+   * attachments of the document included, so use it for chats, not for
+   * sharing a document).
+   */
+  history?: "all" | "none";
+}
+
 export interface MindooDBAppRecipientOptions {
   /**
    * When `false`, the launching user is not added as a reader. Use this to
@@ -932,6 +951,19 @@ export interface MindooDBAppCreateDocumentInput {
   recipients?: string[];
   /** Sealed-create options. Only used when {@link recipients} is set. */
   recipientOptions?: MindooDBAppRecipientOptions;
+  /**
+   * Encrypt the new document with the key series of a **group document**: a
+   * document of the same database created with {@link recipients}. Everyone the
+   * group document is sealed to can read it; `addRecipients` / `removeRecipients`
+   * on the group document apply to all documents that use it (removing rotates
+   * the key, so a removed member cannot read anything written afterwards). This
+   * is how a chat keeps one member list for any number of messages.
+   *
+   * Mutually exclusive with {@link decryptionKeyId} and {@link recipients}. The
+   * launching user must be a member of the group document. With a caller-chosen
+   * {@link id}, pass {@link assumeUniqueId}.
+   */
+  groupKeyDocId?: string;
   /**
    * Optional caller-provided document id. When omitted, MindooDB generates a
    * MongoDB-style ObjectId (24 lowercase hex characters). When provided, the id
@@ -3970,8 +4002,25 @@ export interface MindooDBAppDocumentApi {
    * One key wrap per new user, no rotation — new readers can decrypt the
    * whole history. The launching user is already on the list and does not
    * need to be passed. Requires the `update` capability.
+   *
+   * With `history: "none"` the key rotates first and the new readers only get
+   * the new generation: nothing written before they were added is readable
+   * for them (for a group document: none of the older documents that use its
+   * key). Their entry in `_encryptFor` then carries `historyFrom`; hand them
+   * the history later with {@link revealHistory}.
    */
   addRecipients(
+    docId: string,
+    recipients: string[],
+    options?: MindooDBAppAddRecipientsOptions,
+  ): Promise<MindooDBAppDocument>;
+  /**
+   * Give readers that were added with `history: "none"` the older key
+   * generations after all, so they read the history as far back as the caller
+   * holds it. No rotation. Cannot be taken back
+   * for what was already received. Requires the `update` capability.
+   */
+  revealHistory(
     docId: string,
     recipients: string[],
   ): Promise<MindooDBAppDocument>;
@@ -4026,6 +4075,7 @@ export interface MindooDBAppDocumentApi {
    */
   canCreate(input?: {
     decryptionKeyId?: string;
+    groupKeyDocId?: string;
     recipients?: string[];
     recipientOptions?: MindooDBAppRecipientOptions;
   }): Promise<MindooDBAppAccessDecision>;
@@ -4247,6 +4297,66 @@ export interface MindooDBAppCalendarApi {
    * Requires the `freebusy` capability.
    */
   freeBusy(request: MindooDBAppFreeBusyRequest): Promise<MindooDBAppFreeBusyResult[]>;
+  /**
+   * Colleagues' calendars as each of them shares them with the user: at
+   * `"business"` their business appointments, at `"all"` also private ones
+   * (title, time, place, status; never description or attendees). Whatever a
+   * person does not share with the user in detail is in `busy` (busy times not
+   * covered by `events`), at `"busy"` that is all there is, at `"none"`
+   * nothing. One entry per username asked for, in that order.
+   *
+   * At most 20 people and 14 weeks per call (else a `RangeError`). Hosts that
+   * do not know the call (older Haven) answer `level: "none"`, `"unknown"`.
+   * Requires the `calendarshare` capability.
+   */
+  colleagueEvents(request: MindooDBAppFreeBusyRequest): Promise<MindooDBAppColleagueCalendar[]>;
+  /**
+   * The members who share more than free/busy with the user, to offer their
+   * calendars without a search. Older hosts answer `[]`.
+   * Requires the `calendarshare` capability.
+   */
+  sharedCalendars(): Promise<MindooDBAppSharedCalendar[]>;
+}
+
+/** What a person shares of their calendar with the user. */
+export type MindooDBAppCalendarShareLevel = "none" | "busy" | "business" | "all";
+
+/** One appointment of {@link MindooDBAppColleagueCalendar}. */
+export interface MindooDBAppColleagueEvent {
+  /** Stable per appointment and occurrence (not the iCalendar UID). */
+  key: string;
+  /** ISO date-time (UTC). For an all-day entry midnight UTC of the first day. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  title: string;
+  location: string;
+  /** How it blocks time; `"free"` for an all-day entry that does not. */
+  status: MindooDBAppFreeBusyStatus | "free";
+  recurring?: boolean;
+}
+
+/** One person of {@link MindooDBAppCalendarApi.colleagueEvents}. */
+export interface MindooDBAppColleagueCalendar {
+  username: string;
+  level: MindooDBAppCalendarShareLevel;
+  /** As for free/busy: `"ok"` when something is known about the person's times. */
+  state: MindooDBAppFreeBusyState;
+  /** Appointments the user may see, sorted by start, within `[from, to)`. */
+  events: MindooDBAppColleagueEvent[];
+  /** Busy times not covered by `events` (shown as "busy"). */
+  busy: MindooDBAppFreeBusyInterval[];
+  computedAt?: string;
+}
+
+/** One entry of {@link MindooDBAppCalendarApi.sharedCalendars}. */
+export interface MindooDBAppSharedCalendar {
+  username: string;
+  level: "business" | "all";
+  displayName?: string;
+  firstName?: string;
+  lastName?: string;
+  computedAt?: string;
 }
 
 /** Input of {@link MindooDBAppCalendarApi.freeBusy}. */

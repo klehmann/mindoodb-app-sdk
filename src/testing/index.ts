@@ -177,7 +177,12 @@ import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
-import { answerFreeBusyFromMock, type MockFreeBusyPerson } from "../freeBusy";
+import {
+  answerColleagueEventsFromMock,
+  answerFreeBusyFromMock,
+  answerSharedCalendarsFromMock,
+  type MockFreeBusyPerson,
+} from "../freeBusy";
 import { createMockAttachmentPins } from "./mockAttachmentPins";
 import { MockFilingRegistry } from "./mockFiling";
 
@@ -807,7 +812,14 @@ type MockStoredDocument = MindooDBAppDocument & {
  * Mirrors the host projection of the encryption key id: a person-encrypted
  * document (`_encryptFor`) has no shareable named key, so it reports none.
  */
-function mockDecryptionKeyId(document: MockStoredDocument): { decryptionKeyId?: string } {
+function mockDecryptionKeyId(document: MockStoredDocument): {
+  decryptionKeyId?: string;
+  groupKeyDocId?: string;
+} {
+  if (document.decryptionKeyId?.startsWith("$sealed:")) {
+    // Encrypted with a group document's key series (`groupKeyDocId`).
+    return { groupKeyDocId: document.decryptionKeyId.slice("$sealed:".length) };
+  }
   if (!document.decryptionKeyId || document.data._encryptFor) {
     return {};
   }
@@ -3436,6 +3448,21 @@ function createDatabaseHandle(
       const encryptFor = Array.isArray(input.recipients)
         ? { _encryptFor: mockEncryptForMap(input.recipients) }
         : {};
+      if (input.groupKeyDocId !== undefined) {
+        // Like MindooDB: the group document must be a sealed document of this
+        // database. The mock does not model membership, so every caller "is" one.
+        if (input.recipients !== undefined || input.decryptionKeyId !== undefined) {
+          throw new Error("groupKeyDocId is mutually exclusive with recipients and decryptionKeyId");
+        }
+        const group = storedDocuments.get(input.groupKeyDocId);
+        if (!group || group.isDeleted || !group.data._encryptFor) {
+          throw new Error(
+            `group document "${input.groupKeyDocId}" does not exist in this database or was not created with recipients`,
+          );
+        }
+      }
+      const createKeyId =
+        input.groupKeyDocId !== undefined ? `$sealed:${input.groupKeyDocId}` : input.decryptionKeyId ?? "default";
       if (automergeMode) {
         const stored: MockStoredDocument = {
           id,
@@ -3443,7 +3470,7 @@ function createDatabaseHandle(
           attachments: [],
           updatedAt: createdAt,
           isDeleted: false,
-          decryptionKeyId: input.decryptionKeyId ?? "default",
+          decryptionKeyId: createKeyId,
         };
         persistMockAutomergeDocument(
           stored,
@@ -3478,7 +3505,7 @@ function createDatabaseHandle(
         data: structuredClone(created.data),
         attachments: [],
         isDeleted: false,
-        decryptionKeyId: input.decryptionKeyId ?? "default",
+        decryptionKeyId: createKeyId,
       };
       storedDocuments.set(created.id, stored);
       notifyLiveQueries();
@@ -3529,13 +3556,13 @@ function createDatabaseHandle(
       notifyLiveQueries();
       return { ...updated, ...mockDecryptionKeyId(stored) };
     },
-    async addRecipients(docId, recipients) {
+    async addRecipients(docId, recipients, options) {
       const existing = storedDocuments.get(docId);
       const current =
         existing?.data._encryptFor &&
         typeof existing.data._encryptFor === "object" &&
         !Array.isArray(existing.data._encryptFor)
-          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number }>) }
+          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number; historyFrom?: number }>) }
           : null;
       if (!current) {
         throw new Error("Recipient mutators require a document created with `recipients`");
@@ -3551,8 +3578,28 @@ function createDatabaseHandle(
         if (key) {
           delete current[key].removedAt;
         } else {
-          current[trimmed] = { kind: "user" };
+          // The mock keeps no key generations: `historyFrom` only marks the
+          // reader, as the host does (there it is the first epoch they hold).
+          current[trimmed] =
+            options?.history === "none" ? { kind: "user", historyFrom: 2 } : { kind: "user" };
         }
+      }
+      return persistEncryptFor(docId, current);
+    },
+    async revealHistory(docId, recipients) {
+      const existing = storedDocuments.get(docId);
+      const current =
+        existing?.data._encryptFor &&
+        typeof existing.data._encryptFor === "object" &&
+        !Array.isArray(existing.data._encryptFor)
+          ? structuredClone(existing.data._encryptFor as Record<string, { kind: "user"; historyFrom?: number }>)
+          : null;
+      if (!current) {
+        throw new Error("Recipient mutators require a document created with `recipients`");
+      }
+      const reveal = new Set(recipients.map((name) => name.trim().toLowerCase()).filter(Boolean));
+      for (const key of Object.keys(current)) {
+        if (reveal.has(key.trim().toLowerCase())) delete current[key].historyFrom;
       }
       return persistEncryptFor(docId, current);
     },
@@ -3781,6 +3828,12 @@ function createDatabaseHandle(
   const defaultCalendar: MindooDBAppCalendarApi = {
     async freeBusy(request) {
       return answerFreeBusyFromMock(directorySource.freeBusy(), request);
+    },
+    async colleagueEvents(request) {
+      return answerColleagueEventsFromMock(directorySource.freeBusy(), request);
+    },
+    async sharedCalendars() {
+      return answerSharedCalendarsFromMock(directorySource.freeBusy());
     },
   };
 
@@ -5284,7 +5337,8 @@ export interface CreateMockMindooDBAppSessionOptions {
    * Busy times members published, for `calendar.freeBusy()` on every database (it is
    * tenant-wide in Haven). People not listed answer `"unknown"`; `state: "unpublished"`
    * answers without times. Busy times are clipped to the asked range and merged, and
-   * `computedAt` defaults to the time of the call.
+   * `computedAt` defaults to the time of the call. `level` and `events` answer
+   * `calendar.colleagueEvents()` / `calendar.sharedCalendars()` (calendar sharing).
    */
   freeBusy?: readonly MockFreeBusyPerson[];
   /**
@@ -6782,6 +6836,14 @@ export function createFakeBridgeHost(
           .documents.addRecipients(
             String(params.docId),
             Array.isArray(params.recipients) ? params.recipients.map(String) : [],
+            params.history === "none" ? { history: "none" } : undefined,
+          );
+      case "documents.revealHistory":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.revealHistory(
+            String(params.docId),
+            Array.isArray(params.recipients) ? params.recipients.map(String) : [],
           );
       case "documents.removeRecipients":
         return await state
@@ -6922,6 +6984,14 @@ export function createFakeBridgeHost(
           from: String(params.from),
           to: String(params.to),
         });
+      case "calendar.colleagueEvents":
+        return await state.getDatabase(String(params.databaseId)).calendar.colleagueEvents({
+          usernames: Array.isArray(params.usernames) ? params.usernames.map(String) : [],
+          from: String(params.from),
+          to: String(params.to),
+        });
+      case "calendar.sharedCalendars":
+        return await state.getDatabase(String(params.databaseId)).calendar.sharedCalendars();
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =

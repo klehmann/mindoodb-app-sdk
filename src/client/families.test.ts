@@ -131,3 +131,29 @@ describe("session.families over the bridge", () => {
     }
   });
 });
+
+describe("groupKeyDocId (mock)", () => {
+  it("creates documents with a group document's key and reports it", async () => {
+    const parsed = validateMindooDBAppDefinition(definition).definition!;
+    const { session } = createMockMindooDBAppSession({
+      databases: mockDatabasesFromDefinition(parsed, { index: [] }),
+    });
+    const room = await session.families.open("rooms", "chat1");
+    const group = await room.documents.create({ recipients: ["CN=Bob/O=Test"], set: { name: "Team" } });
+    const message = await room.documents.create({
+      id: "m_1",
+      assumeUniqueId: true,
+      groupKeyDocId: group.id,
+      set: { text: "hi" },
+    });
+    expect(message.groupKeyDocId).toBe(group.id);
+    expect(message.decryptionKeyId).toBeUndefined();
+    expect((await room.documents.get("m_1"))?.groupKeyDocId).toBe(group.id);
+
+    const plain = await room.documents.create({ set: { n: 1 } });
+    await expect(room.documents.create({ groupKeyDocId: plain.id, set: {} })).rejects.toThrow(/recipients/);
+    await expect(
+      room.documents.create({ groupKeyDocId: group.id, decryptionKeyId: "default", set: {} }),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+});

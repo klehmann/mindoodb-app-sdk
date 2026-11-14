@@ -946,6 +946,7 @@ Each database mapped to your app carries a set of **capabilities** that Haven co
 | `views`       | Create app-defined virtual views for this database           |
 | `directory`   | List the tenant's users (`directory.listUsers()`), their names (`directory.lookupUsers()`), search them by name (`directory.searchUsers()`), MindooMail gateways and members' addresses there (`directory.mailGateways()`, `directory.mailAddressesFor()`), resolve signing keys |
 | `freebusy`    | See when colleagues are busy (`calendar.freeBusy()`): times only, no details |
+| `calendarshare` | See colleagues' calendars as each shares them (`calendar.colleagueEvents()`): titles and places of shared appointments |
 | `sealedchannel` | Open an encrypted channel to a tenant-joined service       |
 
 ```ts
@@ -999,6 +1000,47 @@ const stop = session.families.onChange(({ family, databases }) => refreshRoomLis
   the server, not in the app.
 - In tests, seed members as `"<family>:<memberId>"` keys of `mockDatabasesFromDefinition`;
   they start subscribed. `families.open` in the mock registers new members on the fly.
+
+### Group keys: one member list for many documents
+
+A chat has one member list and any number of messages. Make the member list a **group
+document** (a document created with `recipients`) and create the messages with
+`groupKeyDocId`: they use the group document's key series.
+
+```ts
+const group = await db.documents.create({ recipients: ["CN=Bob/O=Acme"], set: { name: "Project X" } });
+await db.documents.create({ id: messageId, assumeUniqueId: true, groupKeyDocId: group.id, set: { text: "Hi" } });
+
+await db.documents.addRecipients(group.id, ["CN=Carol/O=Acme"]);    // Carol reads all messages so far
+await db.documents.removeRecipients(group.id, ["CN=Bob/O=Acme"]);   // key rotates: Bob reads nothing new
+```
+
+- Everyone the group document is sealed to can read the documents; adding a member
+  reveals the whole history, removing one rotates the key (they keep what they already
+  had, nothing written afterwards). Honest clients of a removed member hide the group
+  and its documents on the next sync.
+- The group document must be in the same database; the launching user must be a
+  member to create with it. Snapshots report `groupKeyDocId` instead of a
+  `decryptionKeyId`.
+- With a caller-chosen `id`, pass `assumeUniqueId` (random ids only).
+- Members are listed in the group document's `_encryptFor`; change them only with
+  `addRecipients` / `removeRecipients` / `setRecipients` on the group document.
+- The mock checks that the group document exists and is sealed; it does not model
+  membership.
+
+**Joining without the history.** By default `addRecipients` hands new members the
+whole history (so a shared document keeps its existing attachments readable). For a
+chat, pass `{ history: "none" }`: the key rotates first and the new member gets only
+the new generation, so older messages are unreadable for them and do not show up on
+their replica. Their entry in `_encryptFor` carries `historyFrom`.
+`revealHistory(group.id, [name])` hands them the older generations later (it cannot
+be taken back).
+
+Every member can change the member list, also one who joined without the history.
+What they hand to others reaches back only as far as they can read themselves:
+`history: "all"` and `revealHistory` by such a member start at their own
+`historyFrom`. Who is *allowed* to add or remove is up to your app and the tenant's
+access rules.
 
 ### Directory users
 
@@ -1083,6 +1125,29 @@ const result = await db.calendar.freeBusy({
 - Needs the `freebusy` permission on the database (`"permissions": ["freebusy"]` in `haven-app.json`). It is separate from `directory`: an app can pick recipients without seeing anyone's calendar.
 
 `mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, publishedUntil?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
+
+### Colleagues' calendars
+
+Each member chooses in Haven what colleagues see of their calendar: nothing, free/busy only, business appointments, or all appointments including private ones, as a level for everyone and exceptions per colleague (the tenant policy can cap it). `db.calendar.colleagueEvents({ usernames, from, to })` returns what each person shares with the user:
+
+```ts
+const [ben] = await db.calendar.colleagueEvents({
+  usernames: ["CN=Ben/O=Acme"],
+  from: "2026-11-09T00:00:00Z",
+  to: "2026-11-16T00:00:00Z",
+});
+// { username: "CN=Ben/O=Acme", level: "business", state: "ok",
+//   events: [{ key: "3f…", start: "2026-11-09T09:00:00.000Z", end: "2026-11-09T10:00:00.000Z",
+//              allDay: false, title: "Sprint review", location: "Room 1", status: "busy" }],
+//   busy: [{ start: "2026-11-09T13:00:00.000Z", end: "2026-11-09T14:00:00.000Z", status: "busy" }] }
+```
+
+- `level` is what the person shares with the user: `"none"`, `"busy"`, `"business"` (appointments not marked private) or `"all"`. Whatever is not shared in detail is in `busy` (busy times not covered by `events`): draw it as "busy", like free/busy.
+- `events` carry title, times, place and status (`"busy"`, `"tentative"`, `"oof"`, or `"free"` for an all-day entry that blocks nothing), never descriptions, attendees or the iCalendar UID; `key` is stable per appointment and occurrence.
+- `db.calendar.sharedCalendars()` lists the members who share more than free/busy with the user (`[{ username, level, displayName? }]`), to offer their calendars without a search.
+- At most 20 people and 14 weeks per call. Older hosts answer `level: "none"` and `[]`.
+- Needs the `calendarshare` permission on the database. Haven keeps each level in a group key of the person's `mbusy_` database: removing a colleague rotates the key and publishes the weeks again, so the app sees what is shared now.
+- In tests the `freeBusy` option of `createMockMindooDBAppSession` takes `level` and `events` (with `private: true` for private ones) per person.
 
 ### Sealed channels
 
@@ -2937,7 +3002,8 @@ Host-kept key/value state, the only durable storage a hosted app has. See [Stora
 | `applyAutomergeChanges(docId, patch)` | `Promise<MindooDBAppAutomergePatchResult>` |
 | `create(input)`                    | `Promise<MindooDBAppDocument>`               |
 | `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
-| `addRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
+| `addRecipients(docId, recipients, options?)` | `Promise<MindooDBAppDocument>`     |
+| `revealHistory(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
 | `removeRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`            |
 | `setRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
 | `delete(docId)`                    | `Promise<{ ok: true }>`                      |
