@@ -30,6 +30,7 @@ const DOCUMENT_REQUIREMENTS: Record<string, Requirement> = {
   applyAutomergeChanges: ["update"],
   applyAutomergeChangesBatch: ["update"],
   addRecipients: ["update"],
+  revealHistory: ["update"],
   removeRecipients: ["update"],
   setRecipients: ["update"],
   delete: ["delete"],

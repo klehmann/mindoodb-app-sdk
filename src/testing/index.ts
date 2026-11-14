@@ -3551,13 +3551,13 @@ function createDatabaseHandle(
       notifyLiveQueries();
       return { ...updated, ...mockDecryptionKeyId(stored) };
     },
-    async addRecipients(docId, recipients) {
+    async addRecipients(docId, recipients, options) {
       const existing = storedDocuments.get(docId);
       const current =
         existing?.data._encryptFor &&
         typeof existing.data._encryptFor === "object" &&
         !Array.isArray(existing.data._encryptFor)
-          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number }>) }
+          ? { ...(existing.data._encryptFor as Record<string, { kind: "user"; removedAt?: number; historyFrom?: number }>) }
           : null;
       if (!current) {
         throw new Error("Recipient mutators require a document created with `recipients`");
@@ -3573,8 +3573,28 @@ function createDatabaseHandle(
         if (key) {
           delete current[key].removedAt;
         } else {
-          current[trimmed] = { kind: "user" };
+          // The mock keeps no key generations: `historyFrom` only marks the
+          // reader, as the host does (there it is the first epoch they hold).
+          current[trimmed] =
+            options?.history === "none" ? { kind: "user", historyFrom: 2 } : { kind: "user" };
         }
+      }
+      return persistEncryptFor(docId, current);
+    },
+    async revealHistory(docId, recipients) {
+      const existing = storedDocuments.get(docId);
+      const current =
+        existing?.data._encryptFor &&
+        typeof existing.data._encryptFor === "object" &&
+        !Array.isArray(existing.data._encryptFor)
+          ? structuredClone(existing.data._encryptFor as Record<string, { kind: "user"; historyFrom?: number }>)
+          : null;
+      if (!current) {
+        throw new Error("Recipient mutators require a document created with `recipients`");
+      }
+      const reveal = new Set(recipients.map((name) => name.trim().toLowerCase()).filter(Boolean));
+      for (const key of Object.keys(current)) {
+        if (reveal.has(key.trim().toLowerCase())) delete current[key].historyFrom;
       }
       return persistEncryptFor(docId, current);
     },
@@ -6802,6 +6822,14 @@ export function createFakeBridgeHost(
         return await state
           .getDatabase(String(params.databaseId))
           .documents.addRecipients(
+            String(params.docId),
+            Array.isArray(params.recipients) ? params.recipients.map(String) : [],
+            params.history === "none" ? { history: "none" } : undefined,
+          );
+      case "documents.revealHistory":
+        return await state
+          .getDatabase(String(params.databaseId))
+          .documents.revealHistory(
             String(params.docId),
             Array.isArray(params.recipients) ? params.recipients.map(String) : [],
           );

@@ -1027,6 +1027,20 @@ await db.documents.removeRecipients(group.id, ["CN=Bob/O=Acme"]);   // key rotat
 - The mock checks that the group document exists and is sealed; it does not model
   membership.
 
+**Joining without the history.** By default `addRecipients` hands new members the
+whole history (so a shared document keeps its existing attachments readable). For a
+chat, pass `{ history: "none" }`: the key rotates first and the new member gets only
+the new generation, so older messages are unreadable for them and do not show up on
+their replica. Their entry in `_encryptFor` carries `historyFrom`.
+`revealHistory(group.id, [name])` hands them the older generations later (it cannot
+be taken back).
+
+Every member can change the member list, also one who joined without the history.
+What they hand to others reaches back only as far as they can read themselves:
+`history: "all"` and `revealHistory` by such a member start at their own
+`historyFrom`. Who is *allowed* to add or remove is up to your app and the tenant's
+access rules.
+
 ### Directory users
 
 With the `directory` capability, `db.directory.listUsers()` returns the tenant's active usernames, e.g. for a recipient picker. For large directories ask for pages instead, with an optional case-insensitive search:
@@ -2964,7 +2978,8 @@ Host-kept key/value state, the only durable storage a hosted app has. See [Stora
 | `applyAutomergeChanges(docId, patch)` | `Promise<MindooDBAppAutomergePatchResult>` |
 | `create(input)`                    | `Promise<MindooDBAppDocument>`               |
 | `update(docId, patch)`             | `Promise<MindooDBAppDocument>`               |
-| `addRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
+| `addRecipients(docId, recipients, options?)` | `Promise<MindooDBAppDocument>`     |
+| `revealHistory(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
 | `removeRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`            |
 | `setRecipients(docId, recipients)` | `Promise<MindooDBAppDocument>`               |
 | `delete(docId)`                    | `Promise<{ ok: true }>`                      |
