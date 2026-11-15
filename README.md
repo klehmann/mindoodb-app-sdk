@@ -2180,6 +2180,19 @@ Notes:
 - Queries that reference encrypted fields or fields outside the summary configuration are rejected with a `query-not-supported` bridge error. Use a view with `useFullDocuments` (see below) or `documents.list()` for those cases.
 - Queries require the `read` capability. In a time-travel launch, and on a handle opened with `openDatabase(id, { timeTravelDate })`, they answer from that moment's summary; live queries there deliver one result, as a past state never changes.
 
+**Restricting by document id prefix** — when your ids encode where a document belongs (e.g. chat messages `m_<roomId>_<yyyymm>_<ulid>`, or `inv_…` next to bulky `chunk_…` documents), pass `idPrefix` with one prefix or a list:
+
+```ts
+const october = await db.documents.query({
+  idPrefix: ["m_r3_202610", "m_r3_202611"],   // room r3, two months
+  sortBy: [{ field: "sentAt", direction: "ascending" }],
+});
+```
+
+- Matching is boundary-aware: `"m_r3"` matches `m_r3` and `m_r3_…`, not `m_r30_…`. A prefix must end at a `_` segment boundary, so `"m_r3_2026"` does **not** match `m_r3_202611_x` — list the months instead.
+- Works for `query()`, `liveQuery()` and views (`createViewNavigator({ …, idPrefix })`). On views that index from materialized documents, non-matching documents are skipped before they are loaded or decrypted, so the first build only pays for the matching slice.
+- To keep bulky documents out of the summary buffer entirely, scope it once per database (see "Scoping the summary" below).
+
 **Full-text search** — a query can additionally carry a `text` clause, evaluated against the database's client-side full-text index on the host and combined with `filter` as a logical AND:
 
 ```ts
@@ -2227,6 +2240,18 @@ await db.setSummarySetup({ ...current, include });
 
 - `include` paths may be nested (`"meta.author"`) or non-scalar and bypass the size cap; `exclude` wins over both.
 - A change re-extracts all documents in the background; queries report `coverage: "rebuilding"` until the backfill finishes, so keep a fallback for missing fields.
+
+**Scoping the summary** — the summary buffer covers every document of the database, and its first build loads and decrypts all of them. When a database mixes the records your lists need with bulky documents nobody queries (spreadsheet chunks, imports, archives), restrict it to id prefixes:
+
+```ts
+const current = await db.getSummarySetup();
+await db.setSummarySetup({ ...current, idPrefixes: ["m", "room"] });
+```
+
+- Documents outside the scope are skipped before they are loaded or decrypted; the first build scales with the share of documents inside the scope (roughly 10 % of the time for 10 % of the documents).
+- Summary-backed reads then only see the scope, so they must say which part they want: `documents.query()` without an `idPrefix` inside the scope is rejected, and views without a matching `idPrefix` fall back to indexing from materialized documents.
+- Changing the scope rebuilds the summary in the background (`coverage: "rebuilding"`); documents that fall out of the scope disappear right away.
+- Needs MindooDB 0.0.96+ on the host. Older hosts ignore `idPrefixes` and `idPrefix` (queries then return unfiltered results), so check the host version before relying on it.
 
 **Extracting text from bytes you already have** (requires `attachments`):
 
@@ -2590,6 +2615,8 @@ console.log(batch.entries);
 
 await navigator.dispose();
 ```
+
+Pass `idPrefix` (one prefix or a list) to build the view over a slice of the source databases only, e.g. one chat room: `createViewNavigator({ databaseIds: ["chat"], idPrefix: "m_r3", definition })`. Matching follows the same boundary-aware rule as `documents.query()` (see "Restricting by document id prefix" above). Give each prefix its own `definition.id` (e.g. `room-r3`): Haven persists one index per id, and a different prefix under the same id rebuilds it.
 
 **Haven-configured views** -- open a view that Haven attached to the app registration:
 

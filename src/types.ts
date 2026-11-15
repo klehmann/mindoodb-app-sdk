@@ -3724,6 +3724,20 @@ export interface MindooDBAppSummarySetup {
   includeAttachments?: boolean;
   /** Store a slim `_encryptFor` projection. Default: `true`. */
   includeRecipients?: boolean;
+  /**
+   * Only summarize documents whose id matches one of these prefixes
+   * (boundary-aware, see {@link MindooDBAppDocumentQuery.idPrefix}). Documents
+   * outside the scope are skipped before they are loaded or decrypted, so a
+   * database that mixes queryable records with bulky internal documents
+   * (spreadsheet chunks, archives) builds its summary much faster.
+   *
+   * Summary-backed reads then only see documents inside the scope:
+   * `documents.query()` needs an `idPrefix` inside it, and views without a
+   * matching `idPrefix` index from materialized documents instead. Omit for
+   * every document (default). Changing the scope rebuilds the summary in the
+   * background. Requires MindooDB 0.0.96+ on the host.
+   */
+  idPrefixes?: string[];
 }
 
 /**
@@ -3851,6 +3865,20 @@ export interface MindooDBAppDocumentQuery {
    * Requires full-text indexing to be enabled for the database.
    */
   text?: MindooDBAppQueryTextClause;
+  /**
+   * Restrict the query to documents whose id matches this prefix or one of
+   * these prefixes. Matching is boundary-aware: `"m_r3"` matches `m_r3` and
+   * `m_r3_…`, but not `m_r30_…`, and a prefix must end at a `_` segment
+   * boundary (`"m_r3_2026"` does not match `m_r3_202611_x` — list the months
+   * instead). Useful when ids encode where a document belongs, e.g. chat
+   * messages `m_<roomId>_<yyyymm>_<ulid>`.
+   *
+   * When the database's summary is scoped
+   * ({@link MindooDBAppSummarySetup.idPrefixes}), the query must pass
+   * prefixes inside that scope, otherwise the host rejects it. Requires a
+   * host with view id-prefix support (MindooDB 0.0.96+).
+   */
+  idPrefix?: string | string[];
   sortBy?: MindooDBAppQuerySortKey[];
   /**
    * Maximum number of rows returned. The host enforces a cap; omitting the
@@ -4847,6 +4875,17 @@ export interface MindooDBAppCreateViewNavigatorInput {
    * fields not covered by the summary configuration).
    */
   useFullDocuments?: boolean;
+  /**
+   * Restrict every source database of the view to documents whose id
+   * matches this prefix or one of these prefixes (boundary-aware, see
+   * {@link MindooDBAppDocumentQuery.idPrefix}). When the host has to index
+   * from materialized documents, non-matching documents are skipped before
+   * they are loaded or decrypted, so the first build only pays for the
+   * matching slice of a large database. A source whose summary is scoped
+   * ({@link MindooDBAppSummarySetup.idPrefixes}) stays on the fast summary
+   * path only when these prefixes lie inside that scope.
+   */
+  idPrefix?: string | string[];
 }
 
 /** @deprecated Use `MindooDBAppCreateViewNavigatorInput`. */
