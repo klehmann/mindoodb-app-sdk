@@ -8,6 +8,8 @@ import type {
   MindooDBAppFreeBusyRequest,
   MindooDBAppFreeBusyResult,
   MindooDBAppFreeBusyStatus,
+  MindooDBAppWeekday,
+  MindooDBAppWorkingHours,
 } from "./types";
 
 /** At most this many people per `calendar.freeBusy({ … })` call. */
@@ -136,6 +138,8 @@ export interface MockFreeBusyPerson {
    * and no times after it, one entirely after it answers "unknown". Default: no end.
    */
   publishedUntil?: string;
+  /** Working hours answered with the busy times (`state` "ok"). */
+  workingHours?: MindooDBAppWorkingHours;
 }
 
 function personKey(username: string): string {
@@ -168,6 +172,7 @@ export function answerFreeBusyFromMock(
       busy: mergeFreeBusyIntervals(person.busy ?? [], fromMs, past ? until : toMs),
       computedAt,
       ...(past ? { publishedUntil: new Date(until).toISOString() } : {}),
+      ...(person.workingHours ? { workingHours: person.workingHours } : {}),
     };
   });
 }
@@ -261,4 +266,101 @@ export function answerSharedCalendarsFromMock(people: readonly MockFreeBusyPerso
   return people
     .filter((person) => person.level === "business" || person.level === "all")
     .map((person) => ({ username: person.username, level: person.level as "business" | "all" }));
+}
+
+const WEEKDAY_KEYS: readonly MindooDBAppWeekday[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Wall-clock parts of an instant in `timeZone`. */
+function wallClock(ms: number, timeZone: string): { year: number; month: number; day: number; hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(ms));
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { year: value("year"), month: value("month"), day: value("day"), hour: value("hour") % 24, minute: value("minute") };
+}
+
+/** The instant of a wall-clock time in `timeZone` (the earlier one when the clock repeats, the next valid one in a gap). */
+function zonedInstant(year: number, month: number, day: number, minutes: number, timeZone: string): number {
+  const guess = Date.UTC(year, month - 1, day) + minutes * 60_000;
+  let ms = guess;
+  for (let step = 0; step < 3; step++) {
+    const wall = wallClock(ms, timeZone);
+    const shown = Date.UTC(wall.year, wall.month - 1, wall.day) + (wall.hour * 60 + wall.minute) * 60_000;
+    const diff = guess - shown;
+    if (diff === 0) break;
+    ms += diff;
+  }
+  return ms;
+}
+
+function minutesOfTime(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[1]) * 60 + Number(match[2]);
+  return minutes >= 0 && minutes <= 24 * 60 ? minutes : null;
+}
+
+/**
+ * The working time of {@link MindooDBAppWorkingHours} between `from` and `to`
+ * as instants (ISO, sorted), for shading the rest in a scheduling assistant.
+ * Days are the days in the person's zone, so daylight saving and other zones
+ * come out right. `isHoliday(date)` (`YYYY-MM-DD` in that zone) leaves a day
+ * out, e.g. from a holiday library for `holidayRegion`.
+ *
+ * Returns null for `mode: "none"` (no fixed working hours: shade nothing) and
+ * for an unknown zone.
+ */
+export function workingTimeIntervals(
+  hours: MindooDBAppWorkingHours,
+  from: string | number | Date,
+  to: string | number | Date,
+  options: { isHoliday?: (date: string) => boolean } = {},
+): Array<{ start: string; end: string }> | null {
+  if (hours.mode === "none") return null;
+  const fromMs = new Date(from).getTime();
+  const toMs = new Date(to).getTime();
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return [];
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: hours.timeZone });
+  } catch {
+    return null;
+  }
+  const result: Array<{ start: number; end: number }> = [];
+  // From the day before (zones ahead of UTC) to the day after.
+  const first = wallClock(fromMs - DAY_MS, hours.timeZone);
+  let day = Date.UTC(first.year, first.month - 1, first.day);
+  const last = wallClock(toMs + DAY_MS, hours.timeZone);
+  const lastDay = Date.UTC(last.year, last.month - 1, last.day);
+  for (; day <= lastDay; day += DAY_MS) {
+    const date = new Date(day);
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    const dayOfMonth = date.getUTCDate();
+    const iso = `${year}-${String(month).padStart(2, "0")}-${String(dayOfMonth).padStart(2, "0")}`;
+    if (options.isHoliday?.(iso)) continue;
+    const windows = hours.days?.[WEEKDAY_KEYS[date.getUTCDay()]!] ?? [];
+    for (const window of windows) {
+      const startMinutes = minutesOfTime(window.start);
+      const endMinutes = minutesOfTime(window.end);
+      if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) continue;
+      const start = Math.max(fromMs, zonedInstant(year, month, dayOfMonth, startMinutes, hours.timeZone));
+      const end = Math.min(toMs, zonedInstant(year, month, dayOfMonth, endMinutes, hours.timeZone));
+      if (end > start) result.push({ start, end });
+    }
+  }
+  result.sort((a, b) => a.start - b.start);
+  const joined: Array<{ start: number; end: number }> = [];
+  for (const range of result) {
+    const last = joined[joined.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else joined.push({ ...range });
+  }
+  return joined.map((range) => ({ start: new Date(range.start).toISOString(), end: new Date(range.end).toISOString() }));
 }

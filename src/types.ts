@@ -4514,6 +4514,38 @@ export interface MindooDBAppFreeBusyResult {
    * a request entirely outside them answers `"unknown"`. Older hosts leave it out.
    */
   publishedUntil?: string;
+  /**
+   * The person's working hours, when they publish them (Haven Settings ›
+   * Free/busy). Shade the time outside them in a scheduling assistant;
+   * {@link workingTimeIntervals} turns them into instants. Older hosts leave
+   * it out: then nothing is known about working hours.
+   */
+  workingHours?: MindooDBAppWorkingHours;
+}
+
+/** Day keys of {@link MindooDBAppWorkingHours.days}, Monday first. */
+export type MindooDBAppWeekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+/** One working time window, `HH:MM` wall-clock in {@link MindooDBAppWorkingHours.timeZone}; `end` may be `24:00`. */
+export interface MindooDBAppWorkingWindow {
+  start: string;
+  end: string;
+}
+
+/** A person's usual working hours (free/busy). */
+export interface MindooDBAppWorkingHours {
+  /** `"fixed"`: the windows in `days`; `"none"`: no fixed working hours (e.g. shift work), shade nothing. */
+  mode: "fixed" | "none";
+  /** IANA zone of the windows, e.g. `Europe/Berlin`. */
+  timeZone: string;
+  /** Per weekday the working windows, sorted; an empty list is a day off. */
+  days: Record<MindooDBAppWeekday, MindooDBAppWorkingWindow[]>;
+  /**
+   * Public holidays of this ISO 3166 country or subdivision (`DE`, `DE-NW`)
+   * count as outside working hours, never as busy. Absent: holidays are
+   * working days. The app computes the dates (e.g. with a holiday library).
+   */
+  holidayRegion?: string;
 }
 
 /** Options of {@link MindooDBAppDirectoryApi.searchUsers}. */
