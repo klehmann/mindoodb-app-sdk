@@ -142,6 +142,7 @@ import type {
   MindooDBAppNotifyInput,
   MindooDBAppNotifyResult,
   MindooDBAppDeviceInfo,
+  MindooDBAppMediaGateway,
   MindooDBAppFilingApi,
   MindooDBAppFilingRef,
 } from "../types";
@@ -2242,6 +2243,19 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   /** Returns the product names currently licensed in the Haven host. */
   async getLicensedProducts(): Promise<string[]> {
     return await this.rpc.call("session.getLicensedProducts", {});
+  }
+
+  async getMediaGateway(): Promise<MindooDBAppMediaGateway | null> {
+    try {
+      return (await this.rpc.call<MindooDBAppMediaGateway | null>("session.getMediaGateway", {})) ?? null;
+    } catch (error) {
+      // An older host does not know the method: it has no gateway to offer.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "method-not-found" || code === "unsupported") {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async getDevice(): Promise<MindooDBAppDeviceInfo | null> {
