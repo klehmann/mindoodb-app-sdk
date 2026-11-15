@@ -2,6 +2,7 @@ import type {
   MindooDBAppBridgeLinkOpenedMessage,
   MindooDBAppBridgePortMessage,
   MindooDBAppLink,
+  MindooDBAppLinkCopyResult,
   MindooDBAppLinkInput,
   MindooDBAppLinkOpened,
   MindooDBAppLinkOpenedHandler,
@@ -67,6 +68,86 @@ export function parseMindooDBAppLink(url: string): MindooDBAppLinkParts | null {
   };
 }
 
+/** Checked parameters of `links.create` / `links.copy`. */
+function linkParams(input: MindooDBAppLinkInput) {
+  if (!input || typeof input.databaseId !== "string" || !input.databaseId || typeof input.docId !== "string" || !input.docId) {
+    throw new Error("links.create needs a databaseId and a docId.");
+  }
+  if (input.target !== undefined && (typeof input.target !== "string" || input.target.length > MINDOODB_APP_LINK_TARGET_MAX)) {
+    throw new Error(`A link target is a string of at most ${MINDOODB_APP_LINK_TARGET_MAX} characters.`);
+  }
+  return {
+    databaseId: input.databaseId,
+    docId: input.docId,
+    ...(input.target ? { target: input.target } : {}),
+    ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+  };
+}
+
+/** An older Haven without `links.copy`. */
+function isUnsupported(error: unknown) {
+  const code = error instanceof Error ? error.name || (error as { code?: string }).code : undefined;
+  return code === "method-not-found" || code === "unsupported";
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
+/**
+ * Copies a link from the app's own frame (older Haven): plain text plus an HTML
+ * link with the title. Needs the clipboard in this frame, so it may fail.
+ */
+export async function copyLinkInFrame(url: string, title?: string): Promise<boolean> {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  const html = `<a href="${escapeHtml(url)}">${escapeHtml(title?.trim() || url)}</a>`;
+  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  if (clipboard && typeof clipboard.write === "function" && typeof ClipboardItem !== "undefined") {
+    try {
+      await clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([url], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return true;
+    } catch {
+      // fall through
+    }
+  }
+  if (clipboard && typeof clipboard.writeText === "function") {
+    try {
+      await clipboard.writeText(url);
+      return true;
+    } catch {
+      // fall through
+    }
+  }
+  const onCopy = (event: ClipboardEvent) => {
+    event.clipboardData?.setData("text/plain", url);
+    event.clipboardData?.setData("text/html", html);
+    event.preventDefault();
+  };
+  const field = document.createElement("textarea");
+  field.value = url;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  document.addEventListener("copy", onCopy);
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.removeEventListener("copy", onCopy);
+    field.remove();
+  }
+}
+
 function isLinkOpenedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeLinkOpenedMessage {
   return message.kind === "link-opened";
 }
@@ -94,18 +175,26 @@ export class MindooDBAppLinksApiImpl implements MindooDBAppLinksApi {
   }
 
   async create(input: MindooDBAppLinkInput): Promise<MindooDBAppLink> {
-    if (!input || typeof input.databaseId !== "string" || !input.databaseId || typeof input.docId !== "string" || !input.docId) {
-      throw new Error("links.create needs a databaseId and a docId.");
+    return await this.rpc.call<MindooDBAppLink>("links.create", linkParams(input));
+  }
+
+  async copy(input: MindooDBAppLinkInput): Promise<MindooDBAppLinkCopyResult> {
+    const params = linkParams(input);
+    try {
+      const result = await this.rpc.call<MindooDBAppLinkCopyResult>("links.copy", params);
+      if (result && typeof result.url === "string" && (result.status === "copied" || result.status === "shown")) {
+        return { url: result.url, markdown: result.markdown, status: result.status };
+      }
+    } catch (error) {
+      // Older Haven versions answer `links.copy` with an unknown-method error;
+      // anything else (no such database, a bad target) is the app's to see.
+      if (!isUnsupported(error)) {
+        throw error;
+      }
     }
-    if (input.target !== undefined && (typeof input.target !== "string" || input.target.length > MINDOODB_APP_LINK_TARGET_MAX)) {
-      throw new Error(`A link target is a string of at most ${MINDOODB_APP_LINK_TARGET_MAX} characters.`);
-    }
-    return await this.rpc.call<MindooDBAppLink>("links.create", {
-      databaseId: input.databaseId,
-      docId: input.docId,
-      ...(input.target ? { target: input.target } : {}),
-      ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-    });
+    const link = await this.create(input);
+    const copied = await copyLinkInFrame(link.url, input.title);
+    return { ...link, status: copied ? "copiedByApp" : "failed" };
   }
 
   onOpened(handler: MindooDBAppLinkOpenedHandler): () => void {

@@ -529,6 +529,17 @@ session.links.onOpened(({ databaseId, docId, target }) => openDocument(docId, ta
 
 Haven opens such a link through the recipient's own installation of the app (same `appId`, a mapping of that database in that tenant): it starts or focuses the app and hands the document to `onOpened`. A link that started the app is held until the handler is registered. Links carry ids only, never titles or contents, and `target` (max. 500 characters) sits after `#`, so servers never log it. The mocks answer with `https://haven.mindoodb.com/open/…` links and let tests open one (`mock.links.open(...)`, `host.links.open(...)`); the browser test host lists the links the app created with an "Open" button.
 
+**"Copy link".** Every app that opens documents should offer a "Copy link" command for the open document (in its document or file menu and in the context menu of document lists; `Ctrl/⌘+Shift+L` where the app has shortcuts). `session.links.copy` takes the same input as `create`; Haven puts the URL on the clipboard as plain text and, with a `title`, as an HTML link that mail and rich-text editors paste as the title, then confirms it to the user in its own words. The app needs no clipboard permission and no texts of its own:
+
+```ts
+const { status, url } = await session.links.copy({ databaseId: "invoices", docId, title: "Invoice RE-2026-0012" });
+// "copied": on the clipboard, Haven said so · "shown": Haven shows the link with a Copy button
+// "copiedByApp": older Haven, the SDK copied it from the app's frame: confirm it yourself
+// "failed": nothing could copy it: show `url`
+```
+
+Call it from a click or a key press, and give the app an `onOpened` handler, or the link opens the app without the document. In the mocks, `mock.links.copied()` lists the copied links and `mock.links.answerCopy("shown")` plays a refused clipboard.
+
 **Links inside an app.** A chat, a note or a mail can contain links to other apps' documents. A plain click on one would leave Haven for a new browser tab. Recognise such links with `session.links.parse(url)` (the parts `{ tenantId, appId, databaseId, docId, target }`, or `null` for any other URL) and open them in the running Haven on click:
 
 ```ts

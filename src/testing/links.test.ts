@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 
 import { createMindooDBAppBridge } from "../client/createMindooDBAppBridge";
+import { MindooDBAppLinksApiImpl } from "../client/links";
+import type { PortRpcClient } from "../client/portRpcClient";
 import type { MindooDBAppLinkOpened } from "../types";
 import { createFakeBridgeHost, createMockMindooDBAppSession } from "./index";
 
@@ -50,6 +52,69 @@ describe("session.links", () => {
       await expect(session.links.create({ databaseId: "invoices", docId: "x", target: "y".repeat(501) })).rejects.toThrow(/500/);
     } finally {
       host.dispose();
+    }
+  });
+
+  it("copies links through Haven in both mocks", async () => {
+    const mock = createMockMindooDBAppSession({ databases, launchContext: { appId: "mindoodb-app-invoice", tenantId: "t_8f3k2m" } });
+    const session = await mock.bridge.connect();
+    expect(await session.links.copy({ databaseId: "invoices", docId: "inv_1", title: "RE-1" })).toEqual({
+      url: "https://haven.mindoodb.com/open/t_8f3k2m/mindoodb-app-invoice/invoices/inv_1",
+      markdown: "[RE-1](https://haven.mindoodb.com/open/t_8f3k2m/mindoodb-app-invoice/invoices/inv_1)",
+      status: "copied",
+    });
+    mock.links.answerCopy("shown");
+    expect((await session.links.copy({ databaseId: "invoices", docId: "inv_2" })).status).toBe("shown");
+    expect(mock.links.copied().map((link) => link.input.docId)).toEqual(["inv_1", "inv_2"]);
+    await expect(session.links.copy({ databaseId: "other", docId: "x" })).rejects.toThrow(/maps no database/);
+
+    const host = createFakeBridgeHost({ databases, launchContext: { appId: "mindoodb-app-invoice" } });
+    host.install();
+    try {
+      const bridged = await createMindooDBAppBridge().connect();
+      const copied = await bridged.links.copy({ databaseId: "invoices", docId: "inv_3", target: "line=l_1" });
+      expect(copied).toEqual({
+        url: "https://haven.mindoodb.com/open/t_mocktenant/mindoodb-app-invoice/invoices/inv_3#line=l_1",
+        markdown: "https://haven.mindoodb.com/open/t_mocktenant/mindoodb-app-invoice/invoices/inv_3#line=l_1",
+        status: "copied",
+      });
+      expect(host.links.copied().map((link) => link.input.target)).toEqual(["line=l_1"]);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("copies from the app's frame when Haven does not know links.copy", async () => {
+    const url = "https://haven.mindoodb.com/open/t/a/invoices/inv_1";
+    const calls: string[] = [];
+    const rpc = {
+      addMessageListener: () => () => undefined,
+      call: async (method: string) => {
+        calls.push(method);
+        if (method === "links.copy") throw Object.assign(new Error("Unknown method."), { name: "method-not-found" });
+        return { url, markdown: url };
+      },
+    } as unknown as PortRpcClient;
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => void written.push(text) },
+    });
+    try {
+      const links = new MindooDBAppLinksApiImpl(rpc);
+      expect(await links.copy({ databaseId: "invoices", docId: "inv_1" })).toEqual({ url, markdown: url, status: "copiedByApp" });
+      expect(calls).toEqual(["links.copy", "links.create"]);
+      expect(written).toEqual([url]);
+
+      const failing = new MindooDBAppLinksApiImpl({
+        addMessageListener: () => () => undefined,
+        call: async () => {
+          throw Object.assign(new Error('The app maps no database "x".'), { name: "database-not-found" });
+        },
+      } as unknown as PortRpcClient);
+      await expect(failing.copy({ databaseId: "x", docId: "y" })).rejects.toThrow(/maps no database/);
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
     }
   });
 
