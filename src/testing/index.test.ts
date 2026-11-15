@@ -1236,6 +1236,30 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(allPage.items).toHaveLength(4);
   });
 
+  it("narrows documents.query by idPrefix and enforces a scoped summary", async () => {
+    const mock = createMockMindooDBAppBridge({
+      databases: [{
+        info: { id: "main", title: "Main", capabilities: ["read", "create", "update"] },
+      }],
+    });
+    const session = await mock.bridge.connect();
+    const database = await session.openDatabase("main");
+    const m1 = await database.documents.create({ id: "m_r1_202610_1", set: { name: "a" } });
+    const m2 = await database.documents.create({ id: "m_r2_202611_1", set: { name: "b" } });
+    await database.documents.create({ id: "chunk_1", set: { name: "c" } });
+
+    const one = await database.documents.query({ idPrefix: "m_r1" });
+    expect(one.rows.map((row) => row.docId)).toEqual([m1.id]);
+    const both = await database.documents.query({ idPrefix: ["m_r1", "m_r2_"] });
+    expect(both.rows.map((row) => row.docId).sort()).toEqual([m1.id, m2.id].sort());
+    expect((await database.documents.query({})).total).toBe(3);
+
+    await database.setSummarySetup({ idPrefixes: ["m"] });
+    expect((await database.documents.query({ idPrefix: "m_r2" })).total).toBe(1);
+    await expect(database.documents.query({})).rejects.toThrow(/only covers documents with id prefix "m"/);
+    await expect(database.documents.query({ idPrefix: "chunk" })).rejects.toThrow(/only covers/);
+  });
+
   it("lists inaccessible seed documents without exposing them to list/get", async () => {
     const mock = createMockMindooDBAppBridge({
       databases: [{

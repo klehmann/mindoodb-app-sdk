@@ -1707,11 +1707,26 @@ function withValidatedCreateIds(
  * id matches when it equals `idPrefix` or begins with `<idPrefix>_`. An
  * undefined/empty prefix matches everything.
  */
-function matchesMockIdPrefix(docId: string, idPrefix?: string): boolean {
-  if (!idPrefix) {
+function matchesMockIdPrefix(docId: string, idPrefix?: string | readonly string[]): boolean {
+  const prefixes = normalizeMockIdPrefixes(idPrefix);
+  if (!prefixes) {
     return true;
   }
-  return docId === idPrefix || docId.startsWith(`${idPrefix}_`);
+  return prefixes.some((prefix) => docId === prefix || docId.startsWith(`${prefix}_`));
+}
+
+/** Trailing `_` trimmed; `undefined` = no filter (absent, empty, or an empty entry). */
+function normalizeMockIdPrefixes(idPrefix?: string | readonly string[]): string[] | undefined {
+  if (idPrefix === undefined) return undefined;
+  const list = typeof idPrefix === "string" ? [idPrefix] : idPrefix;
+  if (list.length === 0) return undefined;
+  const result: string[] = [];
+  for (const raw of list) {
+    const stripped = raw.replace(/_+$/, "");
+    if (stripped.length === 0) return undefined;
+    result.push(stripped);
+  }
+  return result;
 }
 
 function decodeMockListCursor(cursor?: string | null) {
@@ -1835,6 +1850,18 @@ function runMockDocumentQuery(
       ? parseMindooDBFormulaBooleanExpression(query.filter)
       : query?.filter;
 
+  // A scoped summary only answers queries inside its scope (host parity).
+  const scope = normalizeMockIdPrefixes(summarySetup?.idPrefixes);
+  if (scope) {
+    const requested = normalizeMockIdPrefixes(query?.idPrefix);
+    if (!requested || !requested.every((prefix) => matchesMockIdPrefix(prefix, scope))) {
+      throw new Error(
+        `The summary of this database only covers documents with id prefix ` +
+          `${scope.map((prefix) => `"${prefix}"`).join(", ")}: pass an idPrefix inside that scope.`,
+      );
+    }
+  }
+
   // A text clause without an explicit sortBy defaults to relevance
   // ranking (best score first), mirroring the host behavior.
   const sortBy: MindooDBAppQuerySortKey[] =
@@ -1851,6 +1878,9 @@ function runMockDocumentQuery(
   }> = [];
   for (const document of storedDocuments.values()) {
     if (document.isDeleted || document.inaccessible) {
+      continue;
+    }
+    if (!matchesMockIdPrefix(document.id, query?.idPrefix)) {
       continue;
     }
     let textScore: number | undefined;
