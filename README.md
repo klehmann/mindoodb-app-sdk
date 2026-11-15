@@ -1163,10 +1163,11 @@ const result = await db.calendar.freeBusy({
 - `state: "ok"` means free wherever `busy` has nothing. `"unpublished"`: the person switched publishing off. `"unknown"`: never published, not a member, or the policy does not let you read it. Show the last two differently from "free" (e.g. hatched).
 - `computedAt` is when the person's device last computed the times. A device that has been off for days leaves old times behind, so show the age when it is more than a day.
 - Haven publishes one week back and the tenant's weeks ahead (default 12). When the request reaches past them, the entry carries `publishedUntil` (ISO): from there on the times are not known, so draw them like `"unknown"`, not as free. A request entirely outside the published weeks answers `"unknown"`. Older hosts leave the field out.
+- Working hours: an `"ok"` entry may carry `workingHours` (`mode`, `timeZone`, `days.mon…sun` as `HH:MM` windows, optional `holidayRegion` like `DE-NW`). `workingTimeIntervals(workingHours, from, to, { isHoliday? })` turns them into UTC instants in the person's zone (daylight saving included), to shade the rest of the day; it returns `null` for `mode: "none"` (no fixed hours, shade nothing). Holidays only count as outside working hours, never as busy; the app computes them for `holidayRegion`. Older hosts leave the field out.
 - At most 50 people and 14 weeks per call; the SDK throws a `RangeError` before asking. Hosts that do not know the call (older Haven) answer `"unknown"` for everyone.
 - Needs the `freebusy` permission on the database (`"permissions": ["freebusy"]` in `haven-app.json`). It is separate from `directory`: an app can pick recipients without seeing anyone's calendar.
 
-`mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, publishedUntil?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
+`mergeFreeBusyIntervals(intervals, from?, to?)` merges and clips busy times the same way, for example to put the user's own events next to the others'. In tests, `createMockMindooDBAppSession({ freeBusy })` (and `setFreeBusy`) play the published times: `[{ username, busy, computedAt?, publishedUntil?, workingHours?, state?: "unpublished" }]`; people not listed answer `"unknown"`.
 
 ### Colleagues' calendars
 

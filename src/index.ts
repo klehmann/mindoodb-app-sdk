@@ -108,6 +108,7 @@ export {
   unknownFreeBusy,
   unsharedCalendars,
   subtractFreeBusyIntervals,
+  workingTimeIntervals,
   COLLEAGUE_EVENTS_MAX_USERS,
 } from "./freeBusy";
 export {

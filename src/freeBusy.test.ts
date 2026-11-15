@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerFreeBusyFromMock, mergeFreeBusyIntervals, normalizeFreeBusyRequest, unknownFreeBusy } from "./freeBusy";
+import { answerFreeBusyFromMock, mergeFreeBusyIntervals, normalizeFreeBusyRequest, unknownFreeBusy, workingTimeIntervals } from "./freeBusy";
 
 const at = (time: string) => `2026-11-09T${time}:00.000Z`;
 
@@ -132,5 +132,59 @@ describe("answerFreeBusyFromMock", () => {
       { username: "a", state: "unknown", busy: [] },
       { username: "b", state: "unknown", busy: [] },
     ]);
+  });
+});
+
+describe("workingTimeIntervals", () => {
+  const office = { start: "08:00", end: "17:00" };
+  const berlin = {
+    mode: "fixed" as const,
+    timeZone: "Europe/Berlin",
+    days: { mon: [office], tue: [office], wed: [office], thu: [office], fri: [{ start: "08:00", end: "12:00" }, { start: "13:00", end: "14:00" }], sat: [], sun: [] },
+  };
+
+  it("turns wall-clock windows in the person's zone into instants, across daylight saving", () => {
+    // Fri 2026-10-23 (CEST, UTC+2) to Tue 2026-10-27 (CET after Sun 25th).
+    expect(workingTimeIntervals(berlin, "2026-10-23T00:00:00Z", "2026-10-28T00:00:00Z")).toEqual([
+      { start: "2026-10-23T06:00:00.000Z", end: "2026-10-23T10:00:00.000Z" },
+      { start: "2026-10-23T11:00:00.000Z", end: "2026-10-23T12:00:00.000Z" },
+      { start: "2026-10-26T07:00:00.000Z", end: "2026-10-26T16:00:00.000Z" },
+      { start: "2026-10-27T07:00:00.000Z", end: "2026-10-27T16:00:00.000Z" },
+    ]);
+  });
+
+  it("clips to the range, leaves holidays out, and says nothing for no fixed hours", () => {
+    expect(workingTimeIntervals(berlin, "2026-10-26T10:00:00Z", "2026-10-26T12:00:00Z")).toEqual([
+      { start: "2026-10-26T10:00:00.000Z", end: "2026-10-26T12:00:00.000Z" },
+    ]);
+    expect(
+      workingTimeIntervals(berlin, "2026-10-26T00:00:00Z", "2026-10-28T00:00:00Z", { isHoliday: (date) => date === "2026-10-26" }),
+    ).toEqual([{ start: "2026-10-27T07:00:00.000Z", end: "2026-10-27T16:00:00.000Z" }]);
+    expect(workingTimeIntervals({ ...berlin, mode: "none" }, "2026-10-26T00:00:00Z", "2026-10-28T00:00:00Z")).toBeNull();
+    expect(workingTimeIntervals({ ...berlin, timeZone: "Mars/Olympus" }, "2026-10-26T00:00:00Z", "2026-10-28T00:00:00Z")).toBeNull();
+  });
+
+  it("uses the days of the person's zone, also far from UTC", () => {
+    const tokyo = { ...berlin, timeZone: "Asia/Tokyo" };
+    // Mon 2026-10-26 08:00–17:00 JST is Sun 23:00 to Mon 08:00 UTC.
+    expect(workingTimeIntervals(tokyo, "2026-10-25T12:00:00Z", "2026-10-26T12:00:00Z")).toEqual([
+      { start: "2026-10-25T23:00:00.000Z", end: "2026-10-26T08:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("working hours in the mock host", () => {
+  it("answers them next to the busy times", () => {
+    const workingHours = {
+      mode: "fixed" as const,
+      timeZone: "Europe/Berlin",
+      days: { mon: [{ start: "08:00", end: "17:00" }], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
+    };
+    const [ada, ben] = answerFreeBusyFromMock(
+      [{ username: "CN=Ada/O=Acme", busy: [], workingHours }, { username: "CN=Ben/O=Acme", state: "unpublished", workingHours }],
+      { usernames: ["CN=Ada/O=Acme", "CN=Ben/O=Acme"], from: "2026-10-26T00:00:00Z", to: "2026-10-27T00:00:00Z" },
+    );
+    expect(ada!.workingHours).toEqual(workingHours);
+    expect(ben!.workingHours).toBeUndefined();
   });
 });
