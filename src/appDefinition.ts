@@ -163,6 +163,12 @@ export interface MindooDBAppDefinition {
    * gate it per app read this field.
    */
   allowLocalFonts?: boolean;
+  /**
+   * Capturing the screen or a window (Permissions-Policy `display-capture`,
+   * `navigator.mediaDevices.getDisplayMedia`), e.g. to share a screen in a call. The
+   * browser asks the user what to share every time.
+   */
+  allowScreenCapture?: boolean;
   allowWebRtc?: boolean;
   allowWorkers?: boolean;
   /**
@@ -1758,6 +1764,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
   const allowClipboardWrite = readOptionalBoolean(raw, "allowClipboardWrite", errors);
   const allowMotion = readOptionalBoolean(raw, "allowMotion", errors);
   const allowLocalFonts = readOptionalBoolean(raw, "allowLocalFonts", errors);
+  const allowScreenCapture = readOptionalBoolean(raw, "allowScreenCapture", errors);
   const allowWebRtc = readOptionalBoolean(raw, "allowWebRtc", errors);
   const allowWorkers = readOptionalBoolean(raw, "allowWorkers", errors);
   const allowFiles = readFilesPermission(raw.allowFiles, errors);
@@ -1809,6 +1816,7 @@ export function validateMindooDBAppDefinition(raw: unknown): MindooDBAppDefiniti
       allowClipboardWrite,
       allowMotion,
       allowLocalFonts,
+      allowScreenCapture,
       allowWebRtc,
       allowWorkers,
       allowFiles,

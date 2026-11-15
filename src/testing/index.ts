@@ -750,6 +750,7 @@ function createDefaultLaunchContext(
       clipboardWrite: false,
       motion: false,
       localFonts: false,
+      screenCapture: false,
       webRtc: false,
       workers: false,
     },
