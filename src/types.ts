@@ -300,6 +300,12 @@ export interface MindooDBAppBrowserFeatures {
    * matters for hosts that gate it per app. Absent from hosts older than this field.
    */
   localFonts?: boolean;
+  /**
+   * `navigator.mediaDevices.getDisplayMedia` (sharing a screen or a window). The browser
+   * asks the user what to share every time. Definition field `allowScreenCapture`.
+   * Absent from hosts older than this field: treat that as blocked.
+   */
+  screenCapture?: boolean;
   /** `RTCPeerConnection`. Blocked only for hosted apps. Definition field `allowWebRtc`. */
   webRtc: boolean;
   /** `new Worker`, shared and service workers. Blocked only for hosted apps. Definition field `allowWorkers`. */

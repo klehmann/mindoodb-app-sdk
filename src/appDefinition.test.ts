@@ -131,6 +131,12 @@ describe("validateMindooDBAppDefinition", () => {
     );
     expect(result.definition).toMatchObject({ allowCamera: true, allowMicrophone: true, allowMotion: true, allowLocalFonts: true });
     expect(validateMindooDBAppDefinition(baseDefinition({ allowLocalFonts: 1 })).errors.join()).toMatch(/allowLocalFonts/);
+    expect(validateMindooDBAppDefinition(baseDefinition({ allowScreenCapture: true })).definition).toMatchObject({
+      allowScreenCapture: true,
+    });
+    expect(validateMindooDBAppDefinition(baseDefinition({ allowScreenCapture: "yes" })).errors.join()).toMatch(
+      /allowScreenCapture/,
+    );
     expect(validateMindooDBAppDefinition(baseDefinition({ allowMotion: "yes" })).errors.join()).toMatch(/allowMotion/);
   });
 
