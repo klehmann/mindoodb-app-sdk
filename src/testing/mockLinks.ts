@@ -9,6 +9,7 @@ import { MINDOODB_APP_LINK_TARGET_MAX, parseMindooDBAppLink } from "../client/li
 import type {
   MindooDBAppBridgePortMessage,
   MindooDBAppLink,
+  MindooDBAppLinkCopyResult,
   MindooDBAppLinkInput,
   MindooDBAppLinkOpened,
   MindooDBAppLinkOpenedHandler,
@@ -29,8 +30,15 @@ export interface MockCreatedLink extends MindooDBAppLink {
 export interface MockLinksController {
   /** As if the user opened a link to this app: delivered to `session.links.onOpened`. */
   open(link: MindooDBAppLinkOpened): void;
-  /** Every link the app created (`session.links.create`), oldest first. */
+  /** Every link the app created (`session.links.create` and `copy`), oldest first. */
   created(): MockCreatedLink[];
+  /** Every link the app copied (`session.links.copy`), oldest first. */
+  copied(): MockCreatedLink[];
+  /**
+   * What `session.links.copy` answers (default `copied`, as when Haven wrote the
+   * clipboard; `shown` as when it showed the link in its dialog instead).
+   */
+  answerCopy(status: "copied" | "shown"): void;
   /** Every link the app asked Haven to open (`session.links.open`), oldest first. */
   openRequests(): MindooDBAppLinkParts[];
   /**
@@ -73,6 +81,15 @@ export function createMockLinks(options: {
     return link;
   }
 
+  const copiedLinks: MockCreatedLink[] = [];
+  let copyAnswer: "copied" | "shown" = "copied";
+
+  function copy(input: MindooDBAppLinkInput): MindooDBAppLinkCopyResult {
+    const link = create(input);
+    copiedLinks.push({ ...link, input: { ...input } });
+    return { ...link, status: copyAnswer };
+  }
+
   const openRequests: MindooDBAppLinkParts[] = [];
   let foreignAnswer: MindooDBAppLinkOpenResult["status"] = "opened";
 
@@ -101,6 +118,9 @@ export function createMockLinks(options: {
     async create(input) {
       return create(input);
     },
+    async copy(input) {
+      return copy(input);
+    },
     onOpened(next) {
       handler = next;
       flush();
@@ -119,6 +139,8 @@ export function createMockLinks(options: {
     switch (method) {
       case "links.create":
         return { result: create((params ?? {}) as MindooDBAppLinkInput) };
+      case "links.copy":
+        return { result: copy((params ?? {}) as MindooDBAppLinkInput) };
       case "links.open":
         return { result: open(String((params as { url?: unknown } | null)?.url ?? "")) };
       case "links.subscribe":
@@ -138,6 +160,10 @@ export function createMockLinks(options: {
       deliver({ databaseId: link.databaseId, docId: link.docId, ...(link.target ? { target: link.target } : {}) });
     },
     created: () => created.map((link) => ({ ...link, input: { ...link.input } })),
+    copied: () => copiedLinks.map((link) => ({ ...link, input: { ...link.input } })),
+    answerCopy(status) {
+      copyAnswer = status;
+    },
     openRequests: () => openRequests.map((parts) => ({ ...parts })),
     answerOpen(status) {
       foreignAnswer = status;

@@ -2317,6 +2317,19 @@ export interface MindooDBAppLink {
   markdown: string;
 }
 
+/**
+ * What became of {@link MindooDBAppLinksApi.copy}, with the link itself:
+ * - `copied`: the link is on the clipboard and Haven told the user so.
+ * - `shown`: the clipboard refused (WebKit without a gesture of Haven's own);
+ *   Haven shows the link with a Copy button. Nothing more for the app to do.
+ * - `copiedByApp`: an older Haven without `links.copy`; the SDK copied the link
+ *   from the app's frame. The app should confirm it itself.
+ * - `failed`: nothing could copy it; show `url` to the user.
+ */
+export interface MindooDBAppLinkCopyResult extends MindooDBAppLink {
+  status: "copied" | "shown" | "copiedByApp" | "failed";
+}
+
 /** A link the user opened, as handed to {@link MindooDBAppLinksApi.onOpened}. */
 export interface MindooDBAppLinkOpened {
   databaseId: string;
@@ -2358,6 +2371,14 @@ export interface MindooDBAppLinkOpenResult {
 export interface MindooDBAppLinksApi {
   /** A link to one of this app's documents. Fails for a database the app does not map. */
   create(input: MindooDBAppLinkInput): Promise<MindooDBAppLink>;
+  /**
+   * The "Copy link" command: makes the link like `create` and Haven puts it on
+   * the clipboard, as plain text (the URL) and, with a `title`, as an HTML link
+   * that mail and rich-text editors paste as the title. Haven confirms it to the
+   * user in its own words, so the app needs neither clipboard permission nor
+   * texts. Call it from a click or a key press.
+   */
+  copy(input: MindooDBAppLinkInput): Promise<MindooDBAppLinkCopyResult>;
   /**
    * Called when the user opens a link to this app. Links opened before the app
    * was running are held by Haven and delivered once a handler is registered.
