@@ -1537,6 +1537,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
   });
   function renderLinks() {
     const links = testHost.links.created().slice(-8).reverse();
+    const copied = new Set(testHost.links.copied().map((link) => link.url));
     linkList.replaceChildren(
       ...(links.length ? [] : [hint("The app has not created a link yet.")]),
       ...links.map((link) => {
@@ -1544,7 +1545,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
         const row = document.createElement("div");
         row.className = "htest__row";
         const text = document.createElement("span");
-        text.textContent = link.input.title ? `${link.input.title} · ${link.url}` : link.url;
+        text.textContent = `${copied.has(link.url) ? "Copied · " : ""}${link.input.title ? `${link.input.title} · ${link.url}` : link.url}`;
         text.style.flex = "1";
         row.append(text, button("Open", () => openUrl(link.url)));
         li.append(row);
@@ -1555,7 +1556,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
   section(
     "Links",
     linkTarget,
-    hint("Links the app created (session.links.create). “Open” hands one to the app as Haven does when someone opens it; paste any link and press Enter to do the same."),
+    hint("Links the app created (session.links.create) or copied (session.links.copy, marked “Copied”; Haven would confirm it to the user). “Open” hands one to the app as Haven does when someone opens it; paste any link and press Enter to do the same."),
     linkList,
   );
   renderLinks();

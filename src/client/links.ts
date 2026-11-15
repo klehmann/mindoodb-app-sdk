@@ -94,6 +94,63 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
+function linkHtml(url: string, title?: string) {
+  return `<a href="${escapeHtml(url)}">${escapeHtml(title?.trim() || url)}</a>`;
+}
+
+/**
+ * Whether this frame's permissions policy allows clipboard writes. Chromium
+ * reports it (and logs a violation for a refused write); WebKit has no such
+ * API and lets the frame try.
+ */
+function frameMayWriteClipboard(): boolean {
+  const policy = (
+    document as Document & {
+      permissionsPolicy?: { allowsFeature(feature: string): boolean };
+      featurePolicy?: { allowsFeature(feature: string): boolean };
+    }
+  ).permissionsPolicy ?? (document as Document & { featurePolicy?: { allowsFeature(feature: string): boolean } }).featurePolicy;
+  try {
+    return policy ? policy.allowsFeature("clipboard-write") : true;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Starts a clipboard write synchronously, inside the user's gesture, with the
+ * link still on its way (`ClipboardItem` with promises). Resolves to whether
+ * it landed; never rejects.
+ */
+function startFrameClipboardWrite(url: Promise<string>, title?: string): Promise<boolean> {
+  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  if (
+    !clipboard ||
+    typeof clipboard.write !== "function" ||
+    typeof ClipboardItem === "undefined" ||
+    !frameMayWriteClipboard()
+  ) {
+    url.catch(() => undefined);
+    return Promise.resolve(false);
+  }
+  try {
+    return clipboard
+      .write([
+        new ClipboardItem({
+          "text/plain": url.then((value) => new Blob([value], { type: "text/plain" })),
+          "text/html": url.then((value) => new Blob([linkHtml(value, title)], { type: "text/html" })),
+        }),
+      ])
+      .then(
+        () => true,
+        () => false,
+      );
+  } catch {
+    url.catch(() => undefined);
+    return Promise.resolve(false);
+  }
+}
+
 /**
  * Copies a link from the app's own frame (older Haven): plain text plus an HTML
  * link with the title. Needs the clipboard in this frame, so it may fail.
@@ -102,7 +159,7 @@ export async function copyLinkInFrame(url: string, title?: string): Promise<bool
   if (typeof document === "undefined") {
     return false;
   }
-  const html = `<a href="${escapeHtml(url)}">${escapeHtml(title?.trim() || url)}</a>`;
+  const html = linkHtml(url, title);
   const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
   if (clipboard && typeof clipboard.write === "function" && typeof ClipboardItem !== "undefined") {
     try {
@@ -180,8 +237,21 @@ export class MindooDBAppLinksApiImpl implements MindooDBAppLinksApi {
 
   async copy(input: MindooDBAppLinkInput): Promise<MindooDBAppLinkCopyResult> {
     const params = linkParams(input);
+    // The frame writes the clipboard itself while the user's click still counts:
+    // WebKit (Safari, iOS, Haven Desktop) allows that but not Haven's write after
+    // the bridge round trip. Chromium refuses it in an app frame; Haven writes there.
+    const created = this.rpc.call<MindooDBAppLink>("links.create", params);
+    const copiedHere = startFrameClipboardWrite(
+      created.then((link) => link.url),
+      input.title,
+    );
+    const link = await created;
+    const inFrame = await copiedHere;
     try {
-      const result = await this.rpc.call<MindooDBAppLinkCopyResult>("links.copy", params);
+      const result = await this.rpc.call<MindooDBAppLinkCopyResult>("links.copy", {
+        ...params,
+        ...(inFrame ? { copied: true } : {}),
+      });
       if (result && typeof result.url === "string" && (result.status === "copied" || result.status === "shown")) {
         return { url: result.url, markdown: result.markdown, status: result.status };
       }
@@ -192,7 +262,9 @@ export class MindooDBAppLinksApiImpl implements MindooDBAppLinksApi {
         throw error;
       }
     }
-    const link = await this.create(input);
+    if (inFrame) {
+      return { ...link, status: "copiedByApp" };
+    }
     const copied = await copyLinkInFrame(link.url, input.title);
     return { ...link, status: copied ? "copiedByApp" : "failed" };
   }

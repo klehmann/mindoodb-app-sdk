@@ -103,7 +103,7 @@ describe("session.links", () => {
     try {
       const links = new MindooDBAppLinksApiImpl(rpc);
       expect(await links.copy({ databaseId: "invoices", docId: "inv_1" })).toEqual({ url, markdown: url, status: "copiedByApp" });
-      expect(calls).toEqual(["links.copy", "links.create"]);
+      expect(calls).toEqual(["links.create", "links.copy"]);
       expect(written).toEqual([url]);
 
       const failing = new MindooDBAppLinksApiImpl({
@@ -115,6 +115,46 @@ describe("session.links", () => {
       await expect(failing.copy({ databaseId: "x", docId: "y" })).rejects.toThrow(/maps no database/);
     } finally {
       Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("writes the clipboard from the frame within the click and lets Haven confirm it", async () => {
+    const url = "https://haven.mindoodb.com/open/t/a/invoices/inv_1";
+    const calls: Array<[string, unknown]> = [];
+    const links = new MindooDBAppLinksApiImpl({
+      addMessageListener: () => () => undefined,
+      call: async (method: string, params: unknown) => {
+        calls.push([method, params]);
+        return method === "links.copy" ? { url, markdown: url, status: "copied" } : { url, markdown: url };
+      },
+    } as unknown as PortRpcClient);
+    const written: Record<string, string>[] = [];
+    class FakeItem {
+      constructor(readonly items: Record<string, Promise<Blob>>) {}
+    }
+    const stubs = { ClipboardItem: FakeItem };
+    Object.assign(globalThis, stubs);
+    let startedSync = false;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        write: async (list: FakeItem[]) => {
+          startedSync = calls.length === 1; // only links.create was sent yet
+          const out: Record<string, string> = {};
+          for (const [type, blob] of Object.entries(list[0]!.items)) out[type] = await (await blob).text();
+          written.push(out);
+        },
+      },
+    });
+    try {
+      expect(await links.copy({ databaseId: "invoices", docId: "inv_1", title: "RE <1>" })).toEqual({ url, markdown: url, status: "copied" });
+      expect(startedSync).toBe(true);
+      expect(written).toEqual([{ "text/plain": url, "text/html": `<a href="${url}">RE &#60;1&#62;</a>` }]);
+      expect(calls.map(([method]) => method)).toEqual(["links.create", "links.copy"]);
+      expect(calls[1]![1]).toMatchObject({ copied: true, title: "RE <1>" });
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+      Reflect.deleteProperty(globalThis, "ClipboardItem");
     }
   });
 
