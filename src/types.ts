@@ -5438,6 +5438,16 @@ export type MindooDBAppSealedChannelOpenResult =
       reason: "declined";
     };
 
+/** The media gateway for calls, see {@link MindooDBAppSession.getMediaGateway}. */
+export interface MindooDBAppMediaGateway {
+  /** Origin of the gateway, e.g. `https://calls.example.com`. */
+  gatewayUrl: string;
+  /** Origins of the media server(s) the gateway's access tokens are for, e.g. `wss://media.example.com`. */
+  mediaUrls: string[];
+  /** `tenant`: named by the tenant's admin. `host`: the host's own fallback. */
+  source: "tenant" | "host";
+}
+
 /** One request over an open sealed channel. */
 export interface MindooDBAppSealedChannelRequestInput {
   channelId: string;
@@ -5560,6 +5570,18 @@ export interface MindooDBAppSession {
    * that gate features on licensing.
    */
   getLicensedProducts(): Promise<string[]>;
+  /**
+   * The media gateway for calls in the tenant this app runs in, or `null` when
+   * there is none (and on hosts that predate the method).
+   *
+   * The tenant's admin names the gateway in the tenant directory; a host may
+   * fall back to a gateway of its own. Ask it for access to a call over a
+   * sealed channel ({@link openSealedChannel} with `gatewayUrl` as the base
+   * URL), then connect to the media server it answers with. The host lets the
+   * app reach the listed `mediaUrls`; an app does not have to declare them in
+   * its network allowlist.
+   */
+  getMediaGateway(): Promise<MindooDBAppMediaGateway | null>;
   /**
    * This Haven installation, as seen by this app. `null` on hosts that do
    * not provide it.

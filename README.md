@@ -1225,6 +1225,23 @@ Requirements and limits worth knowing before you design around this:
 
 There is deliberately no API for decrypting arbitrary data with the user's key. That would be a decryption oracle: doc keys wrapped to the same key are publicly readable in the tenant directory, so an app able to unwrap chosen ciphertext could obtain keys for databases it was never granted.
 
+### Media gateway for calls
+
+A tenant's admin can name a media gateway for calls in the tenant directory: a service that has joined the tenant and hands out access tokens for a media server (LiveKit) to members who may read the chat a call belongs to. An app asks the host for it instead of asking the user for an address:
+
+```ts
+const gateway = await session.getMediaGateway();
+if (gateway) {
+  const channel = await session.openSealedChannel({ databaseId: "index", baseUrl: gateway.gatewayUrl });
+  // then: sealedChannelRequest({ channelId, path: "/call/token", payload }) and connect to the media server
+}
+```
+
+- `null` means the tenant has no gateway, or the host predates the method. Offer no calls then.
+- `source` is `"tenant"` when the admin named it and `"host"` when the host fell back to a gateway of its own.
+- The host lets the app reach the origins in `mediaUrls`, so they do not belong in the app's `networkAllowlist`. The app still needs `allowWebRtc`, and `allowMicrophone` / `allowCamera` for what it captures.
+- The sealed channel needs the `sealedchannel` capability as usual.
+
 ### Mail accounts
 
 Users connect their mail, calendar and contacts accounts once, in Haven's settings: Microsoft 365 / Outlook.com, any JMAP server (Fastmail, Stalwart, a MindooMail bridge), or a CalDAV/CardDAV server (Nextcloud, GMX, iCloud). Haven keeps the credentials and signs in itself. Your app never sees a password or token; it asks for access, gets account ids, and speaks [JMAP](https://jmap.io) to Haven. Haven translates to Microsoft Graph where needed.
@@ -2964,6 +2981,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `openSealedChannel(input)`            | `Promise<MindooDBAppSealedChannelOpenResult>` |
 | `sealedChannelRequest(input)`         | `Promise<T>`                         |
 | `closeSealedChannel(channelId)`       | `Promise<void>`                      |
+| `getMediaGateway()`                   | `Promise<MindooDBAppMediaGateway \| null>` — the tenant's media gateway for calls |
 | `getDevice()`                         | `Promise<MindooDBAppDeviceInfo \| null>` |
 | `accounts.list()`                     | `Promise<MindooDBAppAccountSummary[]>` |
 | `accounts.request(input)`             | `Promise<MindooDBAppAccountRequestResult>` |

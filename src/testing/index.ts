@@ -52,6 +52,7 @@ import type {
   MindooDBAppJmapResponse,
   MindooDBAppJmapSession,
   MindooDBAppDeviceInfo,
+  MindooDBAppMediaGateway,
   MindooDBAppLocalFileInfo,
   MindooDBAppLocalFileReader,
   MindooDBAppLocalFilesState,
@@ -4078,6 +4079,7 @@ type MockSessionState = {
     options?: MockRemoteUpdateOptions,
   ) => Promise<MindooDBAppDocument>;
   getLicensedProducts: () => string[];
+  getMediaGateway: () => MindooDBAppMediaGateway | null;
   getDevice: () => MindooDBAppDeviceInfo;
   proposedApps: MindooDBAppProposeAppInput[];
   createViewNavigator: (
@@ -4173,6 +4175,7 @@ function createMockSessionState(
     requireLive: (databaseId) => requireCapability(databaseId, "live"),
   });
   const mockLocalFiles = createMockLocalFiles(options.localFiles);
+  const mockMediaGateway: MindooDBAppMediaGateway | null = options.mediaGateway ?? null;
   const mockDevice: MindooDBAppDeviceInfo = options.device ?? {
     id: "mock-device",
     label: "Test device",
@@ -4653,6 +4656,9 @@ function createMockSessionState(
     async getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
     },
+    async getMediaGateway() {
+      return mockMediaGateway ? { ...mockMediaGateway, mediaUrls: [...mockMediaGateway.mediaUrls] } : null;
+    },
     async getDevice() {
       return { ...mockDevice };
     },
@@ -5043,6 +5049,9 @@ function createMockSessionState(
     getLicensedProducts() {
       return [...(launchContext.licensedProducts ?? [])];
     },
+    getMediaGateway() {
+      return mockMediaGateway ? { ...mockMediaGateway, mediaUrls: [...mockMediaGateway.mediaUrls] } : null;
+    },
     getDevice() {
       return { ...mockDevice };
     },
@@ -5377,6 +5386,8 @@ export interface CreateMockMindooDBAppSessionOptions {
   embedTools?: MockEmbedHostOptions["embedTools"];
   /** What `session.getDevice` returns; two mocks with different ids play two devices. */
   device?: MindooDBAppDeviceInfo;
+  /** What `session.getMediaGateway` returns; none by default. */
+  mediaGateway?: MindooDBAppMediaGateway | null;
   /**
    * Mail accounts the user has connected in Haven, for `session.accounts`. None are
    * granted at the start; `accounts.request` grants them (see `accountRequest`).
@@ -6283,6 +6294,8 @@ export function createFakeBridgeHost(
         return state.getLaunchContext();
       case "session.getLicensedProducts":
         return state.getLicensedProducts();
+      case "session.getMediaGateway":
+        return state.getMediaGateway();
       case "session.getDevice":
         return state.getDevice();
       case "session.listDatabases":

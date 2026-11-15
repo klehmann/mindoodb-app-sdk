@@ -83,6 +83,26 @@ describe("mindoodb-app-sdk/testing", () => {
     expect(localeChanges).toEqual(["en", "fr"]);
   });
 
+  it("answers getMediaGateway with the configured gateway, and null without one", async () => {
+    const gateway = {
+      gatewayUrl: "https://calls.example.com",
+      mediaUrls: ["wss://media.example.com"],
+      source: "tenant" as const,
+    };
+    const mock = createFakeBridgeHost({ mediaGateway: gateway });
+    mock.install();
+    const session = await createMindooDBAppBridge().connect();
+    await expect(session.getMediaGateway()).resolves.toEqual(gateway);
+    expect(mock.requests.some((request) => request.method === "session.getMediaGateway")).toBe(true);
+    mock.dispose();
+
+    const none = createFakeBridgeHost();
+    none.install();
+    const bare = await createMindooDBAppBridge().connect();
+    await expect(bare.getMediaGateway()).resolves.toBeNull();
+    none.dispose();
+  });
+
   it("exposes licensed products from mock sessions and fake hosts", async () => {
     const mock = createFakeBridgeHost({
       launchContext: {
