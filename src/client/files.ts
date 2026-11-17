@@ -1,5 +1,7 @@
 import type {
   MindooDBAppFilesApi,
+  MindooDBAppFilesPrintResult,
+  MindooDBAppPrintFile,
   MindooDBAppFilesShareOptions,
   MindooDBAppFilesShareResult,
   MindooDBAppShareFile,
@@ -78,6 +80,16 @@ export async function toShareFilePayloads(files: readonly MindooDBAppShareFile[]
   return payloads;
 }
 
+/** Name and bytes of the PDF to print; throws a message when it is not a PDF or too large. */
+export async function toPrintPayload(file: MindooDBAppPrintFile): Promise<MindooDBAppShareFilePayload> {
+  const [payload] = await toShareFilePayloads([{ name: String(file?.name ?? "").trim() || "document.pdf", type: "application/pdf", data: ((file as { data?: unknown }).data ?? file) as Uint8Array | Blob }]);
+  const head = new TextDecoder("latin1").decode(payload!.data.subarray(0, Math.min(1024, payload!.data.length)));
+  if (!head.includes("%PDF-")) {
+    throw new Error("Only PDFs can be printed.");
+  }
+  return payload!;
+}
+
 /** `session.files`. Older Haven versions answer `unsupported`. */
 export class MindooDBAppFilesApiImpl implements MindooDBAppFilesApi {
   constructor(private readonly rpc: PortRpcClient) {}
@@ -94,6 +106,23 @@ export class MindooDBAppFilesApiImpl implements MindooDBAppFilesApi {
         files: payloads,
         title: options?.title,
       });
+    } catch (error) {
+      if (isUnknownMethod(error)) {
+        return { ok: false, reason: "unsupported" };
+      }
+      throw error;
+    }
+  }
+
+  async print(file: MindooDBAppPrintFile): Promise<MindooDBAppFilesPrintResult> {
+    let payload: MindooDBAppShareFilePayload;
+    try {
+      payload = await toPrintPayload(file);
+    } catch (error) {
+      return { ok: false, reason: "invalid", message: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      return await this.rpc.call<MindooDBAppFilesPrintResult>("files.print", { name: payload.name, data: payload.data });
     } catch (error) {
       if (isUnknownMethod(error)) {
         return { ok: false, reason: "unsupported" };

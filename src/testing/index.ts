@@ -45,6 +45,7 @@ import type {
   MindooDBAppPdfSignInput,
   MindooDBAppPdfSignResult,
   MindooDBAppFilesShareResult,
+  MindooDBAppFilesPrintResult,
   MindooDBAppAccountRequestInput,
   MindooDBAppAccountScope,
   MindooDBAppAccountSummary,
@@ -169,7 +170,7 @@ import type {
 import { MINDOODB_APP_VALUE_TAG } from "../values";
 import { mindoodbAppFamilyBindingId, MINDOODB_APP_FAMILY_MEMBER_ID_PATTERN } from "../appDefinition";
 import { createMemoryAttachments as createFamilyMemberAttachments, isMemoryAttachments } from "./memoryAttachments";
-import { toShareFilePayloads, type MindooDBAppShareFilePayload } from "../client/files";
+import { toPrintPayload, toShareFilePayloads, type MindooDBAppShareFilePayload } from "../client/files";
 import { assertValidMindooDBCreateIds } from "../documentIds";
 import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
@@ -4146,6 +4147,8 @@ type MockSessionState = {
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
   getShareRequests: () => MockShareRequest[];
   setShareOutcome: (outcome: MockShareOutcome) => void;
+  getPrintRequests: () => MindooDBAppShareFilePayload[];
+  setPrintOutcome: (outcome: MockPrintOutcome) => void;
   embedHost: ReturnType<typeof createMockEmbedHost>;
 };
 
@@ -4159,6 +4162,9 @@ export type MockPdfSignOutcome = "signed" | "declined" | "unsupported" | "invali
 
 /** What the mock answers to `session.files.share`: `"share"` (default) as if the user shared. */
 export type MockShareOutcome = "share" | "download" | "cancelled" | "unsupported";
+
+/** What the mock answers to `session.files.print`: `"unsupported"` (default, like a browser) or as if printed. */
+export type MockPrintOutcome = "printed" | "cancelled" | "unsupported";
 
 /** One `session.files.share` call the mock received. */
 export interface MockShareRequest {
@@ -4226,6 +4232,8 @@ function createMockSessionState(
   let pdfSignOutcome: MockPdfSignOutcome = "signed";
   const shareRequests: MockShareRequest[] = [];
   let shareOutcome: MockShareOutcome = "share";
+  const printRequests: MindooDBAppShareFilePayload[] = [];
+  let printOutcome: MockPrintOutcome = "unsupported";
   let actionHandler: MindooDBAppActionInvokedHandler | null = null;
   const pendingActionRuns: MindooDBAppActionInvoked[] = [];
   let reminderHandler: MindooDBAppReminderOpenedHandler | null = null;
@@ -4979,6 +4987,16 @@ function createMockSessionState(
         }
         return { ok: true, method: shareOutcome };
       },
+      async print(file): Promise<MindooDBAppFilesPrintResult> {
+        let payload: MindooDBAppShareFilePayload;
+        try {
+          payload = await toPrintPayload(file);
+        } catch (error) {
+          return { ok: false, reason: "invalid", message: error instanceof Error ? error.message : String(error) };
+        }
+        printRequests.push(payload);
+        return printOutcome === "printed" ? { ok: true } : { ok: false, reason: printOutcome };
+      },
     },
     onBeforeClose(listener) {
       beforeCloseListeners.add(listener);
@@ -5139,6 +5157,12 @@ function createMockSessionState(
     },
     setShareOutcome(outcome: MockShareOutcome) {
       shareOutcome = outcome;
+    },
+    getPrintRequests() {
+      return printRequests.map((request) => ({ ...request }));
+    },
+    setPrintOutcome(outcome: MockPrintOutcome) {
+      printOutcome = outcome;
     },
     async emitActionInvoked(id, text) {
       const invoked: MindooDBAppActionInvoked = {
@@ -5560,6 +5584,10 @@ export interface MockMindooDBAppSessionController {
   getShareRequests(): MockShareRequest[];
   /** What the next `session.files.share` calls answer; see {@link MockShareOutcome}. */
   setShareOutcome(outcome: MockShareOutcome): void;
+  /** Every `session.files.print` call so far, oldest first. */
+  getPrintRequests(): MindooDBAppShareFilePayload[];
+  /** What the next `session.files.print` calls answer; see {@link MockPrintOutcome}. */
+  setPrintOutcome(outcome: MockPrintOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -5815,6 +5843,8 @@ export function createMockMindooDBAppSession(
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
     getShareRequests: state.getShareRequests,
+    getPrintRequests: state.getPrintRequests,
+    setPrintOutcome: state.setPrintOutcome,
     setShareOutcome: state.setShareOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),
@@ -5953,6 +5983,10 @@ export interface FakeBridgeHostController {
   getShareRequests(): MockShareRequest[];
   /** What the next `session.files.share` calls answer; see {@link MockShareOutcome}. */
   setShareOutcome(outcome: MockShareOutcome): void;
+  /** Every `session.files.print` call so far, oldest first. */
+  getPrintRequests(): MindooDBAppShareFilePayload[];
+  /** What the next `session.files.print` calls answer; see {@link MockPrintOutcome}. */
+  setPrintOutcome(outcome: MockPrintOutcome): void;
   /** Embeds the app has open (`session.embeds.open`). */
   listEmbeds(): MockEmbedState[];
   /** Every `session.embeds.requestAccess` input so far, oldest first. */
@@ -7673,6 +7707,8 @@ export function createFakeBridgeHost(
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
     getShareRequests: state.getShareRequests,
+    getPrintRequests: state.getPrintRequests,
+    setPrintOutcome: state.setPrintOutcome,
     setShareOutcome: state.setShareOutcome,
     listEmbeds: () => state.embedHost.listEmbeds(),
     getEmbedAccessRequests: () => state.embedHost.getAccessRequests(),

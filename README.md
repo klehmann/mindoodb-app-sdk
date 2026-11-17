@@ -1325,6 +1325,21 @@ if (!result.ok) {
 
 **Downloads in Haven's apps.** A plain download link (`<a download href="blob:…">` or a `data:` URL, clicked by the user or with `a.click()`) works in a browser, but not in Haven's iOS, Android and desktop apps: the app runs in a frame there, which cannot download a blob, and Haven blocks the navigation it turns into. So the SDK takes such clicks over when `session.getDevice().platform` is not `"browser"` and hands the file to `session.files.share` instead (Haven's sheet, then the system share sheet). In a browser nothing changes, and an existing download button needs no change of its own. Turn it off with `bridge.connect({ downloadsToShare: false })`.
 
+### Printing PDFs
+
+`session.files.print` prints a PDF with the device's own print dialog: macOS in Haven Desktop, AirPrint on iOS, the Android print service. The web views of Haven's native apps cannot run `window.print()`, so this is how an app prints there — and the vector PDF reaches the printer. In a browser Haven answers `unsupported`; print the page yourself then.
+
+```ts
+const result = await session.files.print({ name: "Offer.pdf", data: pdfBytes });
+if (!result.ok && result.reason === "unsupported") {
+  window.print(); // the browser's dialog, with the page prepared for printing
+}
+```
+
+- Only PDFs (checked by their header), at most 200 MB, else `{ ok: false, reason: "invalid", message }`. `cancelled` where the platform reports a closed dialog.
+- No capability is needed: the system dialog asks the user before anything is printed.
+- In tests, the mock answers `unsupported` like a browser; `setPrintOutcome("printed")` changes that and `getPrintRequests()` lists the PDFs.
+
 ### Large files on the device
 
 `session.localFiles` asks Haven to keep large local files for the app: offline map areas, media caches, models — data that does not belong in documents and would not fit in the app frame's own storage (on iOS a frame gets about 1 GB, Haven's own storage about 10 GB; Haven Desktop stores real files in its app data folder).
@@ -3037,6 +3052,7 @@ Connect options: `launchId?`, `targetOrigin?`, `connectTimeoutMs?`.
 | `notify(input)`                       | `Promise<{ id: string }>`            |
 | `pdf.sign(input)`                     | `Promise<MindooDBAppPdfSignResult>`  |
 | `files.share(files, options?)`        | `Promise<MindooDBAppFilesShareResult>` |
+| `files.print(file)`                    | `Promise<MindooDBAppFilesPrintResult>` |
 | `localFiles.state()`                  | `Promise<MindooDBAppLocalFilesState>` |
 | `localFiles.estimate()`               | `Promise<{ used; available }>`       |
 | `localFiles.create(name, { size, backup? })` | `Promise<MindooDBAppLocalFileWriter>` (`write(data, at)`, `close()`, `abort()`) |
