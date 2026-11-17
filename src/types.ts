@@ -2738,6 +2738,26 @@ export type MindooDBAppFilesShareResult =
   | { ok: true; method: "share" | "download" }
   | { ok: false; reason: "cancelled" | "unsupported" | "invalid"; message?: string };
 
+/** The PDF for {@link MindooDBAppFilesApi.print}: a `File`, or its name and bytes. */
+export type MindooDBAppPrintFile =
+  | File
+  | {
+      /** Shown as the job name in the print dialog, e.g. "Offer Miller Ltd.pdf". */
+      name: string;
+      data: Uint8Array | Blob;
+    };
+
+/**
+ * Outcome of {@link MindooDBAppFilesApi.print}. `ok: true`: the system print dialog
+ * took the PDF (the user may still cancel it; platforms do not always tell). `cancelled`:
+ * the user closed the dialog, where the platform reports it. `unsupported`: this Haven
+ * has no native printing (a browser, or an older Haven) — print in the app instead,
+ * e.g. with `window.print()`. `invalid`: no PDF, not a PDF, or larger than 200 MB.
+ */
+export type MindooDBAppFilesPrintResult =
+  | { ok: true }
+  | { ok: false; reason: "cancelled" | "unsupported" | "invalid"; message?: string };
+
 /** `session.files`: handing files to the user's other apps. */
 export interface MindooDBAppFilesApi {
   /**
@@ -2748,6 +2768,14 @@ export interface MindooDBAppFilesApi {
    * downloaded or cancelled.
    */
   share(files: MindooDBAppShareFile[], options?: MindooDBAppFilesShareOptions): Promise<MindooDBAppFilesShareResult>;
+  /**
+   * Prints a PDF with the system print dialog of the device (macOS, iOS AirPrint,
+   * Android printing), so the vector PDF reaches the printer. Web views of the
+   * native Haven apps cannot run `window.print()`; this is the way to print there.
+   * Answers `unsupported` where Haven has no native printing (browsers): print the
+   * page yourself then.
+   */
+  print(file: MindooDBAppPrintFile): Promise<MindooDBAppFilesPrintResult>;
 }
 
 /** A component another app offers, as `session.components.list` returns it. */
