@@ -29,6 +29,10 @@ describe("matchHostShortcut", () => {
       matchHostShortcut(chord({ code: "KeyM", shiftKey: true, metaKey: true })),
     ).toBe("toggle-workspace-maximize");
     expect(
+      matchHostShortcut(chord({ code: "Backspace", shiftKey: true, metaKey: true })),
+    ).toBe("quit-app");
+    expect(matchHostShortcut(chord({ code: "Backspace", metaKey: true }))).toBeNull();
+    expect(
       matchHostShortcut(chord({ code: "NumpadEnter", shiftKey: true, metaKey: true })),
     ).toBe("open-workspace");
   });
@@ -51,5 +55,20 @@ describe("sanitizeHostShortcutBindings", () => {
     ]);
     expect(sanitizeHostShortcutBindings([{ action: "open-workspace" }])).toBeNull();
     expect(sanitizeHostShortcutBindings("Enter")).toBeNull();
+    expect(
+      sanitizeHostShortcutBindings([{ action: "Not An Action", code: "KeyX", shiftKey: true, metaOrCtrl: true }]),
+    ).toBeNull();
+  });
+
+  it("keeps chords a newer host adds, so they reach the host from older apps", () => {
+    const pushed = [
+      ...DEFAULT_HAVEN_HOST_SHORTCUTS,
+      { action: "some-future-action", code: "KeyK", shiftKey: true, metaOrCtrl: true },
+    ];
+    const table = sanitizeHostShortcutBindings(pushed);
+    expect(table).toEqual(pushed);
+    expect(
+      matchHostShortcut(chord({ code: "KeyK", shiftKey: true, ctrlKey: true }), table!),
+    ).toBe("some-future-action");
   });
 });

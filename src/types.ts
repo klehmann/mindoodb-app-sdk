@@ -1592,11 +1592,17 @@ export interface MindooDBAppBridgeBeforeCloseAck {
   closeId: string;
 }
 
-/** A Haven-owned keyboard chord the iframe should recognise. */
+/**
+ * A Haven-owned keyboard chord the iframe should recognise.
+ *
+ * A newer Haven may push actions this list does not name yet; the SDK
+ * forwards them unchanged, so a new chord works without an SDK release.
+ */
 export type MindooDBAppHostShortcutAction =
   | "open-workspace"
   | "toggle-app-drawer"
-  | "toggle-workspace-maximize";
+  | "toggle-workspace-maximize"
+  | "quit-app";
 
 /** One host shortcut, matched against {@link KeyboardEvent.code} plus modifiers. */
 export interface MindooDBAppHostShortcutBinding {

@@ -156,7 +156,6 @@ import {
   applyHostedDocumentOverscrollContain,
   DEFAULT_HAVEN_HOST_SHORTCUTS,
   installHostShortcutCapture,
-  isHostShortcutAction,
   sanitizeHostShortcutBindings,
 } from "../hostShortcuts";
 import {
@@ -2130,9 +2129,6 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
       ? installHostShortcutCapture({
           getShortcuts: () => this.hostShortcuts,
           onInvoke: (action) => {
-            if (!isHostShortcutAction(action)) {
-              return;
-            }
             try {
               this.rpc.postMessage({
                 protocol: PROTOCOL,

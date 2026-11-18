@@ -14,13 +14,20 @@ export const DEFAULT_HAVEN_HOST_SHORTCUTS: readonly MindooDBAppHostShortcutBindi
   { action: "open-workspace", code: "Enter", shiftKey: true, metaOrCtrl: true },
   { action: "toggle-app-drawer", code: "Space", shiftKey: true, metaOrCtrl: true },
   { action: "toggle-workspace-maximize", code: "KeyM", shiftKey: true, metaOrCtrl: true },
+  // Chrome binds ⌘⇧⌫ to "Clear browsing data", but only when the page lets
+  // the key through: the capture listener below prevents it.
+  { action: "quit-app", code: "Backspace", shiftKey: true, metaOrCtrl: true },
 ];
 
 const HOST_SHORTCUT_ACTIONS = new Set<MindooDBAppHostShortcutAction>([
   "open-workspace",
   "toggle-app-drawer",
   "toggle-workspace-maximize",
+  "quit-app",
 ]);
+
+/** Shape of an action name the host may push, known to this SDK or not. */
+const HOST_ACTION_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 /** Numpad Enter is the same chord as the main Enter for "back to workspace". */
 function normalizeShortcutCode(code: string) {
@@ -60,7 +67,14 @@ export function isHostShortcutAction(value: unknown): value is MindooDBAppHostSh
   return typeof value === "string" && HOST_SHORTCUT_ACTIONS.has(value as MindooDBAppHostShortcutAction);
 }
 
-/** Accepts a host-pushed table; anything malformed is ignored. */
+/**
+ * Accepts a host-pushed table; anything malformed is ignored.
+ *
+ * Action names are checked for shape only, not against this SDK's list: the
+ * host is the one that knows its chords, and it validates every
+ * `shortcut-invoked` it receives. That way a chord Haven adds later reaches
+ * apps that were built against an older SDK.
+ */
 export function sanitizeHostShortcutBindings(value: unknown): MindooDBAppHostShortcutBinding[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -71,7 +85,12 @@ export function sanitizeHostShortcutBindings(value: unknown): MindooDBAppHostSho
       return null;
     }
     const candidate = entry as Partial<MindooDBAppHostShortcutBinding>;
-    if (!isHostShortcutAction(candidate.action) || typeof candidate.code !== "string" || !candidate.code) {
+    if (
+      typeof candidate.action !== "string" ||
+      !HOST_ACTION_NAME.test(candidate.action) ||
+      typeof candidate.code !== "string" ||
+      !candidate.code
+    ) {
       return null;
     }
     bindings.push({
