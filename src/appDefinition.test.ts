@@ -217,9 +217,11 @@ describe("app definition listing", () => {
 
   it("caps the number of screenshots", () => {
     const { errors } = validateMindooDBAppDefinition(
-      baseDefinition({ listing: { screenshots: Array.from({ length: 9 }, (_, i) => `s${i}.png`) } }),
+      baseDefinition({ listing: { screenshots: Array.from({ length: 11 }, (_, i) => `s${i}.png`) } }),
     );
-    expect(errors[0]).toMatch(/not list more than 8/);
+    expect(errors[0]).toMatch(/not list more than 10/);
+    const ten = validateMindooDBAppDefinition(baseDefinition({ listing: { screenshots: Array.from({ length: 10 }, (_, i) => `s${i}.png`) } }));
+    expect(ten.errors).toEqual([]);
   });
 
   it("resolves localized text by locale, language and en fallback", () => {
