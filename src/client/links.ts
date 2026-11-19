@@ -9,6 +9,7 @@ import type {
   MindooDBAppLinkOpenResult,
   MindooDBAppLinkParts,
   MindooDBAppLinksApi,
+  MindooDBAppUrlOpenResult,
 } from "../types";
 import type { PortRpcClient } from "./portRpcClient";
 
@@ -205,6 +206,69 @@ export async function copyLinkInFrame(url: string, title?: string): Promise<bool
   }
 }
 
+const OPENABLE_URL_PROTOCOLS = new Set(["https:", "http:", "mailto:", "tel:"]);
+
+/**
+ * The URL `session.links.openUrl` may open, normalised, or `null`: web pages
+ * (with a host), mail and phone links. Never `javascript:`, `data:`, `file:` or
+ * a relative address.
+ */
+export function openableUrl(url: string): string | null {
+  if (typeof url !== "string" || !url.trim() || url.length > 8000) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (!OPENABLE_URL_PROTOCOLS.has(parsed.protocol)) {
+    return null;
+  }
+  if ((parsed.protocol === "https:" || parsed.protocol === "http:") && !parsed.hostname) {
+    return null;
+  }
+  return parsed.href;
+}
+
+/**
+ * Opens a URL from the app's own frame (older Haven). Without `noopener` in the
+ * features, so the result tells whether the browser opened it; the new page
+ * gets no handle back to the app.
+ */
+function openInFrame(url: string): boolean {
+  if (typeof window === "undefined" || typeof window.open !== "function") {
+    return false;
+  }
+  try {
+    const opened = window.open(url, "_blank");
+    if (!opened) {
+      return false;
+    }
+    try {
+      opened.opener = null;
+    } catch {
+      // cross-origin already
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const URL_OPEN_STATUSES = new Set<MindooDBAppUrlOpenResult["status"]>([
+  "opened",
+  "noTenant",
+  "noApp",
+  "noDatabase",
+  "navigated",
+  "external",
+  "shown",
+  "failed",
+  "invalid",
+]);
+
 function isLinkOpenedMessage(message: MindooDBAppBridgePortMessage): message is MindooDBAppBridgeLinkOpenedMessage {
   return message.kind === "link-opened";
 }
@@ -306,6 +370,31 @@ export class MindooDBAppLinksApiImpl implements MindooDBAppLinksApi {
       window.open(url.trim(), "_blank", "noopener,noreferrer");
     }
     return { status: "external" };
+  }
+
+  async openUrl(url: string): Promise<MindooDBAppUrlOpenResult> {
+    const href = openableUrl(url);
+    if (!href) {
+      return { status: "invalid" };
+    }
+    try {
+      const result = await this.rpc.call<MindooDBAppUrlOpenResult>("links.openUrl", { url: href });
+      if (result && URL_OPEN_STATUSES.has(result.status)) {
+        return { status: result.status };
+      }
+    } catch (error) {
+      if (!isUnsupported(error)) {
+        // Haven refused this URL: nothing was opened.
+        return { status: "invalid" };
+      }
+    }
+    // An older Haven without `links.openUrl`: links to app documents still open
+    // in Haven (`links.open`), the rest from the app's frame, if the browser lets it.
+    if (parseMindooDBAppLink(href)) {
+      const opened = await this.open(href);
+      return { status: opened.status };
+    }
+    return { status: openInFrame(href) ? "external" : "failed" };
   }
 
   dispose() {

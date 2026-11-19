@@ -2375,6 +2375,35 @@ export interface MindooDBAppLinkOpenResult {
 }
 
 /**
+ * What became of {@link MindooDBAppLinksApi.openUrl}:
+ * - `opened`: an app document link; Haven started or focused its app and handed
+ *   it the document (as {@link MindooDBAppLinksApi.open}).
+ * - `noTenant` / `noApp` / `noDatabase`: an app document link Haven cannot open;
+ *   it shows the user why (as {@link MindooDBAppLinksApi.open}).
+ * - `navigated`: a page of this Haven (its database browser, its settings, …);
+ *   Haven went there itself instead of opening a second Haven in a new tab.
+ * - `external`: a web, mail or phone link; it opened in a new browser tab or, in
+ *   Haven's desktop and mobile apps, in the system's browser, mail or phone app.
+ * - `shown`: the browser blocked the new tab; Haven shows the user the link with
+ *   an Open button. Nothing more for the app to do.
+ * - `failed`: an older Haven, and the browser blocked the new tab. Show the URL
+ *   to the user.
+ * - `invalid`: not an `http(s):`, `mailto:` or `tel:` URL; nothing happened.
+ */
+export interface MindooDBAppUrlOpenResult {
+  status:
+    | "opened"
+    | "noTenant"
+    | "noApp"
+    | "noDatabase"
+    | "navigated"
+    | "external"
+    | "shown"
+    | "failed"
+    | "invalid";
+}
+
+/**
  * `session.links`: links to this app's documents that anyone in the tenant can open.
  * The link names the tenant, the app, the database and the document, never their
  * contents. Haven opens it for the recipient through their own installation of the
@@ -2410,6 +2439,17 @@ export interface MindooDBAppLinksApi {
    * new browser tab. Works for links to other apps and to this app.
    */
   open(url: string): Promise<MindooDBAppLinkOpenResult>;
+  /**
+   * Opens any link the user clicked in the app's content: a web page, a mail or
+   * phone link, a link to an app's document or to a page of Haven itself.
+   * Haven decides where it goes: app document links open in their app, links
+   * to this Haven's own pages open inside Haven, everything else in a new
+   * browser tab (or the system's browser, mail or phone app in Haven's desktop
+   * and mobile apps). Apps run in a sandboxed frame that may not open new tabs
+   * by itself, so use this instead of `window.open` or `target="_blank"`.
+   * Call it from a click.
+   */
+  openUrl(url: string): Promise<MindooDBAppUrlOpenResult>;
 }
 
 /** One message from a live channel, see {@link MindooDBAppLiveApi}. */

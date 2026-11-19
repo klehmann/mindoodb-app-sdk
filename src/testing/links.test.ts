@@ -213,4 +213,83 @@ describe("session.links", () => {
       host.dispose();
     }
   });
+
+  it("opens any URL through Haven: web, mail, app documents (both levels)", async () => {
+    const mock = createMockMindooDBAppSession({ databases, launchContext: { appId: "mindoodb-app-invoice", tenantId: "t_8f3k2m" } });
+    const session = await mock.bridge.connect();
+    const opened: MindooDBAppLinkOpened[] = [];
+    session.links.onOpened((link) => {
+      opened.push(link);
+    });
+    expect(await session.links.openUrl("https://example.com/page?q=1#top")).toEqual({ status: "external" });
+    expect(await session.links.openUrl("mailto:anna@example.com")).toEqual({ status: "external" });
+    mock.links.answerOpenUrl("navigated");
+    expect(await session.links.openUrl("https://haven.mindoodb.com/inspect/t_8f3k2m/db/doc")).toEqual({ status: "navigated" });
+    const own = await session.links.create({ databaseId: "invoices", docId: "inv_9" });
+    expect(await session.links.openUrl(own.url)).toEqual({ status: "opened" });
+    await expect.poll(() => opened).toEqual([{ databaseId: "invoices", docId: "inv_9" }]);
+    for (const bad of ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "/relative", "", "https://"]) {
+      expect(await session.links.openUrl(bad)).toEqual({ status: "invalid" });
+    }
+    expect(mock.links.openedUrls()).toEqual([
+      "https://example.com/page?q=1#top",
+      "mailto:anna@example.com",
+      "https://haven.mindoodb.com/inspect/t_8f3k2m/db/doc",
+      own.url,
+    ]);
+
+    const host = createFakeBridgeHost({ databases, launchContext: { appId: "mindoodb-app-invoice" } });
+    host.install();
+    try {
+      const bridged = await createMindooDBAppBridge().connect();
+      expect(await bridged.links.openUrl("tel:+4930123")).toEqual({ status: "external" });
+      host.links.answerOpenUrl("shown");
+      expect(await bridged.links.openUrl("https://example.com/")).toEqual({ status: "shown" });
+      expect(host.links.openedUrls()).toEqual(["tel:+4930123", "https://example.com/"]);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("opens URLs from the app's frame when Haven does not know links.openUrl", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const links = new MindooDBAppLinksApiImpl({
+      addMessageListener: () => () => undefined,
+      call: async (method: string, params: unknown) => {
+        calls.push([method, params]);
+        if (method === "links.openUrl") throw Object.assign(new Error("Unknown method."), { name: "method-not-found" });
+        return { status: "opened" };
+      },
+    } as unknown as PortRpcClient);
+    const opens: Array<[string, string | undefined, string | undefined]> = [];
+    let answer: { opener: unknown } | null = { opener: window };
+    const originalOpen = window.open;
+    window.open = ((url: string, target?: string, features?: string) => {
+      opens.push([url, target, features]);
+      return answer;
+    }) as typeof window.open;
+    try {
+      expect(await links.openUrl("https://example.com/a")).toEqual({ status: "external" });
+      // Without "noopener", so the answer says whether it opened; the page gets no opener.
+      expect(opens).toEqual([["https://example.com/a", "_blank", undefined]]);
+      expect(answer?.opener).toBeNull();
+      answer = null;
+      expect(await links.openUrl("https://example.com/b")).toEqual({ status: "failed" });
+      // App document links still go to Haven's links.open.
+      expect(await links.openUrl("https://haven.mindoodb.com/open/t/a/invoices/inv_1")).toEqual({ status: "opened" });
+      expect(calls.map(([method]) => method)).toEqual(["links.openUrl", "links.openUrl", "links.openUrl", "links.open"]);
+      expect(opens).toHaveLength(2);
+
+      const refusing = new MindooDBAppLinksApiImpl({
+        addMessageListener: () => () => undefined,
+        call: async () => {
+          throw Object.assign(new Error("Not a URL Haven opens."), { name: "invalid-params" });
+        },
+      } as unknown as PortRpcClient);
+      expect(await refusing.openUrl("https://example.com/c")).toEqual({ status: "invalid" });
+      expect(opens).toHaveLength(2);
+    } finally {
+      window.open = originalOpen;
+    }
+  });
 });
