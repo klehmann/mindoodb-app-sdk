@@ -2549,6 +2549,31 @@ export const MINDOODB_APP_ACCOUNT_SCOPES: readonly MindooDBAppAccountScope[] = [
   "contacts.write",
 ];
 
+/**
+ * Who handles invitations for a calendar. `server`: the server (CalDAV with
+ * auto-schedule, Exchange, JMAP with principals) sends invitations and
+ * answers; the app answers by setting the own participant's
+ * `participationStatus` (`participants/<own address>/participationStatus`)
+ * and sends no iMIP mail. `client`: the app sends iMIP itself.
+ */
+export type MindooDBAppSchedulingMode = "server" | "client";
+
+/**
+ * How each part of an account is connected. Haven configures mail, calendar
+ * and contacts of an account on their own, possibly over different
+ * protocols. Absent sections are off.
+ */
+export interface MindooDBAppAccountSections {
+  mail?: { protocol: "imap" | "jmap" | "graph" };
+  /**
+   * `imip`: no server calendar; the app keeps the calendar itself (in its
+   * own database) and handles invitations by mail. The account then has no
+   * `calendar` service.
+   */
+  calendar?: { protocol: "imip" | "caldav" | "jmap" | "graph"; scheduling: MindooDBAppSchedulingMode };
+  contacts?: { protocol: "carddav" | "jmap" | "graph" };
+}
+
 /** An account this app may use, as {@link MindooDBAppAccountsApi.list} returns it. */
 export interface MindooDBAppAccountSummary {
   /** Opaque, stable id; pass it to the other `session.accounts` calls. */
@@ -2562,6 +2587,8 @@ export interface MindooDBAppAccountSummary {
   scopes: MindooDBAppAccountScope[];
   /** What the account offers on this device. */
   services: MindooDBAppAccountService[];
+  /** How mail, calendar and contacts are connected; missing from older Haven versions. */
+  sections?: MindooDBAppAccountSections;
 }
 
 /** Ask the user for access to one or more accounts. */

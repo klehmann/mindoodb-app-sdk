@@ -5341,6 +5341,8 @@ export interface MockMailAccount {
   label: string;
   address: string;
   services: MindooDBAppAccountSummary["services"];
+  /** How each part is connected (`summary.sections`); omitted like an older Haven. */
+  sections?: MindooDBAppAccountSummary["sections"];
   /** The JMAP session `accounts.jmapSession` returns. */
   session(): MindooDBAppJmapSession;
   /**
@@ -5365,6 +5367,7 @@ function mockAccountSummary(account: MockMailAccount, scopes: MindooDBAppAccount
     address: account.address,
     scopes: [...scopes],
     services: [...account.services],
+    ...(account.sections ? { sections: structuredClone(account.sections) } : {}),
   };
 }
 
