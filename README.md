@@ -555,6 +555,22 @@ anchor.addEventListener("click", async (event) => {
 
 `open` works for links to other apps and to the app itself (it then arrives at its own `onOpened`). `parseMindooDBAppLink(url)` is the same parser without a session. In the mocks, `mock.links.openRequests()` lists what the app asked to open and `mock.links.answerOpen("noApp")` sets the answer for links to other apps.
 
+**Any other link the user clicks.** Apps run in a sandboxed frame that may not open new tabs by itself, so `window.open(url)` and `<a target="_blank">` fail or are blocked as pop-ups. Hand every link the user clicks in the app's content (a web page, `mailto:`, `tel:`, an app document link or a link to a page of Haven) to `session.links.openUrl`, from the click:
+
+```ts
+anchor.addEventListener("click", async (event) => {
+  event.preventDefault();
+  const { status } = await session.links.openUrl(anchor.href);
+  // "external": a new browser tab, or the system's browser/mail/phone app in Haven's desktop and mobile apps
+  // "navigated": a page of this Haven (e.g. its database browser); Haven went there itself
+  // "opened" | "noTenant" | "noApp" | "noDatabase": an app document link, as with `open`
+  // "shown": the browser blocked the new tab; Haven shows the link with an Open button
+  // "failed": an older Haven and a blocked tab: show the URL · "invalid": not http(s), mailto or tel
+});
+```
+
+In the mocks, `mock.links.openedUrls()` lists the URLs the app asked to open and `mock.links.answerOpenUrl("navigated")` sets the answer for those that are not app document links (default `external`).
+
 ### Live channel: typing notices, presence, positions
 
 Some things are worthless after seconds and must not become documents: "Anna is typing", who has the room open, a position on a map. MindooDB stores are append-only, so writing them as documents would keep every keystroke forever. `session.live` is an ephemeral channel per database for exactly this:

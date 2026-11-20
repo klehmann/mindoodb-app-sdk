@@ -5,7 +5,7 @@
  *
  * @module mockLinks
  */
-import { MINDOODB_APP_LINK_TARGET_MAX, parseMindooDBAppLink } from "../client/links";
+import { MINDOODB_APP_LINK_TARGET_MAX, openableUrl, parseMindooDBAppLink } from "../client/links";
 import type {
   MindooDBAppBridgePortMessage,
   MindooDBAppLink,
@@ -16,6 +16,7 @@ import type {
   MindooDBAppLinkOpenResult,
   MindooDBAppLinkParts,
   MindooDBAppLinksApi,
+  MindooDBAppUrlOpenResult,
 } from "../types";
 
 /** The origin Haven puts in front of every link it creates. */
@@ -47,6 +48,14 @@ export interface MockLinksController {
    * `onOpened`, as Haven does.
    */
   answerOpen(status: MindooDBAppLinkOpenResult["status"]): void;
+  /** Every URL the app asked Haven to open (`session.links.openUrl`), oldest first. */
+  openedUrls(): string[];
+  /**
+   * What `session.links.openUrl` answers for URLs that are not app document links
+   * (default `external`; `navigated` as for a page of Haven, `shown` as when the
+   * browser blocked the new tab). App document links answer like `open`.
+   */
+  answerOpenUrl(status: MindooDBAppUrlOpenResult["status"]): void;
 }
 
 /** `https://…/open/<tenant>/<app>/<database>/<doc>#<target>`, each part encoded. */
@@ -104,6 +113,17 @@ export function createMockLinks(options: {
     return { status: "opened" };
   }
 
+  const openedUrls: string[] = [];
+  let urlAnswer: MindooDBAppUrlOpenResult["status"] = "external";
+
+  function openUrl(url: string): MindooDBAppUrlOpenResult {
+    const href = openableUrl(url);
+    if (!href) return { status: "invalid" };
+    openedUrls.push(href);
+    if (parseMindooDBAppLink(href)) return open(href);
+    return { status: urlAnswer };
+  }
+
   function flush() {
     for (const opened of pending.splice(0)) deliver(opened);
   }
@@ -132,6 +152,9 @@ export function createMockLinks(options: {
     async open(url) {
       return open(url);
     },
+    async openUrl(url) {
+      return openUrl(url);
+    },
   };
 
   /** Level 2: the fake host's `links.*` requests; `send` reaches the app's port. */
@@ -143,6 +166,8 @@ export function createMockLinks(options: {
         return { result: copy((params ?? {}) as MindooDBAppLinkInput) };
       case "links.open":
         return { result: open(String((params as { url?: unknown } | null)?.url ?? "")) };
+      case "links.openUrl":
+        return { result: openUrl(String((params as { url?: unknown } | null)?.url ?? "")) };
       case "links.subscribe":
         post = send;
         flush();
@@ -167,6 +192,10 @@ export function createMockLinks(options: {
     openRequests: () => openRequests.map((parts) => ({ ...parts })),
     answerOpen(status) {
       foreignAnswer = status;
+    },
+    openedUrls: () => [...openedUrls],
+    answerOpenUrl(status) {
+      urlAnswer = status;
     },
   };
 
