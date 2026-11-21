@@ -1410,6 +1410,62 @@ if ((await files.state()) === "available") {
 - **Cost**: Haven seals 64 KiB blocks with AES-GCM and opens only the blocks a read touches. A tile-sized read takes about 0.5–2 ms including the bridge round trip; writes run at hundreds of MB/s, far above download speed. Keep a reader open for repeated reads and use `readMany` for several ranges.
 - **Tests**: the mock session keeps files in memory; `setLocalFilesState("not-allowed")`, `setLocalFilesAvailable(bytes)` and `listLocalFiles()` on the controller, `?files=not-allowed|locked|unsupported` and `?filesFree=50MB` in the browser test host.
 
+### Handwriting (ink)
+
+Apps that let people write with a pen (Apple Pencil, S Pen) draw the strokes themselves, on their own canvas, and ask Haven to turn them into text. In Haven's native app for iOS and Android the recognition runs on the device with Google ML Kit Digital Ink; nothing leaves the device except a one-time model download per language (about 20 MB). In the browser and on Haven Desktop there is no recognition: keep the ink, the text can be recognized later on a tablet.
+
+**The text is what the system works with, the ink is the original.** Put the recognized text in the normal field (`title`) and the ink in a companion field (`titleInk`), written with `MindooDBAppValue.atomic()` so it is replaced as a whole. Apps that know nothing about ink see an ordinary document.
+
+```ts
+import { createMindooInk, computeInkHash, inkStrokePoints, inkToSvg, MindooDBAppValue } from "mindoodb-app-sdk";
+
+const caps = await session.ink.capabilities({ languages: ["de-DE"] });
+// { recognize: "native" | "none", engines: ["mlkit-digitalink"], languages: { "de-DE": "installed" | "downloadable" | … } }
+
+if (caps.recognize === "native" && caps.languages["de-DE"] !== "installed") {
+  await session.ink.prepare({
+    languages: ["de-DE"],
+    onProgress: ({ phase, fraction }) => showProgress(phase, fraction), // fraction is absent when the engine reports none
+  });
+}
+
+// strokes from pointer events: one {x, y, t, pressure} list per stroke, in CSS pixels of the writing area
+const ink = createMindooInk({ area: { w: 180, h: 64 }, strokes: penStrokes });
+const result = await session.ink.recognize({
+  strokes: inkStrokePoints(ink),
+  area: ink.area,          // helps to tell upper from lower case and punctuation
+  language: "de-DE",       // default: Haven's language
+  preContext: "",          // text right before the ink, if any
+  maxCandidates: 5,
+});
+if (result.status === "ok" && result.candidates[0]) {
+  ink.recognition = {
+    status: "recognized",
+    text: result.candidates[0].text,
+    alternatives: result.candidates.slice(1).map((candidate) => candidate.text),
+    lang: result.language,
+    engine: result.engine,
+    at: new Date().toISOString(),
+    inkHash: await computeInkHash(ink),
+  };
+}
+// result.status: "unsupported" (browser, desktop, older Haven), "model-downloading" (try again after prepare),
+// "denied", "failed"
+await db.documents.update(docId, {
+  title: result.status === "ok" ? result.candidates[0]?.text ?? "" : "Handwritten entry",
+  titleInk: MindooDBAppValue.atomic(JSON.stringify(ink)),
+});
+
+element.innerHTML = inkToSvg(ink, { width: "100%", height: 32, title: ink.recognition?.text }); // fitted, never cut off
+```
+
+- **Format** (`MindooInk`, version 1): `area` (writing area in CSS pixels), `strokes` (`id`, `color`, `width`, `tool`, `pts`), optional `recognition` (`text`, `alternatives`, `lang`, `engine`, `at`, `inkHash`) and `textConfirmed`. `pts` is `encodeInkPoints(points)`: 0.1 px, whole ms and 1/255 pressure as varint deltas in base64url, roughly 4–6 KB for three words; `decodeInkPoints` reverses it.
+- **Rules**: a later recognition replaces the field text only while `textConfirmed` is not set (the person corrected or confirmed it). `computeInkHash` covers the stroke geometry only; when the strokes change, the old recognition is stale (`isInkRecognitionCurrent`). Ink above `MINDOO_INK_INLINE_MAX_BYTES` (32 KB) belongs in an attachment `ink-<field>.json`.
+- **Scores**: candidates come best first. `score` is the engine's raw value when it reports one (ML Kit: lower is more likely); most apps ignore it.
+- **Progress**: ML Kit on Android reports only start and end of a download (no `fraction`), on iOS it reports a fraction. Haven shows its own progress note as well; `session.ink.onProgress` sees every report for the app.
+- **iPad Scribble**: near text fields, iPadOS turns Pencil strokes into typed text before the page sees them. Give the writing surface `touch-action: none` and call `preventDefault()` in its `pointerdown` handler, otherwise strokes end up in the wrong field. Let `pointerType === "touch"` scroll if only the pen should write.
+- **Tests**: the mock session recognizes with `mock.ink.answer("Elternabend 7b")` (text, candidates, a result or a function), `mock.ink.setRecognize("none")`, `mock.ink.setLanguageState("fr-FR", "downloadable")` and `mock.ink.requests()`; in the browser test host `?ink=none` or `?ink=download` (every language downloads first, with progress).
+
 ### Theme and viewport events
 
 Haven pushes two types of live events to your app:
