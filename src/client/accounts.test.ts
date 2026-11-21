@@ -97,6 +97,20 @@ describe("mock session accounts", () => {
     expect(await mock.session.accounts.list()).toEqual([]);
   });
 
+  it("reports how each part of an account is connected, when the account says", async () => {
+    const { createMockMindooDBAppSession } = await import("../testing");
+    const sections = {
+      mail: { protocol: "imap" as const },
+      calendar: { protocol: "caldav" as const, scheduling: "server" as const },
+    };
+    const mock = createMockMindooDBAppSession({ accounts: [{ ...mockAccount("gmx"), sections }, mockAccount("old")] });
+    const granted = await mock.session.accounts.request({ scopes: ["calendar.read"], multiple: true });
+    expect(granted).toMatchObject({ ok: true });
+    const listed = await mock.session.accounts.list();
+    expect(listed.find((account) => account.id === "gmx")?.sections).toEqual(sections);
+    expect(listed.find((account) => account.id === "old")).not.toHaveProperty("sections");
+  });
+
   it("can play a user who declines or picks a specific account", async () => {
     const { createMockMindooDBAppSession } = await import("../testing");
     const declining = createMockMindooDBAppSession({ accounts: [mockAccount("work")], accountRequest: () => null });

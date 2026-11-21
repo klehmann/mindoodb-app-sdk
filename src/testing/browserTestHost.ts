@@ -267,6 +267,8 @@ export function mockDatabasesFromDefinition(
  * - `locale=<tag>`, `theme=dark|light`
  * - `files=not-allowed|locked|unsupported` starts `session.localFiles` in that state,
  *   `filesFree=<bytes>` (or `50MB`, `2GB`) sets the free room it reports
+ * - `ink=none` answers `session.ink` like a browser (no recognition);
+ *   `ink=download` makes every language download first (with progress)
  * - `automerge=1` backs every database with real Automerge documents (concurrent
  *   `baseHeads` merges, real heads); `automerge=0` turns it off
  */
@@ -278,6 +280,7 @@ export interface TestHostUrlSettings {
   locale?: string;
   theme?: "dark" | "light";
   localFiles?: { state?: "not-allowed" | "locked" | "unsupported"; available?: number };
+  ink?: { recognize?: "native" | "none"; languages?: Record<string, "downloadable"> };
 }
 
 export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
@@ -320,6 +323,9 @@ export function readTestHostUrlSettings(search: string): TestHostUrlSettings {
       ...(filesFree ? { available: Math.round(Number(filesFree[1]) * unit) } : {}),
     };
   }
+  const ink = params.get("ink");
+  if (ink === "none") settings.ink = { recognize: "none" };
+  else if (ink === "download") settings.ink = { languages: {} };
   return settings;
 }
 
@@ -970,6 +976,7 @@ export function mountHavenTestHost(options: MountHavenTestHostOptions): BrowserT
     databases,
     launchContext,
     ...(url.localFiles ? { localFiles: url.localFiles } : {}),
+    ...(url.ink ? { ink: url.ink } : {}),
     enforceCapabilities: url.enforceCapabilities ?? hostOptions.enforceCapabilities,
     directoryUsers:
       url.directoryUserCount !== undefined

@@ -176,6 +176,7 @@ import { guardDatabase, MockForbiddenError } from "./capabilityGuard";
 import { configuredViewDefinition } from "./configuredViews";
 import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOptions } from "./mockAgentTools";
 import { createMockLinks, type MockLinksController } from "./mockLinks";
+import { createMockInk, type MockInkController, type MockInkOptions } from "./mockInk";
 import { createMockLive, type MockLiveController } from "./mockLive";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
@@ -4143,6 +4144,7 @@ type MockSessionState = {
   emitActionInvoked: (id: string, text?: string) => Promise<void>;
   links: ReturnType<typeof createMockLinks>;
   live: ReturnType<typeof createMockLive>;
+  ink: ReturnType<typeof createMockInk>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
   getShareRequests: () => MockShareRequest[];
@@ -4212,6 +4214,7 @@ function createMockSessionState(
     requireLive: (databaseId) => requireCapability(databaseId, "live"),
   });
   const mockLocalFiles = createMockLocalFiles(options.localFiles);
+  const mockInk = createMockInk(options.ink);
   const mockMediaGateway: MindooDBAppMediaGateway | null = options.mediaGateway ?? null;
   const mockDevice: MindooDBAppDeviceInfo = options.device ?? {
     id: "mock-device",
@@ -4903,6 +4906,7 @@ function createMockSessionState(
     localFiles: mockLocalFiles.api,
     links: mockLinks.api,
     live: mockLive.api,
+    ink: mockInk.api,
     // The mock has no viewer page: apps show the content themselves (as on an older Haven).
     foreignContent: {
       async show() {
@@ -5131,6 +5135,7 @@ function createMockSessionState(
     },
     links: mockLinks,
     live: mockLive,
+    ink: mockInk,
     setLocalFilesState(state) {
       mockLocalFiles.setState(state);
     },
@@ -5341,6 +5346,8 @@ export interface MockMailAccount {
   label: string;
   address: string;
   services: MindooDBAppAccountSummary["services"];
+  /** How each part is connected (`summary.sections`); omitted like an older Haven. */
+  sections?: MindooDBAppAccountSummary["sections"];
   /** The JMAP session `accounts.jmapSession` returns. */
   session(): MindooDBAppJmapSession;
   /**
@@ -5365,6 +5372,7 @@ function mockAccountSummary(account: MockMailAccount, scopes: MindooDBAppAccount
     address: account.address,
     scopes: [...scopes],
     services: [...account.services],
+    ...(account.sections ? { sections: structuredClone(account.sections) } : {}),
   };
 }
 
@@ -5372,6 +5380,8 @@ export interface CreateMockMindooDBAppSessionOptions {
   launchContext?: Partial<MindooDBAppLaunchContext>;
   /** Start state and free bytes of `session.localFiles` (default: available, 10 GB). */
   localFiles?: { state?: MindooDBAppLocalFilesState; available?: number | null };
+  /** `session.ink`: recognition mode and language states (default: native, `de-DE` + `en-US` installed). */
+  ink?: MockInkOptions;
   databases?: MockMindooDBAppDatabaseDefinition[];
   onDisconnect?: () => MaybePromise<void>;
   sealedChannel?: MockSealedChannelOptions;
@@ -5576,6 +5586,8 @@ export interface MockMindooDBAppSessionController {
   readonly links: MockLinksController;
   /** `session.live`: messages the app sent, and messages "from others". */
   readonly live: MockLiveController;
+  /** `session.ink`: what recognition answers, language states, download progress. */
+  readonly ink: MockInkController;
   /** Every `session.pdf.sign` request so far, oldest first. */
   getPdfSignRequests(): MindooDBAppPdfSignInput[];
   /** What the next `session.pdf.sign` calls answer; see {@link MockPdfSignOutcome}. */
@@ -5840,6 +5852,7 @@ export function createMockMindooDBAppSession(
     emitActionInvoked: state.emitActionInvoked,
     links: state.links.controller,
     live: state.live.controller,
+    ink: state.ink.controller,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
     getShareRequests: state.getShareRequests,
@@ -6057,6 +6070,8 @@ export interface FakeBridgeHostController {
   readonly links: MockLinksController;
   /** `session.live`: messages the app sent, and messages "from others". */
   readonly live: MockLiveController;
+  /** `session.ink`: what recognition answers, language states, download progress. */
+  readonly ink: MockInkController;
 }
 
 /** What the fake host's built-in dispatch returns for a method it does not know. */
@@ -6189,6 +6204,7 @@ export function createFakeBridgeHost(
       agentHost.reset("The app was reloaded.");
       state.links.reset();
       state.live.reset();
+      state.ink.reset();
       dragHost.reset();
     }
     connectedPorts.add(port);
@@ -7620,6 +7636,14 @@ export function createFakeBridgeHost(
           succeed(linksResult.result);
           return;
         }
+        const inkResult = await state.ink.dispatch(message.method, message.params, (pushed) => {
+          port.postMessage(pushed);
+          return true;
+        });
+        if (inkResult) {
+          succeed(inkResult.result);
+          return;
+        }
         const liveResult = await state.live.dispatch(message.method, message.params, (pushed) => {
           port.postMessage(pushed);
           return true;
@@ -7682,6 +7706,7 @@ export function createFakeBridgeHost(
     agent: agentHost.controller,
     links: state.links.controller,
     live: state.live.controller,
+    ink: state.ink.controller,
     drag: dragHost.controller,
     get launchId() {
       return state.getLaunchContext().launchId;
@@ -7886,6 +7911,7 @@ export {
   type AgentManifestCheckResult,
 } from "./agentManifest";
 export { createMemoryAttachments } from "./memoryAttachments";
+export { type MockInkAnswer, type MockInkController, type MockInkOptions } from "./mockInk";
 export { MOCK_HAVEN_LINK_ORIGIN, MOCK_LINK_TENANT_ID, type MockCreatedLink, type MockLinksController } from "./mockLinks";
 export { type MockLiveController, type MockLiveSent } from "./mockLive";
 export type { MockDragFile, MockDragHostController, MockDragProfile, MockStartedDrag } from "./mockDragHost";
