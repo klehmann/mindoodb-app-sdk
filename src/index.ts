@@ -90,6 +90,24 @@ export type {
   MindooDBAppFilesPermission,
 } from "./appDefinition";
 export { canPreviewAttachment } from "./attachmentPreview";
+export {
+  MINDOO_INK_INLINE_MAX_BYTES,
+  computeInkHash,
+  createMindooInk,
+  decodeInkPoints,
+  encodeInkPoints,
+  inkStrokePoints,
+  inkToSvg,
+  isInkRecognitionCurrent,
+} from "./ink";
+export type {
+  InkToSvgOptions,
+  MindooInk,
+  MindooInkPoint,
+  MindooInkRecognition,
+  MindooInkStroke,
+  MindooInkStrokeInput,
+} from "./ink";
 export { LOCAL_FILE_NAME_MAX, localFileNameProblem, localFilesError } from "./localFiles";
 export { abbreviateCanonicalName, expandAbbreviatedName } from "./canonicalNames";
 export {

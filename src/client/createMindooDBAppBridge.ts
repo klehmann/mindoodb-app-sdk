@@ -49,6 +49,7 @@ import { MindooDBAppLocalFilesApiImpl } from "./localFiles";
 import { MindooDBAppLinksApiImpl } from "./links";
 import { MindooDBAppLiveApiImpl } from "./live";
 import { MindooDBAppRemindersApiImpl } from "./reminders";
+import { MindooDBAppInkApiImpl } from "./ink";
 import { MindooDBAppForeignContentClient } from "./foreignContent";
 import { MindooDBAppActionsApiImpl } from "./actions";
 import { PortRpcClient } from "./portRpcClient";
@@ -2045,6 +2046,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
   public readonly agent: MindooDBAppAgentApiImpl;
   private readonly incoming: MindooDBAppIncomingApiImpl;
   public readonly reminders: MindooDBAppRemindersApiImpl;
+  public readonly ink: MindooDBAppInkApiImpl;
   public readonly foreignContent: MindooDBAppForeignContentClient;
   public readonly actions: MindooDBAppActionsApiImpl;
   public readonly links: MindooDBAppLinksApiImpl;
@@ -2082,6 +2084,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent = new MindooDBAppAgentApiImpl(this.rpc);
     this.incoming = new MindooDBAppIncomingApiImpl(this.rpc);
     this.reminders = new MindooDBAppRemindersApiImpl(this.rpc);
+    this.ink = new MindooDBAppInkApiImpl(this.rpc);
     this.foreignContent = new MindooDBAppForeignContentClient(this.rpc);
     this.actions = new MindooDBAppActionsApiImpl(this.rpc);
     this.links = new MindooDBAppLinksApiImpl(this.rpc);
@@ -2461,6 +2464,7 @@ class MindooDBAppSessionImpl implements MindooDBAppSession {
     this.agent.dispose();
     this.incoming.dispose();
     this.reminders.dispose();
+    this.ink.dispose();
     this.actions.dispose();
     this.links.dispose();
     this.live.dispose();
