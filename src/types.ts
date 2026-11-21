@@ -2109,6 +2109,112 @@ export interface MindooDBAppRemindersApi {
 }
 
 /**
+ * State of a handwriting recognition language on this device. `installed`:
+ * ready, offline. `downloadable`: the engine can load its model (about 20 MB,
+ * once, from the engine's vendor). `downloading`: loading right now.
+ * `unavailable`: the engine has no model for this language.
+ */
+export type MindooDBAppInkLanguageState = "installed" | "downloadable" | "downloading" | "unavailable";
+
+/** What `session.ink.capabilities()` reports. */
+export interface MindooDBAppInkCapabilities {
+  /** `native`: the device recognizes handwriting (Haven's native app); `none`: keep the ink, no recognition. */
+  recognize: "native" | "none";
+  /** Recognition engines, e.g. `["mlkit-digitalink"]`; empty with `none`. */
+  engines: string[];
+  /** State per BCP 47 language tag (`de-DE`), for the languages the app asked about or that are installed. */
+  languages: Record<string, MindooDBAppInkLanguageState>;
+}
+
+/** Progress of a model download, pushed while `prepare` (or a `recognize` that started a download) runs. */
+export interface MindooDBAppInkProgress {
+  language: string;
+  phase: "downloading" | "installed" | "failed";
+  /**
+   * 0..1 when the engine reports real progress. Absent: indeterminate (ML Kit
+   * on Android reports no progress, only start and end).
+   */
+  fraction?: number;
+  reason?: string;
+}
+
+export type MindooDBAppInkProgressHandler = (progress: MindooDBAppInkProgress) => void;
+
+export interface MindooDBAppInkPrepareInput {
+  /** BCP 47 tags, e.g. `["de-DE"]`. Default: the language Haven runs in. */
+  languages?: string[];
+  /** Called while models are downloaded. */
+  onProgress?: MindooDBAppInkProgressHandler;
+}
+
+/** `ready`: every language is installed. `failed`: a download failed (see `languages` and `reason`). */
+export interface MindooDBAppInkPrepareResult {
+  status: "ready" | "unsupported" | "failed";
+  languages: Record<string, MindooDBAppInkLanguageState>;
+  reason?: string;
+}
+
+/** A sampled point of a stroke: CSS pixels of the writing area, `t` in ms (any origin, increasing), `pressure` 0..1. */
+export interface MindooDBAppInkPoint {
+  x: number;
+  y: number;
+  t?: number;
+  pressure?: number;
+}
+
+export interface MindooDBAppInkRecognizeInput {
+  /** One point list per stroke, in writing order. Points without `t` get synthetic times. */
+  strokes: MindooDBAppInkPoint[][];
+  /** Size of the writing area in CSS pixels; helps to tell upper from lower case and punctuation. */
+  area?: { w: number; h: number };
+  /** BCP 47 tag, e.g. `de-DE`. Default: the language Haven runs in. */
+  language?: string;
+  /** Text right before the ink (e.g. the field's existing text), at most the last 20 characters are used. */
+  preContext?: string;
+  /** What the ink should contain. Reserved for later filters; engines may ignore it. */
+  hint?: "text" | "time" | "date" | "number";
+  /** At most this many candidates (1–10, default 5). */
+  maxCandidates?: number;
+}
+
+/** One reading of the ink. */
+export interface MindooDBAppInkCandidate {
+  text: string;
+  /**
+   * The engine's raw score when it reports one. For ML Kit lower means more
+   * likely; candidates are already sorted best first, so most apps ignore it.
+   */
+  score?: number;
+}
+
+/**
+ * `ok`: candidates, best first (may be empty when nothing readable was found).
+ * `unsupported`: no recognition here (browser, desktop, older Haven): keep the ink.
+ * `model-downloading`: the language model is being loaded; try again when
+ * `prepare` resolves. `denied`: Haven does not allow it for this app.
+ * `failed`: the engine failed (`reason`).
+ */
+export type MindooDBAppInkRecognizeResult =
+  | { status: "ok"; engine: string; language: string; candidates: MindooDBAppInkCandidate[] }
+  | { status: "unsupported" | "model-downloading" | "denied" | "failed"; language?: string; reason?: string };
+
+/**
+ * `session.ink`: handwriting recognition on the device (Haven's native app,
+ * ML Kit Digital Ink on iOS and Android). The app draws and keeps the strokes
+ * itself; Haven only turns strokes into text. Nothing leaves the device except
+ * the one-time model download per language. Everywhere else every call
+ * answers `unsupported` / `none`: apps must work without recognition.
+ */
+export interface MindooDBAppInkApi {
+  capabilities(input?: { languages?: string[] }): Promise<MindooDBAppInkCapabilities>;
+  /** Loads the models for these languages (optional: `recognize` starts a missing download itself). */
+  prepare(input?: MindooDBAppInkPrepareInput): Promise<MindooDBAppInkPrepareResult>;
+  recognize(input: MindooDBAppInkRecognizeInput): Promise<MindooDBAppInkRecognizeResult>;
+  /** Every download progress Haven reports to this app. Returns an unsubscribe function. */
+  onProgress(handler: MindooDBAppInkProgressHandler): () => void;
+}
+
+/**
  * State of `session.localFiles`. `available`: the app may read and write.
  * `not-allowed`: the user has not allowed files for this app (definition field
  * `allowFiles`, switch in "Configure application"). `locked`: Haven is locked;
@@ -2212,6 +2318,13 @@ export interface MindooDBAppBridgeActionInvokedMessage {
   protocol: "mindoodb-app-bridge";
   kind: "action-invoked";
   action: MindooDBAppActionInvoked;
+}
+
+/** Push message: progress of a handwriting model download. */
+export interface MindooDBAppBridgeInkProgressMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "ink-progress";
+  progress: MindooDBAppInkProgress;
 }
 
 /** Push message: a reminder of this app was tapped. */
@@ -3375,6 +3488,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeDragFileResultMessage
   | MindooDBAppBridgeIncomingContentMessage
   | MindooDBAppBridgeReminderOpenedMessage
+  | MindooDBAppBridgeInkProgressMessage
   | MindooDBAppBridgeActionInvokedMessage
   | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeLiveMessageMessage
@@ -5905,6 +6019,11 @@ export interface MindooDBAppSession {
    * elsewhere). See {@link MindooDBAppRemindersApi}.
    */
   reminders: MindooDBAppRemindersApi;
+  /**
+   * Handwriting recognition on the device (Haven's native app; `unsupported`
+   * elsewhere). See {@link MindooDBAppInkApi}.
+   */
+  ink: MindooDBAppInkApi;
   /**
    * Database families: one database per room, project or class, opened at runtime
    * and kept on the person's devices by subscription. See
