@@ -1272,7 +1272,7 @@ if (gateway) {
 
 ### Mail accounts
 
-Users connect their mail, calendar and contacts accounts once, in Haven's settings: Microsoft 365 / Outlook.com, any JMAP server (Fastmail, Stalwart, a MindooMail bridge), or a CalDAV/CardDAV server (Nextcloud, GMX, iCloud). Haven keeps the credentials and signs in itself. Your app never sees a password or token; it asks for access, gets account ids, and speaks [JMAP](https://jmap.io) to Haven. Haven translates to Microsoft Graph where needed.
+Users connect their mail, calendar and contacts accounts once, in Haven's settings: Microsoft 365 / Outlook.com, any JMAP server (Fastmail, Stalwart, a MindooMail bridge), a CalDAV/CardDAV server (Nextcloud, GMX, iCloud), or HCL Domino through the Domino REST API. Haven keeps the credentials and signs in itself. Your app never sees a password or token; it asks for access, gets account ids, and speaks [JMAP](https://jmap.io) to Haven. Haven translates to Microsoft Graph or the Domino REST API where needed.
 
 ```ts
 const result = await session.accounts.request({

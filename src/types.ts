@@ -2517,10 +2517,12 @@ export interface MindooDBAppLiveApi {
  * Kind of a mail account the user connected in Haven. `jmap`: a JMAP server
  * (Fastmail, Stalwart, a MindooMail bridge). `microsoft`: Microsoft 365 or
  * Outlook.com through Microsoft Graph. `server`: a classic account on
- * standard protocols, today CalDAV and CardDAV (IMAP/SMTP to follow). Haven
- * translates every kind to JMAP, so an app speaks JMAP to all of them.
+ * standard protocols, today CalDAV and CardDAV (IMAP/SMTP to follow).
+ * `domino`: HCL Domino through the Domino REST API (mail, calendar and
+ * contacts of the mail file). Haven translates every kind to JMAP, so an app
+ * speaks JMAP to all of them.
  */
-export type MindooDBAppAccountKind = "jmap" | "microsoft" | "server";
+export type MindooDBAppAccountKind = "jmap" | "microsoft" | "server" | "domino";
 
 /** Part of an account an app can use. */
 export type MindooDBAppAccountService = "mail" | "calendar" | "contacts";
@@ -2564,14 +2566,14 @@ export type MindooDBAppSchedulingMode = "server" | "client";
  * protocols. Absent sections are off.
  */
 export interface MindooDBAppAccountSections {
-  mail?: { protocol: "imap" | "jmap" | "graph" };
+  mail?: { protocol: "imap" | "jmap" | "graph" | "domino" };
   /**
    * `imip`: no server calendar; the app keeps the calendar itself (in its
    * own database) and handles invitations by mail. The account then has no
    * `calendar` service.
    */
-  calendar?: { protocol: "imip" | "caldav" | "jmap" | "graph"; scheduling: MindooDBAppSchedulingMode };
-  contacts?: { protocol: "carddav" | "jmap" | "graph" };
+  calendar?: { protocol: "imip" | "caldav" | "jmap" | "graph" | "domino"; scheduling: MindooDBAppSchedulingMode };
+  contacts?: { protocol: "carddav" | "jmap" | "graph" | "domino" };
 }
 
 /** An account this app may use, as {@link MindooDBAppAccountsApi.list} returns it. */
