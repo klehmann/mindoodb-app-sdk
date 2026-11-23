@@ -2420,6 +2420,14 @@ export interface MindooDBAppBridgeLiveStateMessage {
   state: MindooDBAppLiveState;
 }
 
+/** Host → app: progress of a direct transfer; `file` once a received file is complete. */
+export interface MindooDBAppBridgeTransferProgressMessage {
+  protocol: "mindoodb-app-bridge";
+  kind: "transfer-progress";
+  progress: MindooDBAppTransferProgress;
+  file?: File;
+}
+
 /** What a link points at: a document of this app, and optionally a place in it. */
 export interface MindooDBAppLinkInput {
   /** The app's logical database id (as in haven-app.json), e.g. `invoices`. */
@@ -2624,6 +2632,110 @@ export interface MindooDBAppLiveChannel {
  */
 export interface MindooDBAppLiveApi {
   open(options: MindooDBAppLiveOpenOptions): Promise<MindooDBAppLiveChannel>;
+}
+
+/**
+ * What the receiver needs to fetch a file offered with
+ * {@link MindooDBAppTransferApi.offer}. Plain JSON: the app sends it to the other
+ * person itself, typically on an end-to-end encrypted live channel
+ * ({@link MindooDBAppLiveApi}) of the conversation. It carries the transfer's
+ * key, so it must only travel encrypted and only to the person it is for.
+ */
+export interface MindooDBAppTransferDescriptor {
+  v: 1;
+  transferId: string;
+  name: string;
+  /** MIME type; `application/octet-stream` when unknown. */
+  type: string;
+  /** Bytes. */
+  size: number;
+  /** Bytes per block on the wire (the last one is shorter). */
+  blockSize: number;
+  /** AES-256-GCM key of the blocks, base64. */
+  key: string;
+  /** Random nonce prefix of the blocks, base64 (4 bytes). */
+  nonce: string;
+  /** Iroh endpoint of the sending device. */
+  endpointId: string;
+  /** Tenant both people are members of. */
+  tenantId: string;
+}
+
+/**
+ * `waiting`: offered, nobody fetching (sender) or not started yet (receiver).
+ * `connecting`: dialling the other device. `transferring`: bytes flowing.
+ * `paused`: the connection dropped; Haven retries and continues where it stopped.
+ * `done`, `failed`, `cancelled`: final.
+ */
+export type MindooDBAppTransferState =
+  | "waiting"
+  | "connecting"
+  | "transferring"
+  | "paused"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface MindooDBAppTransferProgress {
+  transferId: string;
+  state: MindooDBAppTransferState;
+  /** Bytes sent (sender) or received and checked (receiver) so far. */
+  bytes: number;
+  total: number;
+  /** Bytes per second over the last seconds, when known. */
+  rate?: number;
+  /** Why it failed, for `failed`. */
+  error?: string;
+}
+
+export interface MindooDBAppTransferOfferInput {
+  /** The file; it stays on this device and is read block by block while the other side fetches it. */
+  file: Blob;
+  /** File name; defaults to the `File`'s name. */
+  name?: string;
+  /** MIME type; defaults to the blob's type. */
+  type?: string;
+  /** Canonical username of the only person who may fetch it. */
+  to: string;
+}
+
+/** A file this device offers. The offer ends with {@link cancel} or when the app closes. */
+export interface MindooDBAppTransferOutgoing {
+  readonly descriptor: MindooDBAppTransferDescriptor;
+  /** Called with the current progress right away. Returns an unsubscribe function. */
+  onProgress(handler: (progress: MindooDBAppTransferProgress) => void): () => void;
+  cancel(): Promise<void>;
+}
+
+/** A file this device fetches. */
+export interface MindooDBAppTransferIncoming {
+  readonly transferId: string;
+  /** Called with the current progress right away. Returns an unsubscribe function. */
+  onProgress(handler: (progress: MindooDBAppTransferProgress) => void): () => void;
+  /** The received file once complete and checked; rejects on failure or cancel. */
+  readonly file: Promise<File>;
+  cancel(): Promise<void>;
+  /** Drop the received bytes from this device (call after saving the file). */
+  discard(): Promise<void>;
+}
+
+/**
+ * `session.transfer`: hand a file directly from one device to another person's
+ * device, without storing it on the server or in any database. Both devices
+ * must be online at the same time; the bytes travel over Iroh (or the local
+ * network in Haven's mobile app), encrypted per block with a key that only the
+ * descriptor carries. A dropped connection continues where it stopped.
+ *
+ * The app does the signalling: it sends {@link MindooDBAppTransferOutgoing.descriptor}
+ * to the receiver (e.g. on the conversation's live channel), and the receiver
+ * calls {@link receive} with it and the verified sender name (`from` of the
+ * live message). Haven fetches only from a device of that person.
+ */
+export interface MindooDBAppTransferApi {
+  /** False on hosts without direct transfers (no Iroh, older Haven). */
+  available(): Promise<boolean>;
+  offer(input: MindooDBAppTransferOfferInput): Promise<MindooDBAppTransferOutgoing>;
+  receive(descriptor: MindooDBAppTransferDescriptor, options: { from: string }): Promise<MindooDBAppTransferIncoming>;
 }
 
 /**
@@ -3495,6 +3607,7 @@ export type MindooDBAppBridgePortMessage =
   | MindooDBAppBridgeLinkOpenedMessage
   | MindooDBAppBridgeLiveMessageMessage
   | MindooDBAppBridgeLiveStateMessage
+  | MindooDBAppBridgeTransferProgressMessage
   | MindooDBAppBridgeEmbedEventMessage
   | MindooDBAppBridgeEmbedRequestMessage
   | MindooDBAppBridgeEmbeddingRequestMessage
@@ -6043,6 +6156,8 @@ export interface MindooDBAppSession {
   links: MindooDBAppLinksApi;
   /** Ephemeral messages per database ("is typing", presence). See {@link MindooDBAppLiveApi}. */
   live: MindooDBAppLiveApi;
+  /** Files handed directly to another person's device, never stored. See {@link MindooDBAppTransferApi}. */
+  transfer: MindooDBAppTransferApi;
   /**
    * Mail, calendar and contacts accounts the user connected in Haven, reached
    * through JMAP. See {@link MindooDBAppAccountsApi}.

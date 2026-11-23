@@ -597,6 +597,35 @@ await channel.close();                        // when the room closes
 
 Declare the permission in `haven-app.json`: `"permissions": ["write", "live"]`. In tests, two mock sessions of the same tenant and database reach each other (the test host's "Two users" mode included); `mock.live.receive(databaseId, { from, type, data })` plays another person, `mock.live.sent()` lists what the app sent, and `mock.live.setState("unavailable")` plays a host without the channel.
 
+### Direct transfer: large files straight to another person's device
+
+`session.transfer` hands a file from this device to one other person's device without storing it anywhere: not on the server, not in a database, not in the conversation's history. Both devices must be online at the same time, and the offer lasts as long as the sending app is open. Use it for big or throwaway files; use attachments for everything that has to stay.
+
+```ts
+// Sender: Haven keeps the file on this device and serves it block by block.
+const outgoing = await session.transfer.offer({ file, to: otherUsername });
+outgoing.onProgress(({ state, bytes, total }) => showProgress(state, bytes / total));
+await channel.send("xfer.offer", outgoing.descriptor); // the app does the signalling
+// later: await outgoing.cancel();
+
+// Receiver: `from` is the live message's checked sender.
+channel.onMessage(async ({ from, type, data }) => {
+  if (type !== "xfer.offer" || !isMindooDBAppTransferDescriptor(data)) return;
+  // ... after the user accepted:
+  const incoming = await session.transfer.receive(data, { from });
+  incoming.onProgress(({ state, bytes, total }) => showProgress(state, bytes / total));
+  const received = await incoming.file;  // a File, checked block by block
+  saveToDisk(received);
+  await incoming.discard();              // drop the bytes Haven kept for it
+});
+```
+
+- The bytes travel over Iroh (QUIC, end-to-end between the two devices, through a relay where no direct path exists) or the local network in Haven's mobile app. Each 1 MB block is encrypted with AES-256-GCM under a key that only the descriptor carries, so the descriptor must travel encrypted: send it on a live channel of the conversation (with `groupKeyDocId` in a private chat).
+- Haven serves the file only to devices of `to`, and fetches only from a device of `from`.
+- A dropped connection pauses (`paused`) and continues where it stopped.
+- `available()` is `false` on hosts without Iroh or on an older Haven; hide the action then.
+- In tests, offers of all mock sessions of one page reach each other (the test host's "Two users" mode included); `mock.transfer.setPace(steps, ms)` controls how fast mock progress moves and `mock.transfer.setAvailable(false)` plays a host without transfers.
+
 ### Receiving files and content
 
 Users can hand content to your app: files from the iOS/Android share sheet, "Open with Haven", the Files import folder, or files dropped/picked in Haven. Haven asks the user which app should receive it and only offers apps whose `haven-app.json` declares that they take it:

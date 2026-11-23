@@ -178,6 +178,7 @@ import { createMockAgentHost, type MockAgentHostController, type MockAgentHostOp
 import { createMockLinks, type MockLinksController } from "./mockLinks";
 import { createMockInk, type MockInkController, type MockInkOptions } from "./mockInk";
 import { createMockLive, type MockLiveController } from "./mockLive";
+import { createMockTransfer, type MockTransferController } from "./mockTransfer";
 import { createMockDragHost, type MockDragHostController } from "./mockDragHost";
 import { pageUsers } from "../directoryPaging";
 import { mailAddressesFromConfigs, mailGatewaysFromConfigs, searchDirectoryPeople } from "../directorySearch";
@@ -4144,6 +4145,7 @@ type MockSessionState = {
   emitActionInvoked: (id: string, text?: string) => Promise<void>;
   links: ReturnType<typeof createMockLinks>;
   live: ReturnType<typeof createMockLive>;
+  transfer: ReturnType<typeof createMockTransfer>;
   ink: ReturnType<typeof createMockInk>;
   getPdfSignRequests: () => MindooDBAppPdfSignInput[];
   setPdfSignOutcome: (outcome: MockPdfSignOutcome) => void;
@@ -4212,6 +4214,10 @@ function createMockSessionState(
     username: () => launchContext.user.username,
     tenantId: () => launchContext.tenantId,
     requireLive: (databaseId) => requireCapability(databaseId, "live"),
+  });
+  const mockTransfer = createMockTransfer({
+    username: () => launchContext.user.username,
+    tenantId: () => launchContext.tenantId,
   });
   const mockLocalFiles = createMockLocalFiles(options.localFiles);
   const mockInk = createMockInk(options.ink);
@@ -4906,6 +4912,7 @@ function createMockSessionState(
     localFiles: mockLocalFiles.api,
     links: mockLinks.api,
     live: mockLive.api,
+    transfer: mockTransfer.api,
     ink: mockInk.api,
     // The mock has no viewer page: apps show the content themselves (as on an older Haven).
     foreignContent: {
@@ -5135,6 +5142,7 @@ function createMockSessionState(
     },
     links: mockLinks,
     live: mockLive,
+    transfer: mockTransfer,
     ink: mockInk,
     setLocalFilesState(state) {
       mockLocalFiles.setState(state);
@@ -5586,6 +5594,8 @@ export interface MockMindooDBAppSessionController {
   readonly links: MockLinksController;
   /** `session.live`: messages the app sent, and messages "from others". */
   readonly live: MockLiveController;
+  /** `session.transfer`: availability, pace and the offers of this session. */
+  readonly transfer: MockTransferController;
   /** `session.ink`: what recognition answers, language states, download progress. */
   readonly ink: MockInkController;
   /** Every `session.pdf.sign` request so far, oldest first. */
@@ -5852,6 +5862,7 @@ export function createMockMindooDBAppSession(
     emitActionInvoked: state.emitActionInvoked,
     links: state.links.controller,
     live: state.live.controller,
+    transfer: state.transfer.controller,
     ink: state.ink.controller,
     getPdfSignRequests: state.getPdfSignRequests,
     setPdfSignOutcome: state.setPdfSignOutcome,
@@ -6070,6 +6081,8 @@ export interface FakeBridgeHostController {
   readonly links: MockLinksController;
   /** `session.live`: messages the app sent, and messages "from others". */
   readonly live: MockLiveController;
+  /** `session.transfer`: availability, pace and the offers of this session. */
+  readonly transfer: MockTransferController;
   /** `session.ink`: what recognition answers, language states, download progress. */
   readonly ink: MockInkController;
 }
@@ -6204,6 +6217,7 @@ export function createFakeBridgeHost(
       agentHost.reset("The app was reloaded.");
       state.links.reset();
       state.live.reset();
+      state.transfer.reset();
       state.ink.reset();
       dragHost.reset();
     }
@@ -7652,6 +7666,14 @@ export function createFakeBridgeHost(
           succeed(liveResult.result);
           return;
         }
+        const transferResult = await state.transfer.dispatch(message.method, message.params, (pushed) => {
+          port.postMessage(pushed);
+          return true;
+        });
+        if (transferResult) {
+          succeed(transferResult.result);
+          return;
+        }
         const agentResult = await agentHost.dispatch(message.method, message.params);
         if (agentResult) {
           succeed(agentResult.result);
@@ -7706,6 +7728,7 @@ export function createFakeBridgeHost(
     agent: agentHost.controller,
     links: state.links.controller,
     live: state.live.controller,
+    transfer: state.transfer.controller,
     ink: state.ink.controller,
     drag: dragHost.controller,
     get launchId() {
@@ -7914,6 +7937,7 @@ export { createMemoryAttachments } from "./memoryAttachments";
 export { type MockInkAnswer, type MockInkController, type MockInkOptions } from "./mockInk";
 export { MOCK_HAVEN_LINK_ORIGIN, MOCK_LINK_TENANT_ID, type MockCreatedLink, type MockLinksController } from "./mockLinks";
 export { type MockLiveController, type MockLiveSent } from "./mockLive";
+export { type MockTransferController } from "./mockTransfer";
 export type { MockDragFile, MockDragHostController, MockDragProfile, MockStartedDrag } from "./mockDragHost";
 export {
   DEFAULT_TEST_HOST_USERS,

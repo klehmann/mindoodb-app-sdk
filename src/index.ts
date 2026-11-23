@@ -154,6 +154,7 @@ export {
 } from "./drag";
 export { createMindooDBAppBridge } from "./client/createMindooDBAppBridge";
 export { MINDOODB_APP_LINK_TARGET_MAX, parseMindooDBAppLink } from "./client/links";
+export { isMindooDBAppTransferDescriptor } from "./client/transfer";
 export { isMindooDBAppAgentImage, MindooDBAppAgentToolError } from "./client/agentTools";
 export { normalizeAgentToolInput } from "./client/agentInput";
 export {

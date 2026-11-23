@@ -30,6 +30,10 @@ function normalizeRpcValue<T>(value: T, seen = new WeakMap<object, unknown>()): 
   if (value instanceof ArrayBuffer) {
     return value.slice(0) as T;
   }
+  // Blobs and Files cross the port by reference (structured clone), not as bytes.
+  if (typeof Blob !== "undefined" && value instanceof Blob) {
+    return value;
+  }
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)) as T;
   }
