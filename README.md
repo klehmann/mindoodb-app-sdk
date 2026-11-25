@@ -1248,6 +1248,27 @@ const [ben] = await db.calendar.colleagueEvents({
 - Needs the `calendarshare` permission on the database. Haven keeps each level in a group key of the person's `mbusy_` database: removing a colleague rotates the key and publishes the weeks again, so the app sees what is shared now.
 - In tests the `freeBusy` option of `createMockMindooDBAppSession` takes `level` and `events` (with `private: true` for private ones) per person.
 
+### Mailbox delegation
+
+A mail app keeps a person's mailbox, calendar and contacts in three personal databases (`mmail_`, `mcal_`, `mcon_` with the person's grant id, mindoomail-format layout 2). Each account has a group document per database whose key series encrypts that account's documents; Haven manages the groups, the deposit keys the mail gateway delivers to, and the record that tells the server who may sync what (mindoodb docs/accesscontrol.md §6.11, "Delegation").
+
+```ts
+const groups = await db.mail.groups(["mindoomail", "gmx:jane@example.com"]);
+if (groups.supported) {
+  // Encrypt an account's documents with its group: delegates read them, nobody else.
+  await calendarDb.documents.create({ id, set: event, groupKeyDocId: groups.accounts!.mindoomail.calendar });
+}
+await db.mail.setDelegation({ username: "CN=Bob/O=Acme", accountId: "mindoomail", rights: { mail: "edit", calendar: "read" }, send: true });
+await db.mail.delegations();   // [{ grant, username, rights: { mmail_: "edit", mcal_: "read", mmailout_: "send" }, accounts }]
+await db.mail.sharedWithMe();  // [{ ownerGrant, owner, rights }]: open as family members mmail_${id}, mcal_${id}, mcon_${id}
+```
+
+- Rights per kind: `"read"` (sync and read) or `"edit"` (also write); `null` takes a kind away. `send` lets the delegate send on the user's behalf through their outbox (`From:` the user, `Sender:` the delegate).
+- `history: "none"` gives newly added kinds without what is already there; the default is the whole history.
+- Taking a kind away rotates the group key; the delegate keeps what they already synced, as with every key rotation.
+- Needs the `maildelegation` permission on the database. Older hosts answer `groups()` with `supported: false` (keep sealing per document) and `[]` for the lists.
+- The mock session answers `groups()` with `supported: false` and keeps delegations in memory.
+
 ### Sealed channels
 
 Some services join the user's tenant as a member of their own and then talk to your app over HTTP — the MindooMail bridge is the first. A sealed channel is how you reach one without your app ever touching key material.

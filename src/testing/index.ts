@@ -90,6 +90,8 @@ import type {
   MindooDBAppOpenDatabaseOptions,
   MindooDBAppDirectoryApi,
   MindooDBAppCalendarApi,
+  MindooDBAppMailApi,
+  MindooDBAppMailDelegation,
   MindooDBAppDirectoryPerson,
   MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
@@ -3873,6 +3875,39 @@ function createDatabaseHandle(
     },
   };
 
+  // Like a host without group keys: apps keep sealing per document; delegations live in memory.
+  const mockDelegations = new Map<string, MindooDBAppMailDelegation>();
+  const defaultMail: MindooDBAppMailApi = {
+    async groups() {
+      return { supported: false };
+    },
+    async delegations() {
+      return [...mockDelegations.values()].map((entry) => structuredClone(entry));
+    },
+    async setDelegation(request) {
+      const key = request.username.toLowerCase();
+      const entry = mockDelegations.get(key) ?? { grant: `grant_${key}`, username: request.username, rights: {}, accounts: {} };
+      const prefixes = { mail: "mmail_", calendar: "mcal_", contacts: "mcon_" } as const;
+      for (const [kind, right] of Object.entries(request.rights) as Array<[keyof typeof prefixes, string | null]>) {
+        const account = (entry.accounts[request.accountId] ??= {});
+        if (right) {
+          account[kind] = true;
+          entry.rights[prefixes[kind]] = entry.rights[prefixes[kind]] === "edit" ? "edit" : right;
+        } else {
+          delete account[kind];
+          if (!Object.values(entry.accounts).some((a) => a[kind])) delete entry.rights[prefixes[kind]];
+        }
+      }
+      if (request.send === true) entry.rights.mmailout_ = "send";
+      if (request.send === false) delete entry.rights.mmailout_;
+      if (Object.keys(entry.rights).length === 0) mockDelegations.delete(key);
+      else mockDelegations.set(key, entry);
+    },
+    async sharedWithMe() {
+      return [];
+    },
+  };
+
   const defaultViews: MockViewApi = {
     async create(_input: MindooDBAppCreateViewNavigatorInput) {
       return await defaultViewFactory();
@@ -4000,6 +4035,10 @@ function createDatabaseHandle(
     calendar: {
       ...defaultCalendar,
       ...methods.calendar,
+    },
+    mail: {
+      ...defaultMail,
+      ...(methods as { mail?: Partial<MindooDBAppMailApi> }).mail,
     },
     async getFulltextSetup() {
       return fulltextSetup === null ? null : { ...fulltextSetup };
@@ -7115,6 +7154,14 @@ export function createFakeBridgeHost(
         });
       case "calendar.sharedCalendars":
         return await state.getDatabase(String(params.databaseId)).calendar.sharedCalendars();
+      case "mail.groups":
+        return await state.getDatabase(String(params.databaseId)).mail.groups(Array.isArray(params.accounts) ? params.accounts.map(String) : []);
+      case "mail.delegations":
+        return await state.getDatabase(String(params.databaseId)).mail.delegations();
+      case "mail.setDelegation":
+        return await state.getDatabase(String(params.databaseId)).mail.setDelegation(params as never);
+      case "mail.sharedWithMe":
+        return await state.getDatabase(String(params.databaseId)).mail.sharedWithMe();
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =

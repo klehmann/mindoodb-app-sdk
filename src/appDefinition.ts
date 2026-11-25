@@ -42,6 +42,7 @@ export const MINDOODB_APP_DEFINITION_PERMISSIONS = [
   "directory",
   "freebusy",
   "calendarshare",
+  "maildelegation",
   "sealedchannel",
   "live",
   "proposeapps",
