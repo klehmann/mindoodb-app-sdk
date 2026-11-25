@@ -62,8 +62,12 @@ export interface MindooDBAppDefinitionDatabase {
    * source code, independent of where the data physically lives.
    */
   logicalDatabaseId: string;
-  /** Shown to the user during install. Defaults to `logicalDatabaseId`. */
-  label?: string;
+  /**
+   * Shown to the user during install and in sync settings. Defaults to
+   * `logicalDatabaseId`. A string, or per-locale strings with an `en` fallback
+   * (`{ "en": "Mailbox", "de": "Postfach" }`); hosts show the user's language.
+   */
+  label?: MindooDBAppLocalizedText;
   /**
    * Suggested physical database id. Haven may substitute a different one; the app must
    * never assume this value and always address the database by `logicalDatabaseId`.
@@ -661,7 +665,7 @@ function readDatabases(
 
     result.push({
       logicalDatabaseId,
-      label: typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : undefined,
+      label: readLocalizedText(entry.label, `App definition database "${logicalDatabaseId}" label`, 80, errors),
       databaseId: databaseId || undefined,
       permissions: readPermissions(
         entry.permissions,

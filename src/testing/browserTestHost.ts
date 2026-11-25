@@ -1,4 +1,4 @@
-import type { MindooDBAppDefinition } from "../appDefinition";
+import { resolveMindooDBAppLocalizedText, type MindooDBAppDefinition } from "../appDefinition";
 import type { MockFreeBusyPerson } from "../freeBusy";
 import type {
   MindooDBAppDirectoryPerson,
@@ -242,7 +242,7 @@ export function mockDatabasesFromDefinition(
       return {
         info: {
           id: database.logicalDatabaseId,
-          title: override?.title ?? database.label ?? database.logicalDatabaseId,
+          title: override?.title ?? (database.label ? resolveMindooDBAppLocalizedText(database.label, "en") : database.logicalDatabaseId),
           capabilities: override?.capabilities
             ? [...new Set<MindooDBAppCapability>(override.capabilities)]
             : capabilitiesForDefinitionPermissions(database.permissions),

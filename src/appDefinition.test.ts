@@ -522,3 +522,18 @@ describe("app definition uses", () => {
     expect(validateMindooDBAppUses({}).errors[0]).toMatch(/array/);
   });
 });
+
+describe("localized database labels", () => {
+  it("accepts a string or per-locale strings with an en fallback", () => {
+    const ok = validateMindooDBAppDefinition(baseDefinition({
+      databases: [
+        { logicalDatabaseId: "pimdb", label: { en: "Mailbox", de: "Postfach" }, permissions: ["write"] },
+        { logicalDatabaseId: "outbox", label: "Outbox", permissions: ["write"] },
+      ],
+    }));
+    expect(ok.errors).toEqual([]);
+    expect(ok.definition?.databases?.map((d) => d.label)).toEqual([{ en: "Mailbox", de: "Postfach" }, "Outbox"]);
+    const bad = validateMindooDBAppDefinition(baseDefinition({ databases: [{ logicalDatabaseId: "pimdb", label: { de: "Postfach" } }] }));
+    expect(bad.errors.join(" ")).toMatch(/must include an "en" entry/);
+  });
+});
