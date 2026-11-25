@@ -4841,8 +4841,8 @@ export interface MindooDBAppMailDelegation {
   username: string | null;
   /** Right per database prefix as the server enforces it: `mmail_`, `mcal_`, `mcon_` ("read"/"edit"), `mmailout_` ("send"). */
   rights: Record<string, string>;
-  /** Per account: which kinds the delegate can decrypt. */
-  accounts: Record<string, Partial<Record<MindooDBAppMailboxKind, boolean>>>;
+  /** Per account: the delegate's right per kind (they can decrypt those). */
+  accounts: Record<string, Partial<Record<MindooDBAppMailboxKind, MindooDBAppDelegationRight>>>;
 }
 
 /** What someone shared with the user, from {@link MindooDBAppMailApi.sharedWithMe}. */

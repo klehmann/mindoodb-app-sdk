@@ -3891,7 +3891,7 @@ function createDatabaseHandle(
       for (const [kind, right] of Object.entries(request.rights) as Array<[keyof typeof prefixes, string | null]>) {
         const account = (entry.accounts[request.accountId] ??= {});
         if (right) {
-          account[kind] = true;
+          account[kind] = right as "read" | "edit";
           entry.rights[prefixes[kind]] = entry.rights[prefixes[kind]] === "edit" ? "edit" : right;
         } else {
           delete account[kind];
