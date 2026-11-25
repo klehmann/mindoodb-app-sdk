@@ -175,6 +175,7 @@ export function guardDatabase(
       (method) => (method === "colleagueEvents" || method === "sharedCalendars" ? ["calendarshare"] : ["freebusy"]),
       check("calendar."),
     ),
+    mail: guardApi(database.mail, () => ["maildelegation"], check("mail.")),
     filing: (store: string) =>
       guardApi(database.filing(store), (method) => FILING_REQUIREMENTS[method] ?? READ, check("filing.")),
   };

@@ -267,6 +267,7 @@ export type MindooDBAppCapability =
   | "directory"
   | "freebusy"
   | "calendarshare"
+  | "maildelegation"
   | "sealedchannel"
   | "live";
 
@@ -4817,6 +4818,70 @@ export interface MindooDBAppCalendarApi {
   sharedCalendars(): Promise<MindooDBAppSharedCalendar[]>;
 }
 
+/** One of a person's three mail databases (mindoomail-format layout 2). */
+export type MindooDBAppMailboxKind = "mail" | "calendar" | "contacts";
+
+/** What a delegate may do in one of the databases: sync and read, or also write. */
+export type MindooDBAppDelegationRight = "read" | "edit";
+
+/** The own group documents, from {@link MindooDBAppMailApi.groups}. */
+export interface MindooDBAppMailboxGroups {
+  /** False when the host's MindooDB has no group keys yet; the app then keeps per-document sealing. */
+  supported: boolean;
+  /** The user's grant id: the `<id>` of `mmail_<id>`, `mcal_<id>`, `mcon_<id>`. */
+  grantDocId?: string;
+  /** Per account id: the group document id per kind, for `groupKeyDocId` when creating documents. */
+  accounts?: Record<string, Record<MindooDBAppMailboxKind, string>>;
+}
+
+/** One delegate of the user, from {@link MindooDBAppMailApi.delegations}. */
+export interface MindooDBAppMailDelegation {
+  grant: string;
+  /** Null when the name could not be resolved (grant without devices). */
+  username: string | null;
+  /** Right per database prefix as the server enforces it: `mmail_`, `mcal_`, `mcon_` ("read"/"edit"), `mmailout_` ("send"). */
+  rights: Record<string, string>;
+  /** Per account: the delegate's right per kind (they can decrypt those). */
+  accounts: Record<string, Partial<Record<MindooDBAppMailboxKind, MindooDBAppDelegationRight>>>;
+}
+
+/** What someone shared with the user, from {@link MindooDBAppMailApi.sharedWithMe}. */
+export interface MindooDBAppMailSharedWithMe {
+  /** The owner's grant: open their databases as family members `mmail_${id}`, `mcal_${id}`, `mcon_${id}`. */
+  ownerGrant: string;
+  owner: string | null;
+  rights: Record<string, string>;
+}
+
+export interface MindooDBAppSetDelegationRequest {
+  username: string;
+  accountId: string;
+  /** Per kind: a right, or null to take it away; kinds left out stay. */
+  rights: Partial<Record<MindooDBAppMailboxKind, MindooDBAppDelegationRight | null>>;
+  /** Send on the user's behalf through their outbox. Left out: unchanged. */
+  send?: boolean;
+  /** For kinds newly given: whether the delegate also reads what is already there (default "all"). */
+  history?: "all" | "none";
+}
+
+/**
+ * Group keys and delegation of the user's mailbox, calendar and contacts
+ * (mindoodb docs/accesscontrol.md §6.11 "Delegation", mindoomail-format
+ * layout 2). Haven does the key work: group membership (who can decrypt), the
+ * deposit keys for deliveries, and the record the server enforces (who may sync).
+ * Older hosts answer `groups()` with `supported: false` and the rest with `[]`.
+ */
+export interface MindooDBAppMailApi {
+  /** Ensures and returns the user's group documents for these accounts (the Mindoo Mail account always). */
+  groups(accounts?: string[]): Promise<MindooDBAppMailboxGroups>;
+  /** Who the user delegated what to. */
+  delegations(): Promise<MindooDBAppMailDelegation[]>;
+  /** Give, change or take away a delegate's rights for one account. */
+  setDelegation(request: MindooDBAppSetDelegationRequest): Promise<void>;
+  /** Whose mailbox, calendar or contacts the user may open. */
+  sharedWithMe(): Promise<MindooDBAppMailSharedWithMe[]>;
+}
+
 /** What a person shares of their calendar with the user. */
 export type MindooDBAppCalendarShareLevel = "none" | "busy" | "business" | "all";
 
@@ -5766,6 +5831,11 @@ export interface MindooDBAppDatabase {
   directory: MindooDBAppDirectoryApi;
   /** Colleagues' busy times (`calendar.freeBusy`); requires the `freebusy` capability. */
   calendar: MindooDBAppCalendarApi;
+  /**
+   * Mailbox, calendar and contacts with group keys, and their delegation
+   * (`mail.*`); requires the `maildelegation` capability.
+   */
+  mail: MindooDBAppMailApi;
   /**
    * Read the database's full-text index configuration from the synced
    * `dbsetup` document. Resolves to `null` when full-text indexing has

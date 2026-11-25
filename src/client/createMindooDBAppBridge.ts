@@ -95,6 +95,10 @@ import type {
   MindooDBAppMailAddresses,
   MindooDBAppMailGateway,
   MindooDBAppCalendarApi,
+  MindooDBAppMailApi,
+  MindooDBAppMailboxGroups,
+  MindooDBAppMailDelegation,
+  MindooDBAppMailSharedWithMe,
   MindooDBAppFreeBusyResult,
   MindooDBAppColleagueCalendar,
   MindooDBAppSharedCalendar,
@@ -1020,6 +1024,7 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
   public readonly timestamps: MindooDBAppTimestampApi;
   public readonly directory: MindooDBAppDirectoryApi;
   public readonly calendar: MindooDBAppCalendarApi;
+  public readonly mail: MindooDBAppMailApi;
 
   constructor(
     private readonly rpc: PortRpcClient,
@@ -1501,6 +1506,32 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
           }
           return [];
         }
+      },
+    };
+
+    const mailCall = async <T>(method: string, params: Record<string, unknown>, fallback: T): Promise<T> => {
+      try {
+        return await this.rpc.call<T>(method, { databaseId: this.databaseId, ...params });
+      } catch (error) {
+        if (!isMethodNotFoundError(error)) {
+          throw error;
+        }
+        return fallback;
+      }
+    };
+    this.mail = {
+      groups: async (accounts) =>
+        await mailCall<MindooDBAppMailboxGroups>("mail.groups", { accounts: accounts ?? [] }, { supported: false }),
+      delegations: async () => {
+        const found = await mailCall<MindooDBAppMailDelegation[]>("mail.delegations", {}, []);
+        return Array.isArray(found) ? found : [];
+      },
+      setDelegation: async (request) => {
+        await this.rpc.call("mail.setDelegation", { databaseId: this.databaseId, ...request });
+      },
+      sharedWithMe: async () => {
+        const found = await mailCall<MindooDBAppMailSharedWithMe[]>("mail.sharedWithMe", {}, []);
+        return Array.isArray(found) ? found : [];
       },
     };
 
