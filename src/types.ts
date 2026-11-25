@@ -4853,6 +4853,24 @@ export interface MindooDBAppMailSharedWithMe {
   rights: Record<string, string>;
 }
 
+/**
+ * A team mailbox the user is a member of, from {@link MindooDBAppMailApi.teams}:
+ * one shared mailbox (`tmail_${mailboxId}`) and calendar (`tcal_${mailboxId}`)
+ * for the members of a directory group.
+ */
+export interface MindooDBAppTeamMailbox {
+  /** Open the databases as family members `tmail_${mailboxId}` and `tcal_${mailboxId}`. */
+  mailboxId: string;
+  /** The directory group (members join and leave with it). */
+  groupName: string;
+  /** The team's mail address; members may send with it as From. Null without one. */
+  address: string | null;
+  /** Key documents: encrypt the team's documents with `groupKeyDocId` = these ids. */
+  groups: { mail: string; calendar: string };
+  /** Set when the host could not bring the team's keys up to date this time (offline, refused). */
+  error?: string;
+}
+
 export interface MindooDBAppSetDelegationRequest {
   username: string;
   accountId: string;
@@ -4880,6 +4898,12 @@ export interface MindooDBAppMailApi {
   setDelegation(request: MindooDBAppSetDelegationRequest): Promise<void>;
   /** Whose mailbox, calendar or contacts the user may open. */
   sharedWithMe(): Promise<MindooDBAppMailSharedWithMe[]>;
+  /**
+   * The team mailboxes the user is a member of. The host first brings each
+   * team's key documents in line with its group (members added or removed).
+   * Older hosts answer `[]`.
+   */
+  teams(): Promise<MindooDBAppTeamMailbox[]>;
 }
 
 /** What a person shares of their calendar with the user. */

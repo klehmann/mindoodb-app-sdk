@@ -1264,13 +1264,15 @@ if (groups.supported) {
 await db.mail.setDelegation({ username: "CN=Bob/O=Acme", accountId: "mindoomail", rights: { mail: "edit", calendar: "read" }, send: true });
 await db.mail.delegations();   // [{ grant, username, rights: { mmail_: "edit", mcal_: "read", mmailout_: "send" }, accounts }]
 await db.mail.sharedWithMe();  // [{ ownerGrant, owner, rights }]: open as family members mmail_${id}, mcal_${id}, mcon_${id}
+await db.mail.teams();         // [{ mailboxId, groupName, address, groups: { mail, calendar } }]: open as tmail_${id}, tcal_${id}
 ```
 
 - Rights per kind: `"read"` (sync and read) or `"edit"` (also write); `null` takes a kind away. `send` lets the delegate send on the user's behalf through their outbox (`From:` the user, `Sender:` the delegate).
 - `history: "none"` gives newly added kinds without what is already there; the default is the whole history.
 - Taking a kind away rotates the group key; the delegate keeps what they already synced, as with every key rotation.
 - Needs the `maildelegation` permission on the database. Older hosts answer `groups()` with `supported: false` (keep sealing per document) and `[]` for the lists.
-- The mock session answers `groups()` with `supported: false` and keeps delegations in memory.
+- **Team mailboxes** belong to a directory group: one mailbox and calendar for all its members, who all read and write them. Haven keeps the team's key documents in step with the group when `teams()` is called; encrypt the team's documents with `groupKeyDocId: team.groups.mail` (or `.calendar`). Members may send with the team address as `From` through their own outbox. Older hosts answer `[]`.
+- The mock session answers `groups()` with `supported: false`, `teams()` with `[]`, and keeps delegations in memory.
 
 ### Sealed channels
 

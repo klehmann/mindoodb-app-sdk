@@ -99,6 +99,7 @@ import type {
   MindooDBAppMailboxGroups,
   MindooDBAppMailDelegation,
   MindooDBAppMailSharedWithMe,
+  MindooDBAppTeamMailbox,
   MindooDBAppFreeBusyResult,
   MindooDBAppColleagueCalendar,
   MindooDBAppSharedCalendar,
@@ -1531,6 +1532,10 @@ class MindooDBAppDatabaseImpl implements MindooDBAppDatabase {
       },
       sharedWithMe: async () => {
         const found = await mailCall<MindooDBAppMailSharedWithMe[]>("mail.sharedWithMe", {}, []);
+        return Array.isArray(found) ? found : [];
+      },
+      teams: async () => {
+        const found = await mailCall<MindooDBAppTeamMailbox[]>("mail.teams", {}, []);
         return Array.isArray(found) ? found : [];
       },
     };
