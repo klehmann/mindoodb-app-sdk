@@ -5024,6 +5024,11 @@ export interface MindooDBAppMailGatewayConfig {
   gatewayUsername: string;
   domains: string[];
   users: Array<{ username: string; addresses: string[] }>;
+  /**
+   * Distribution lists: directory groups with a mail address, the members as
+   * the host expanded them (nested groups resolved). Absent when there are none.
+   */
+  lists?: Array<{ address: string; members: string[]; group?: string }>;
 }
 
 /** One gateway of {@link MindooDBAppDirectoryApi.mailGateways}. */
@@ -5038,6 +5043,14 @@ export interface MindooDBAppMailGateway {
    * left out, as the gateway does.
    */
   ownAddresses: string[];
+  /**
+   * Distribution list addresses at this gateway the current user is a member
+   * of, sorted. The gateway lets members send with such an address as From
+   * ("send as list"). Lists outside `domains` and addresses that are also a
+   * person's or another list's are left out, as the gateway does. Absent on
+   * hosts that do not know lists.
+   */
+  ownListAddresses?: string[];
   /**
    * True for exactly one gateway: the first that gives the current user an
    * address, else the first one. It sends the user's internet mail.

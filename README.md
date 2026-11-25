@@ -1182,11 +1182,14 @@ const gateways = await db.directory.mailGateways();
 //   gatewayUsername: "cn=mail-gateway/o=acme",   // seal outgoing internet mail to it
 //   domains: ["mail.acme.example"],
 //   ownAddresses: ["alice@mail.acme.example"],   // the current user's, first = primary
+//   ownListAddresses: ["team@mail.acme.example"], // distribution lists the user may send as
 //   isDefault: true,                             // sends the user's internet mail
 // }]
 ```
 
 Addresses and domains come back lower-cased; addresses outside the gateway's domains and addresses listed for two people are left out, as the gateway does. Exactly one gateway is `isDefault`: the first that gives the user an address, else the first. Empty without a gateway and on hosts that do not know the call.
+
+`ownListAddresses` names the distribution lists at that gateway the user is a member of: directory groups with a mail address, which the gateway delivers to every member. The gateway also lets members send with a list address as From ("send as list"), so a compose window can offer them next to `ownAddresses`. Hosts that do not know lists leave the field out.
 
 Other members' addresses are not listed in bulk. Ask for the people the app already knows (picked recipients, typeahead hits), like `lookupUsers`: one entry per username, in that order, at most 200 per call:
 
@@ -1195,7 +1198,7 @@ const [entry] = await db.directory.mailAddressesFor(["CN=Karsten Lehmann/O=Mindo
 // { username: "CN=Karsten Lehmann/O=Mindoo", addresses: ["karsten@mail.mindoo.example"] }
 ```
 
-`addresses` is empty for someone no gateway lists, and for everyone on hosts that do not know the call. All three calls need the `directory` capability. In tests, `createMockMindooDBAppSession({ directoryPeople, mailGateways })` (and `setDirectoryPeople` / `setMailGateways`) play the directory; `mailGateways` takes the configuration documents (`{ gatewayUsername, domains, users }`).
+`addresses` is empty for someone no gateway lists, and for everyone on hosts that do not know the call. All three calls need the `directory` capability. In tests, `createMockMindooDBAppSession({ directoryPeople, mailGateways })` (and `setDirectoryPeople` / `setMailGateways`) play the directory; `mailGateways` takes the configuration documents (`{ gatewayUsername, domains, users, lists? }`).
 
 ### Free/busy
 

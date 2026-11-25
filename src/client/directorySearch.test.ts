@@ -144,6 +144,7 @@ describe("directory.searchUsers and directory.mailGateways (mock host)", () => {
         gatewayUsername: "cn=mail-gateway/o=acme",
         domains: ["mail.acme.example"],
         ownAddresses: ["alice@mail.acme.example"],
+        ownListAddresses: [],
         isDefault: true,
       },
     ]);

@@ -102,6 +102,8 @@ interface ResolvedGateway {
   gatewayUsername: string;
   domains: string[];
   addressesByUser: Map<string, string[]>;
+  /** List address → lower-cased canonical member keys. */
+  lists: Map<string, Set<string>>;
 }
 
 /**
@@ -136,14 +138,31 @@ function resolveGateways(configs: readonly MindooDBAppMailGatewayConfig[]): Reso
         owners.get(address)!.add(key);
       }
     }
+    // Distribution lists claim their address too: an address that is a
+    // person's and a list's (or two lists') is nobody's, as at the gateway.
+    const listMembers = new Map<string, Set<string>>();
+    const listClaims = new Map<string, number>();
+    for (const list of Array.isArray(config.lists) ? config.lists : []) {
+      const address = typeof list?.address === "string" ? list.address.trim().toLowerCase() : "";
+      if (!address.includes("@") || !domains.includes(domainOf(address))) continue;
+      listClaims.set(address, (listClaims.get(address) ?? 0) + 1);
+      const members = (Array.isArray(list.members) ? list.members : [])
+        .filter((member): member is string => typeof member === "string" && member.trim() !== "")
+        .map((member) => canonicalKey(member.trim()));
+      listMembers.set(address, new Set(members));
+    }
     const addressesByUser = new Map<string, string[]>();
     for (const [address, claimedBy] of owners) {
-      if (claimedBy.size !== 1) continue;
+      if (claimedBy.size !== 1 || listClaims.has(address)) continue;
       const [key] = claimedBy;
       if (!addressesByUser.has(key!)) addressesByUser.set(key!, []);
       addressesByUser.get(key!)!.push(address);
     }
-    gateways.push({ gatewayUsername: expandAbbreviatedName(gatewayUsername), domains, addressesByUser });
+    const lists = new Map<string, Set<string>>();
+    for (const [address, members] of listMembers) {
+      if (listClaims.get(address) === 1 && !owners.has(address)) lists.set(address, members);
+    }
+    gateways.push({ gatewayUsername: expandAbbreviatedName(gatewayUsername), domains, addressesByUser, lists });
   }
   return gateways;
 }
@@ -164,6 +183,9 @@ export function mailGatewaysFromConfigs(
     gatewayUsername: gateway.gatewayUsername,
     domains: gateway.domains,
     ownAddresses: me ? [...(gateway.addressesByUser.get(me) ?? [])] : [],
+    ownListAddresses: me
+      ? [...gateway.lists].filter(([, members]) => members.has(me)).map(([address]) => address).sort()
+      : [],
     isDefault: false,
   }));
   const preferred = gateways.find((gateway) => gateway.ownAddresses.length > 0) ?? gateways[0];
