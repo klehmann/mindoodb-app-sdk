@@ -86,6 +86,12 @@ describe("mailGatewaysFromConfigs", () => {
     expect(alice!.ownListAddresses).toEqual(["all@mail.acme.example", "team@mail.acme.example"]);
     const [bob] = mailGatewaysFromConfigs([withLists], "cn=bob/o=acme");
     expect(bob!.ownListAddresses).toEqual(["team@mail.acme.example"]);
+    // Team mailboxes count like lists for sending.
+    const [withTeam] = mailGatewaysFromConfigs(
+      [{ ...withLists, teamMailboxes: [{ address: "help@mail.acme.example", mailboxId: "help0001", members: ["bob/acme"] }] }],
+      "cn=bob/o=acme",
+    );
+    expect(withTeam!.ownListAddresses).toEqual(["help@mail.acme.example", "team@mail.acme.example"]);
     // The person's address that is also a list address is nobody's.
     expect(mailAddressesFromConfigs([withLists], ["dora/acme"])).toEqual([{ username: "dora/acme", addresses: [] }]);
   });

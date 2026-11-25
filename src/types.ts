@@ -5053,6 +5053,11 @@ export interface MindooDBAppMailGatewayConfig {
    * the host expanded them (nested groups resolved). Absent when there are none.
    */
   lists?: Array<{ address: string; members: string[]; group?: string }>;
+  /**
+   * Team mailboxes: one shared mailbox per group, its members may send with the
+   * address. Counted like lists for {@link MindooDBAppMailGateway.ownListAddresses}.
+   */
+  teamMailboxes?: Array<{ address: string; mailboxId: string; members: string[]; group?: string }>;
 }
 
 /** One gateway of {@link MindooDBAppDirectoryApi.mailGateways}. */
@@ -5068,8 +5073,8 @@ export interface MindooDBAppMailGateway {
    */
   ownAddresses: string[];
   /**
-   * Distribution list addresses at this gateway the current user is a member
-   * of, sorted. The gateway lets members send with such an address as From
+   * Distribution list and team mailbox addresses at this gateway the current
+   * user is a member of, sorted. The gateway lets members send with such an address as From
    * ("send as list"). Lists outside `domains` and addresses that are also a
    * person's or another list's are left out, as the gateway does. Absent on
    * hosts that do not know lists.

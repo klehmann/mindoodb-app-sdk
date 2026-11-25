@@ -142,7 +142,8 @@ function resolveGateways(configs: readonly MindooDBAppMailGatewayConfig[]): Reso
     // person's and a list's (or two lists') is nobody's, as at the gateway.
     const listMembers = new Map<string, Set<string>>();
     const listClaims = new Map<string, number>();
-    for (const list of Array.isArray(config.lists) ? config.lists : []) {
+    const teams = Array.isArray(config.teamMailboxes) ? config.teamMailboxes : [];
+    for (const list of [...(Array.isArray(config.lists) ? config.lists : []), ...teams]) {
       const address = typeof list?.address === "string" ? list.address.trim().toLowerCase() : "";
       if (!address.includes("@") || !domains.includes(domainOf(address))) continue;
       listClaims.set(address, (listClaims.get(address) ?? 0) + 1);
