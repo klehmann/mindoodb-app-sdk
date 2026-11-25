@@ -65,9 +65,29 @@ describe("mailGatewaysFromConfigs", () => {
         gatewayUsername: "cn=mail-gateway/o=acme",
         domains: ["mail.acme.example"],
         ownAddresses: ["alice@mail.acme.example"],
+        ownListAddresses: [],
         isDefault: true,
       },
     ]);
+  });
+
+  it("names the lists the user is a member of; list addresses claimed twice or outside the domains count for nobody", () => {
+    const withLists = {
+      ...config,
+      users: [...config.users, { username: "dora/acme", addresses: ["sales@mail.acme.example"] }],
+      lists: [
+        { address: "Team@mail.acme.example", members: ["cn=alice/o=acme", "bob/acme"], group: "team" },
+        { address: "all@mail.acme.example", members: ["alice/acme"] },
+        { address: "sales@mail.acme.example", members: ["alice/acme"] },
+        { address: "x@elsewhere.example", members: ["alice/acme"] },
+      ],
+    };
+    const [alice] = mailGatewaysFromConfigs([withLists], "CN=Alice/O=Acme");
+    expect(alice!.ownListAddresses).toEqual(["all@mail.acme.example", "team@mail.acme.example"]);
+    const [bob] = mailGatewaysFromConfigs([withLists], "cn=bob/o=acme");
+    expect(bob!.ownListAddresses).toEqual(["team@mail.acme.example"]);
+    // The person's address that is also a list address is nobody's.
+    expect(mailAddressesFromConfigs([withLists], ["dora/acme"])).toEqual([{ username: "dora/acme", addresses: [] }]);
   });
 
   it("mailAddressesFromConfigs: one entry per username asked, same rules, all gateways", () => {
