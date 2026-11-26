@@ -100,6 +100,10 @@ describe("two-user test host", () => {
     expect((await a.host.session.getLaunchContext()).user.username).not.toBe(
       (await b.host.session.getLaunchContext()).user.username,
     );
+    // Two people on two devices: session.getDevice() differs too.
+    const [deviceA, deviceB] = [await a.host.session.getDevice(), await b.host.session.getDevice()];
+    expect(deviceA?.id).not.toBe(deviceB?.id);
+    expect([deviceA?.label, deviceB?.label]).toEqual(["Test device 1", "Test device 2"]);
   });
 
   it("switches modes from the panel, keeping the other URL settings", () => {

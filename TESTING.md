@@ -457,7 +457,7 @@ Keep the test page out of production builds. The starter template builds it only
 
 ### Two users on two replicas
 
-The panel's **Mode** section switches between *Single user* and *Two users* (keeping the other URL settings). `/__haven-test/?twoUsers=1` (or `mountHavenTestHost({ twoUsers: true })`) shows the app twice, side by side, as two people on two devices: each frame is launched by its own mock Haven with its own replica of every database (`automerge: true`, distinct Automerge actors), so their edits really are concurrent. The bar on top:
+The panel's **Mode** section switches between *Single user* and *Two users* (keeping the other URL settings). `/__haven-test/?twoUsers=1` (or `mountHavenTestHost({ twoUsers: true })`) shows the app twice, side by side, as two people on two devices: each frame is launched by its own mock Haven with its own replica of every database (`automerge: true`, distinct Automerge actors), so their edits really are concurrent, and its own device (`session.getDevice()` returns `mock-device-1` / `mock-device-2`, or the `device` option's id with `-1` / `-2`), so per-device state such as number ranges or pins differs too. The bar on top:
 
 - **Auto-sync every 2 s** (on by default) merges the replicas with `syncMockReplicas`, like Haven's sync. Turn it off to keep the two apart — two devices offline — edit on both sides, then press **Sync** and watch the merge.
 - The status says "✓ in sync" or how many documents still differ.
