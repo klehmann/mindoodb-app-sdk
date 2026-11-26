@@ -139,6 +139,12 @@ export function mountTwoUserTestHost(
       databases: index === 0 ? databasesA : replicaOf(databasesA),
       // distinct Automerge actors: the two replicas write concurrently
       automergeActor: index === 0 ? "a11ce000000000000000000000000001" : "b0b00000000000000000000000000002",
+      // and two devices: apps that keep per-device state (number ranges, pins) see two
+      device: {
+        id: `${hostOptions.device?.id ?? "mock-device"}-${index + 1}`,
+        label: `${hostOptions.device?.label ?? "Test device"} ${index + 1}`,
+        platform: hostOptions.device?.platform ?? "browser",
+      },
     });
   }) as [BrowserTestHost, BrowserTestHost];
 
