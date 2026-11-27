@@ -50,6 +50,8 @@ export interface HavenAppLandingPage {
   definition: MindooDBAppDefinition | null;
   /** The Haven link behind the main button. */
   installUrl: string;
+  /** The `mindoodb-haven://` link behind "Open in the Haven app". */
+  openInAppUrl: string;
 }
 
 /** The languages Haven's UI speaks; the landing page speaks the same ones. */
@@ -59,6 +61,8 @@ export type HavenAppLandingLocale = (typeof HAVEN_APP_LANDING_LOCALES)[number];
 const EN = {
   eyebrow: "App for MindooDB Haven",
   cta: "Open in MindooDB Haven",
+  ctaApp: "Open in the Haven app",
+  ctaAppHint: "Uses Haven Desktop or the Haven app on your phone, if installed.",
   ctaHint:
     "Haven sets up your encrypted workspace and installs {label}. Already using Haven? Then the app is simply added.",
   from: "from {origin}",
@@ -85,6 +89,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   de: {
     eyebrow: "App für MindooDB Haven",
     cta: "In MindooDB Haven öffnen",
+    ctaApp: "In der Haven-App öffnen",
+    ctaAppHint: "Nutzt Haven Desktop oder die Haven-App auf dem Handy, falls installiert.",
     ctaHint:
       "Haven richtet deine verschlüsselte Umgebung ein und installiert {label}. Du nutzt Haven schon? Dann wird die App einfach hinzugefügt.",
     from: "von {origin}",
@@ -102,6 +108,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   es: {
     eyebrow: "App para MindooDB Haven",
     cta: "Abrir en MindooDB Haven",
+    ctaApp: "Abrir en la app de Haven",
+    ctaAppHint: "Usa Haven Desktop o la app de Haven en tu móvil, si está instalada.",
     ctaHint:
       "Haven configura tu entorno cifrado e instala {label}. ¿Ya usas Haven? Entonces la app simplemente se añade.",
     from: "desde {origin}",
@@ -119,6 +127,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   fr: {
     eyebrow: "App pour MindooDB Haven",
     cta: "Ouvrir dans MindooDB Haven",
+    ctaApp: "Ouvrir dans l'application Haven",
+    ctaAppHint: "Utilise Haven Desktop ou l'application Haven sur votre téléphone, si elle est installée.",
     ctaHint:
       "Haven configure votre environnement chiffré et installe {label}. Vous utilisez déjà Haven\u00a0? L'app y est alors simplement ajoutée.",
     from: "sur {origin}",
@@ -136,6 +146,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   it: {
     eyebrow: "App per MindooDB Haven",
     cta: "Apri in MindooDB Haven",
+    ctaApp: "Apri nell'app Haven",
+    ctaAppHint: "Usa Haven Desktop o l'app Haven sul telefono, se installata.",
     ctaHint:
       "Haven configura il tuo ambiente cifrato e installa {label}. Usi già Haven? Allora l'app viene semplicemente aggiunta.",
     from: "da {origin}",
@@ -153,6 +165,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   nb: {
     eyebrow: "App for MindooDB Haven",
     cta: "Åpne i MindooDB Haven",
+    ctaApp: "Åpne i Haven-appen",
+    ctaAppHint: "Bruker Haven Desktop eller Haven-appen på telefonen, hvis den er installert.",
     ctaHint:
       "Haven setter opp det krypterte miljøet ditt og installerer {label}. Bruker du Haven allerede? Da blir appen bare lagt til.",
     from: "fra {origin}",
@@ -170,6 +184,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   nl: {
     eyebrow: "App voor MindooDB Haven",
     cta: "Openen in MindooDB Haven",
+    ctaApp: "Openen in de Haven-app",
+    ctaAppHint: "Gebruikt Haven Desktop of de Haven-app op je telefoon, als die geïnstalleerd is.",
     ctaHint:
       "Haven richt je versleutelde omgeving in en installeert {label}. Gebruik je Haven al? Dan wordt de app gewoon toegevoegd.",
     from: "van {origin}",
@@ -187,6 +203,8 @@ export const HAVEN_APP_LANDING_STRINGS = {
   pl: {
     eyebrow: "Aplikacja dla MindooDB Haven",
     cta: "Otwórz w MindooDB Haven",
+    ctaApp: "Otwórz w aplikacji Haven",
+    ctaAppHint: "Używa Haven Desktop lub aplikacji Haven na telefonie, jeśli jest zainstalowana.",
     ctaHint:
       "Haven skonfiguruje twoje zaszyfrowane środowisko i zainstaluje {label}. Już korzystasz z Haven? Wtedy aplikacja zostanie po prostu dodana.",
     from: "z {origin}",
@@ -233,6 +251,14 @@ export function buildHavenAppInstallUrl(appUrl: string, havenUrl = DEFAULT_HAVEN
   const url = new URL(havenUrl);
   url.searchParams.set("app", appUrl);
   return url.toString();
+}
+
+/**
+ * `mindoodb-haven://app?app=<appUrl>`: the same offer in Haven Desktop or the Haven app
+ * on a phone, for people who use those instead of Haven in the browser.
+ */
+export function buildHavenAppOpenInAppUrl(appUrl: string): string {
+  return `mindoodb-haven://app?app=${encodeURIComponent(appUrl)}`;
 }
 
 async function loadDefinition(appUrl: string): Promise<MindooDBAppDefinition | null> {
@@ -482,6 +508,7 @@ const STYLE = `
 .mdb-landing__summary{margin:28px 0 0;font-size:19px}
 .mdb-landing__cta{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin:28px 0 0}
 .mdb-landing__button{display:inline-block;padding:14px 22px;border-radius:12px;background:var(--accent);color:var(--accent-text);font-weight:600;text-decoration:none}
+.mdb-landing__button--secondary{background:transparent;color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
 .mdb-landing__button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .mdb-landing__hint{margin:0;max-width:420px;color:var(--muted);font-size:14px}
 .mdb-landing__description{margin:32px 0 0}
@@ -535,6 +562,7 @@ export async function renderHavenAppLandingPage(
   const strings: LandingStrings = HAVEN_APP_LANDING_STRINGS[pageLocale];
   const definition = options.definition ?? (await loadDefinition(appUrl));
   const installUrl = buildHavenAppInstallUrl(appUrl, options.havenUrl);
+  const openInAppUrl = buildHavenAppOpenInAppUrl(appUrl);
   const listing = definition?.listing;
   const label = definition?.label ?? (document.title || new URL(appUrl).host);
   const origin = new URL(appUrl).host;
@@ -600,7 +628,12 @@ export async function renderHavenAppLandingPage(
   button.href = installUrl;
   button.rel = "noopener";
   button.dataset.testid = "haven-app-landing-install";
-  cta.append(button, el("p", "mdb-landing__hint", format(strings.ctaHint, { label })));
+  // Haven Desktop and the phone apps: an https link opens the browser there.
+  const openInApp = el("a", "mdb-landing__button mdb-landing__button--secondary", strings.ctaApp);
+  openInApp.href = openInAppUrl;
+  openInApp.title = strings.ctaAppHint;
+  openInApp.dataset.testid = "haven-app-landing-open-in-app";
+  cta.append(button, openInApp, el("p", "mdb-landing__hint", format(strings.ctaHint, { label })));
   card.append(cta);
 
   const descriptionMarkdown = resolveMindooDBAppLocalizedText(listing?.descriptionMarkdown, locale);
@@ -660,5 +693,5 @@ export async function renderHavenAppLandingPage(
   if (container === document.body) {
     document.body.style.margin = "0";
   }
-  return { definition, installUrl };
+  return { definition, installUrl, openInAppUrl };
 }
