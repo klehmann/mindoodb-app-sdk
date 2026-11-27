@@ -79,6 +79,19 @@ describe("automerge-backed mock databases", () => {
     );
   });
 
+  it("stores MindooDBAppValue.text as collaborative text", async () => {
+    const { database } = await openMock();
+    const created = await database.documents.create({
+      set: { essay: MindooDBAppValue.text("Es war einmal") },
+    });
+    expect(created.data.essay).toBe("Es war einmal");
+    const updated = await database.documents.update(created.id, {
+      json: { textSplice: [{ path: ["essay"], index: 0, deleteCount: 2, insert: "Da" }] },
+    });
+    expect(updated.data.essay).toBe("Da war einmal");
+    expect(() => MindooDBAppValue.text(1 as unknown as string)).toThrow();
+  });
+
   it("reads typed values back the way Haven returns them", async () => {
     const { database } = await openMock();
     const created = await database.documents.create({

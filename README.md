@@ -1857,9 +1857,9 @@ Haven applies the patch causally at `baseHeads` and merges it with any concurren
 
 Patch flavors compose. `set`/`unset` (top-level fields), `json`, `text`, and `richText` can all appear in the same `documents.update()` call and are applied atomically to one new document revision. Prefer small, intentional operations over whole-document rewrites so MindooDB change tracking stays meaningful and Automerge produces cleaner merges.
 
-### Typed values: atomic strings, counters, timestamps
+### Typed values: atomic strings, counters, timestamps, text
 
-`document.data` is JSON, and JSON has one kind of string and one kind of number. For collaborative data that is not enough, so the SDK adds three **typed values**. You create them with `MindooDBAppValue` and use them anywhere you write a value: `documents.create({ set })`, `documents.update({ set })`, and `set` / `listInsert` values of a JSON patch, also nested inside objects and arrays.
+`document.data` is JSON, and JSON has one kind of string and one kind of number. For collaborative data that is not enough, so the SDK adds **typed values**. You create them with `MindooDBAppValue` and use them anywhere you write a value: `documents.create({ set })`, `documents.update({ set })`, and `set` / `listInsert` values of a JSON patch, also nested inside objects and arrays.
 
 ```ts
 import { MindooDBAppValue } from "mindoodb-app-sdk";
@@ -1884,10 +1884,12 @@ task.data.dueAt;  // "2026-10-01T12:00:00.000Z"
 | `MindooDBAppValue.atomic(string)` | ids, status and enum values, URLs, hashes, stored text cursors | `string` |
 | `MindooDBAppValue.counter(initial = 0)` | tallies several people change: votes, likes, stock, seats | `number` |
 | `MindooDBAppValue.timestamp(Date \| ms \| ISO string)` | dates and times | ISO 8601 string (UTC, with ms) |
+| `MindooDBAppValue.text(string)` | a text of 64 KB or more that people edit together | `string` |
 
 Why they matter:
 
 - **Plain strings are collaborative text.** Concurrent edits are merged character by character, which is right for titles, notes and bodies. For a status that one user changes from `"open"` to `"closed"` while another changes it to `"blocked"`, text merging can produce a mix of both words. An **atomic** string is replaced as a whole: one of the two values wins. It is also cheaper to store.
+- **Collaborative text costs memory.** Automerge keeps one operation per character, about 100–500 bytes of memory each whenever the document loads, and a WebAssembly instance has 4 GB for all documents together. So from 64 KB on, Haven stores a new plain string atomic. Write a large text that people really edit together with `MindooDBAppValue.text()`; keep generated or imported content atomic or in an attachment.
 - **Plain numbers are last-writer-wins.** If two users both read `votes: 4` and each save `5`, one vote is lost. A **counter** sums concurrent increments, so the result is `6`.
 - **An ISO string written as a plain string is text**, not a date. A **timestamp** stays a date for everyone who reads the document.
 

@@ -357,6 +357,11 @@ function readMockTypedValues(value: unknown): unknown {
           throw new Error('Typed value "atomic" needs a string value');
         }
         return record.value;
+      case "text":
+        if (typeof record.value !== "string") {
+          throw new Error('Typed value "text" needs a string value');
+        }
+        return record.value;
       case "counter":
         assertMockCounterAmount(record.value, 'Typed value "counter"');
         return record.value;
@@ -955,6 +960,11 @@ function hydrateMockAutomergeValues(value: unknown, depth = 0): unknown {
           throw new Error('Typed value "atomic" needs a string value');
         }
         return new Automerge.ImmutableString(record.value);
+      case "text":
+        if (typeof record.value !== "string") {
+          throw new Error('Typed value "text" needs a string value');
+        }
+        return record.value;
       case "counter":
         assertMockCounterAmount(record.value, 'Typed value "counter"');
         return new Automerge.Counter(record.value as number);
