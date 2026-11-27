@@ -187,6 +187,7 @@ export {
 export {
   DEFAULT_HAVEN_URL,
   buildHavenAppInstallUrl,
+  buildHavenAppOpenInAppUrl,
   renderHavenAppLandingPage,
   resolveCurrentHavenAppUrl,
 } from "./landing";

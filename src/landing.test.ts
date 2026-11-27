@@ -65,6 +65,10 @@ describe("haven app landing page", () => {
     expect(root.querySelector<HTMLAnchorElement>('[data-testid="haven-app-landing-install"]')?.href).toBe(
       page.installUrl,
     );
+    expect(page.openInAppUrl).toBe("mindoodb-haven://app?app=https%3A%2F%2Ftrips.example.com%2F");
+    const openInApp = root.querySelector<HTMLAnchorElement>('[data-testid="haven-app-landing-open-in-app"]');
+    expect(openInApp?.getAttribute("href")).toBe(page.openInAppUrl);
+    expect(openInApp?.textContent).toBe("In der Haven-App öffnen");
     expect(document.title).toBe("Trip Planner");
   });
 
