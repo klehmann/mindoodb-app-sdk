@@ -17,6 +17,7 @@ describe("mail delegation (mock host)", () => {
     await db.mail.setDelegation({ username: "CN=bob/O=t", accountId: "mindoomail", rights: { mail: null, calendar: null }, send: false });
     expect(await db.mail.delegations()).toEqual([]);
     expect(await db.mail.sharedWithMe()).toEqual([]);
+    expect(await db.mail.teams()).toEqual([]);
   });
 });
 

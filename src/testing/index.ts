@@ -3916,6 +3916,9 @@ function createDatabaseHandle(
     async sharedWithMe() {
       return [];
     },
+    async teams() {
+      return [];
+    },
   };
 
   const defaultViews: MockViewApi = {
@@ -7172,6 +7175,8 @@ export function createFakeBridgeHost(
         return await state.getDatabase(String(params.databaseId)).mail.setDelegation(params as never);
       case "mail.sharedWithMe":
         return await state.getDatabase(String(params.databaseId)).mail.sharedWithMe();
+      case "mail.teams":
+        return await state.getDatabase(String(params.databaseId)).mail.teams();
       case "directory.listUsers": {
         const directory = state.getDatabase(String(params.databaseId)).directory;
         const paged =
